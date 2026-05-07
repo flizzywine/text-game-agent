@@ -257,7 +257,7 @@ export function buildRoleplayPipeline(
         '【叙事配置模块】',
         narratorSkills.map(skillBlock).join('\n\n') || '（无）',
       ].join('\n')),
-      expectedOutput: 'JSON: { "draftText": "正文草稿", "draftChecks": "string[]", "handoffNotes": "string[]" }',
+      expectedOutput: 'JSON: { "draftParagraphs": "{ id: string, text: string }[]", "draftText": "兼容用正文草稿", "draftChecks": "string[]", "handoffNotes": "string[]" }',
     },
     {
       layer: 'editor',

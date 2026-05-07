@@ -116,7 +116,7 @@ function defaultStory(name = '未选择故事') {
     playerOptions: [],
     model: defaultModel,
     runtimeStats: null,
-    enableEditor: true,
+    enableEditor: false,
     debug: {},
   }
 }
@@ -128,6 +128,7 @@ function defaultAppState() {
     stories: [story],
     physicalEditorMigration: true,
     multiSpatialMigration: true,
+    reviewerPatchMigration: true,
   }
 }
 
@@ -144,6 +145,7 @@ function loadAppState() {
         stories: [story],
         physicalEditorMigration: false,
         multiSpatialMigration: false,
+        reviewerPatchMigration: false,
       }
     }
 
@@ -167,6 +169,7 @@ function normalizeAppState(raw) {
     stories,
     physicalEditorMigration: Boolean(raw?.physicalEditorMigration),
     multiSpatialMigration: Boolean(raw?.multiSpatialMigration),
+    reviewerPatchMigration: Boolean(raw?.reviewerPatchMigration),
   }
 }
 
@@ -200,22 +203,23 @@ function normalizeStory(raw, fallbackName = '故事') {
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     model: normalizeModel(raw?.model || base.model),
     runtimeStats: raw?.runtimeStats && typeof raw.runtimeStats === 'object' ? raw.runtimeStats : null,
-    enableEditor: raw?.enableEditor === undefined ? true : Boolean(raw.enableEditor),
+    enableEditor: raw?.enableEditor === undefined ? false : Boolean(raw.enableEditor),
     debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
   }
 }
 
 function applyPhysicalEditorMigration() {
-  const shouldEnableEditor = !appState.physicalEditorMigration
   const shouldPersistMultiSpatial = !appState.multiSpatialMigration
-  if (!shouldEnableEditor && !shouldPersistMultiSpatial) return
+  const shouldSwitchToReviewerPatch = !appState.reviewerPatchMigration
+  if (appState.physicalEditorMigration && !shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch) return
   for (const story of appState.stories) {
-    if (shouldEnableEditor) story.enableEditor = true
+    if (shouldSwitchToReviewerPatch) story.enableEditor = false
     story.statusPanelSchema = ensureSpatialStatusPanelSchema(story.statusPanelSchema, story.statusSubject || '人物', story.characters)
     story.statusPanel = ensureSpatialStatusPanel(story.statusPanel, story.statusSubject || '人物', story.characters)
   }
   appState.physicalEditorMigration = true
   appState.multiSpatialMigration = true
+  appState.reviewerPatchMigration = true
   saveState()
 }
 
@@ -525,6 +529,7 @@ function renderDebug() {
     narrator: debug.narrator,
     editor: debug.editor,
     postprocess: debug.postprocess,
+    patchReport: debug.patchReport,
   }
   if (Object.values(payload).some(Boolean)) {
     lines.push('', 'stages:', JSON.stringify(payload, null, 2))
@@ -1004,7 +1009,7 @@ async function loadDiskSave() {
 
 function renderConnection() {
   const keyState = hasRuntimeApiKey() ? 'key ready' : 'no API key'
-  const mode = state.enableEditor ? 'refine: editor on' : 'quick: editor off'
+  const mode = state.enableEditor ? 'refine: full editor + reviewer patch' : 'reviewer patch'
   els.connectionStatus.textContent = `${config.baseUrl || 'https://api.deepseek.com'} · ${normalizeModel(state.model || config.model)} · ${mode} · ${keyState}`
 }
 
@@ -1515,13 +1520,14 @@ async function submitTurn() {
   state.playerOptions = []
   state.debug = {
     status: 'running',
-    pipelineMode: state.enableEditor ? 'refine' : 'quick',
-    note: '人物状态只由 Postprocess 更新；Director/Narrator/Editor 不直接改人物状态。',
+    pipelineMode: state.enableEditor ? 'refine+reviewer-patch' : 'reviewer-patch',
+    note: 'Narrator 输出段落化正文；ReviewerPostprocess 输出局部 patch 和人物状态；程序应用 patch。',
     progress: [],
     director: null,
     narrator: null,
     editor: null,
     postprocess: null,
+    patchReport: null,
   }
   els.playerInput.value = ''
   render()
@@ -1562,6 +1568,7 @@ async function submitTurn() {
     state.debug.narrator = payload.narrator
     state.debug.editor = payload.editor
     state.debug.postprocess = payload.postprocess
+    state.debug.patchReport = payload.patchReport || payload.postprocess?.patchReport || null
     state.runtimeStats = payload.metrics || null
     state.model = normalizeModel(payload.model || state.model)
     applyPostprocess(payload)

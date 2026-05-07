@@ -2,6 +2,7 @@ import fs from 'fs'
 import http from 'http'
 import path from 'path'
 import { parseJsonObject } from '../src/jsonObjectParser'
+import { applyParagraphPatches, joinParagraphs, normalizeDraftParagraphs } from '../src/paragraphPatcher'
 
 type ChatRole = 'system' | 'user' | 'assistant'
 
@@ -1182,9 +1183,14 @@ async function generate(
   ])
   emit({ type: 'stage_result', stage: 'narrator', label: 'Narrator', message: '叙事层完成：已得到正文草稿。', json: narrator.json })
 
-  const draftText = String(narrator.json.draftText || narrator.raw)
+  const narratorFallbackText = String(narrator.json.draftText || narrator.raw)
+  const narratorParagraphs = normalizeDraftParagraphs(narrator.json.draftParagraphs, narratorFallbackText)
+  const draftText = joinParagraphs(narratorParagraphs) || narratorFallbackText
   let editor: LayerResult | null = null
   let finalText = draftText
+  let reviewParagraphs = narratorParagraphs.length > 0
+    ? narratorParagraphs
+    : normalizeDraftParagraphs(undefined, draftText)
   if (enableEditor) {
     const editorUser = wrapWithMustRead([
       block('固定 Editor prompt', readPrompt('editor/prompt.md')),
@@ -1210,29 +1216,43 @@ async function generate(
       '公开日志：编辑层仍在等待模型返回修订正文。',
     ])
     finalText = String(editor.json.finalText || draftText)
+    reviewParagraphs = normalizeDraftParagraphs(editor.json.finalParagraphs || editor.json.draftParagraphs, finalText)
+    if (reviewParagraphs.length === 0) reviewParagraphs = normalizeDraftParagraphs(undefined, finalText)
     emit({ type: 'stage_result', stage: 'editor', label: 'Editor', message: '编辑层完成：已得到最终正文。', json: editor.json })
   } else {
-    emit({ type: 'stage_skip', stage: 'editor', label: 'Editor', message: '精修关闭：跳过编辑层。', json: null })
+    emit({ type: 'stage_skip', stage: 'editor', label: 'Editor', message: '全文精修关闭：跳过 Editor，ReviewerPostprocess 仍会做局部 patch。', json: null })
   }
   const postprocessUser = wrapWithMustRead([
-    block('固定 Postprocess prompt', readPrompt('postprocess/prompt.md')),
+    block('固定 ReviewerPostprocess prompt', readPrompt('postprocess/prompt.md')),
     block('玩家输入', playerInput),
-    block('最终正文', finalText),
+    block('待审正文段落', JSON.stringify(reviewParagraphs, null, 2)),
+    block('待审正文', finalText),
+    block('导演计划', JSON.stringify(director.json, null, 2)),
+    block('最近正文', context.recentTurns),
     block('人物状态', renderCharacters(input.characters)),
     block('人物状态 Schema', input.statusPanelSchema),
     block('当前人物状态', input.statusPanel),
+    block('用户注入模块', renderModules(modules)),
   ].join('\n'))
 
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：生成总结、选项，并更新人物状态。' })
-  const postprocess = await callDeepSeekWithPublicTrace('postprocess', 'Postprocess', [
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'ReviewerPostprocess', message: '审查后处理层：输出局部 patch、总结、选项，并更新人物状态。' })
+  const postprocess = await callDeepSeekWithPublicTrace('postprocess', 'ReviewerPostprocess', [
     { role: 'user', content: postprocessUser },
   ], { temperature: 0.5, apiKey: input.apiKey, model }, emit, [
-    '公开日志：正在从最终正文提取事实总结和伏笔变化。',
+    '公开日志：正在检查物理空间、状态泄漏、逻辑和表达问题。',
+    '公开日志：正在为必要问题生成段落级局部 patch。',
     '公开日志：正在按人物状态 Schema 更新人物状态。',
     '公开日志：正在生成 3 个玩家候选项。',
-    '公开日志：后处理层仍在等待模型返回结构化状态。',
+    '公开日志：审查后处理层仍在等待模型返回结构化状态。',
   ])
-  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理完成：人物状态和玩家选项已生成。', json: postprocess.json })
+  const patchResult = applyParagraphPatches(reviewParagraphs, postprocess.json.patches || postprocess.json.paragraphPatches)
+  finalText = patchResult.finalText || finalText
+  const postprocessJson = {
+    ...postprocess.json,
+    patchReport: patchResult.report,
+  }
+  const patchMessage = `审查后处理完成：应用 ${patchResult.report.applied.length} 个 patch，失败 ${patchResult.report.failed.length} 个。`
+  emit({ type: 'stage_result', stage: 'postprocess', label: 'ReviewerPostprocess', message: patchMessage, json: postprocessJson })
   const playerOptions = normalizePlayerOptions(postprocess.json.playerOptions)
   const nextLongRangeOutline = formatLongRangePlanning(director.json.longRangePlanning, longRangeOutline)
   const nextStatusPanel = formatStatusPanelPayload(postprocess.json.statusPanel || input.statusPanel || '')
@@ -1245,11 +1265,12 @@ async function generate(
 
   return {
     finalText,
-    pipelineMode: enableEditor ? 'refine' : 'quick',
+    pipelineMode: enableEditor ? 'refine+reviewer-patch' : 'reviewer-patch',
     director: director.json,
     narrator: narrator.json,
     editor: editor?.json ?? null,
-    postprocess: postprocess.json,
+    postprocess: postprocessJson,
+    patchReport: patchResult.report,
     playerOptions,
     turnSummary: postprocess.json.turnSummary || '',
     globalContextPatch: postprocess.json.globalContextPatch || '',
