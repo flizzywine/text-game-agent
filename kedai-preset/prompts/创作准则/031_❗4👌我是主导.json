@@ -1,0 +1,14 @@
+{
+  "identifier": "5fb47ebb-b442-4e49-bf71-fcadb4b347ec",
+  "name": "❗4👌我是主导",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第一优先：〖主导/推进/剧情/速度处理如下〗\n\n第二优先：【主导规范】\n在<content>内容中，用户所操控角色是剧情中的主角。\n主角可以遭受不符合用户所求的意外、挫折、失败乃至死亡，但请适当处理。\n<content>内容中，大部分情况下由<USER>或用户所操控角色进行主导推进，其他角色进行辅助推进。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

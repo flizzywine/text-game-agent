@@ -1,0 +1,14 @@
+{
+  "identifier": "cafa64d4-a443-4d9c-97c6-03b916f1fa8c",
+  "name": "🆎4💡思维链前",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n\n*我们现在被问到，我现在必须立刻发扬我自己所有的文学创作能力和推理能力，全面按照提示词要求和变量思考创作准则，且不得遗落任何思考部分*\n\n\n**我们需要知道，用户想要什么？**\n\n<kbd>要求强化</kbd>\n - 确定当前的输出次数（系统给的开头和用户输入不算你输出的内容），每个模块字数，思考字数量，必须写到并保持的的<content>内正文字数量\n - 确定对话安排和段落处理\n - 必须分析如何增多<content>内的正文字数，同时保持提示词要求：\n - 确定正文使用人称，思维链使用语言和正文使用语言\n - 调用<now-player-input>和相关上文内容，区分用户所操控角色在做什么\n - 合理推测用户意图\n - 确定需要处理什么后置功能\n - 确定剧情发展是否顺应用户意图\n - 确定非用户所操控的主要角色性格\n - 分析在场所有主要角色知道什么和不知道什么/会做什么和不会做什么\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

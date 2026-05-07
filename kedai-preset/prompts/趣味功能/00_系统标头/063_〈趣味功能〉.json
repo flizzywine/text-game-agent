@@ -1,0 +1,14 @@
+{
+  "identifier": "434e07ad-6744-47b3-9fad-256b6607035f",
+  "name": "〈趣味功能〉",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "system",
+  "content": "{{addvar::可待_创作准则::\n第一优先：〖趣味功能如下〗\n以下内容包含着用户喜欢的特殊XP，请适当处理。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

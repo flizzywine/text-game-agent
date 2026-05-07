@@ -1,0 +1,17 @@
+{
+  "id": "06acf593-059f-4d48-9af0-26c821259ac6",
+  "scriptName": "[可待]-去逻辑加强",
+  "findRegex": "/<logic-optimization>[\\s\\S].*?</logic-optimization>/gs",
+  "replaceString": "",
+  "trimStrings": [],
+  "placement": [
+    2
+  ],
+  "disabled": false,
+  "markdownOnly": false,
+  "promptOnly": true,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": 3,
+  "maxDepth": null
+}

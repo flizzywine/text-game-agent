@@ -1,0 +1,14 @@
+{
+  "identifier": "47bc3037-7e44-43e2-9687-29c73559a523",
+  "name": "❗6🤪短思考",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_前置处理::\n第一优先：【思考方式/思考量要求】\n**输出创作准则（思考内容）时简洁但不简陋，你在思考时必须惜字如金力求关键词式思考，精简但有力的思考创作准则以用于指导<content>内的正文创作。**\n创作准则在保持多思考的情况下，必须以markdown结构方式大量分点，以此来提升思考质量。\n**创作准则（<thinking>/<think>内内容）必须大于800字。**\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

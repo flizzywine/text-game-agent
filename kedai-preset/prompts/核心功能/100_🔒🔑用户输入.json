@@ -1,0 +1,14 @@
+{
+  "identifier": "d28224de-b7cb-445a-921a-472785c6378a",
+  "name": "🔒🔑用户输入",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "<now-player-input>\n{{lastUserMessage}}\n</now-player-input>",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

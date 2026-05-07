@@ -1,0 +1,14 @@
+{
+  "identifier": "027d6083-250b-4a5e-a402-b69c9b8d1b42",
+  "name": "❗5🌚刺激剧情",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第二优先：【剧情安排规范】\n用户现在想要剧情发展适度激烈化，享受有创意的紧张刺激的剧情发展。\n你需要有创意的安排刺激性剧情，大量的加入用户可以控制的创意性突发事件，让用户感觉到紧张刺激，也让用户感受到剧情参与感。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

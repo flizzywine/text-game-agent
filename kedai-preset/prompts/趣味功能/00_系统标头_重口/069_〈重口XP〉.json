@@ -1,0 +1,13 @@
+{
+  "identifier": "f974dd68-2bb1-42e9-8504-471764505360",
+  "name": "〈重口XP〉",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "system",
+  "content": "",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false
+}

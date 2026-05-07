@@ -1,0 +1,14 @@
+{
+  "identifier": "9cd0e979-c627-41f5-b09a-46ca0685006f",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "👲同人增强",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n**我们如何进一步强化同人文字游戏演绎的设定准确性？**\n\n<kbd>设定查找</kbd>\n - 确定同人作品名和当前剧情相关的同人角色名\n - 检索知识库，查找当前剧情相关的同人角色的需要用于剧情的设定（比如外貌、性格、身材等等）\n - 结合世界书给出的设定，综合思考如何处理同人角色的行为\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

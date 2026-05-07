@@ -1,0 +1,12 @@
+{
+  "identifier": "charPersonality",
+  "name": "Char性格（洋人卡开）",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "system_prompt": true,
+  "marker": true,
+  "forbid_overrides": false
+}

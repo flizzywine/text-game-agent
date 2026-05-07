@@ -1,0 +1,13 @@
+{
+  "identifier": "09db7b6e-c7b5-4588-b8d3-6c4807d07c80",
+  "name": "💕总纲（NSFW必开）",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_文风准则::\n第一优先：〖性情节规则〗\n若开启此提示词，说明用户需要其所操控角色需要和其他角色进行非直接或直接的性交互。\n总纲：用于规范所有涩涩情节的描写/角色行动\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false
+}

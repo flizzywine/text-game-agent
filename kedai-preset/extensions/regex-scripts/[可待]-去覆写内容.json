@@ -1,0 +1,17 @@
+{
+  "id": "012e1e7e-d9f2-4348-9ba5-e413e723e5f0",
+  "scriptName": "[可待]-去覆写内容",
+  "findRegex": "/<fx>[\\s\\S].*?</fx>/gs",
+  "replaceString": "",
+  "trimStrings": [],
+  "placement": [
+    2
+  ],
+  "disabled": false,
+  "markdownOnly": false,
+  "promptOnly": false,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": 0,
+  "maxDepth": null
+}

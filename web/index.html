@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Text Game Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Text Game Agent</h1>
+          <p id="connectionStatus">DeepSeek v4 pro</p>
+        </div>
+        <div class="control-stack">
+          <div class="story-strip">
+            <label>
+              <span>Story</span>
+              <select id="storySelect"></select>
+            </label>
+            <label class="story-name-field">
+              <span>Name</span>
+              <input id="storyNameInput" />
+            </label>
+            <button id="storyLibraryButton" class="ghost-button" type="button">故事库</button>
+            <button id="newStoryButton" class="ghost-button" type="button">开始新游戏</button>
+            <button id="deleteStoryButton" class="ghost-button" type="button">删除</button>
+            <button id="saveArchiveButton" class="ghost-button" type="button">保存游戏</button>
+            <button id="loadArchiveButton" class="ghost-button" type="button">读取存档</button>
+            <button id="deleteSaveButton" class="ghost-button" type="button">删除存档</button>
+          </div>
+          <div class="model-strip">
+            <label>
+              <span>Model</span>
+              <select id="modelSelect">
+                <option value="deepseek-v4-pro">V4 Pro</option>
+                <option value="deepseek-v4-flash">V4 Flash</option>
+              </select>
+            </label>
+            <label>
+              <span>Temp</span>
+              <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0.8" />
+            </label>
+            <button id="apiKeyButton" class="ghost-button" type="button">API Key</button>
+            <label class="mode-toggle">
+              <input id="refineToggle" type="checkbox" />
+              <span>精修</span>
+            </label>
+            <button id="resetButton" class="ghost-button" type="button">清空当前故事</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace-grid">
+        <aside class="left-rail">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>用户注入模块</h2>
+            </div>
+            <div id="moduleList" class="module-list"></div>
+          </section>
+
+        </aside>
+
+        <section class="main-stage">
+          <div id="conversation" class="conversation"></div>
+          <div id="optionTray" class="option-tray"></div>
+          <form id="playForm" class="composer">
+            <textarea id="playerInput" rows="4" placeholder="输入你的行动、对话或想法"></textarea>
+            <div class="composer-actions">
+              <button id="sendButton" type="submit">发送</button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="right-rail">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>人物状态</h2>
+              <button id="addCharacterButton" class="icon-button" type="button" title="新增人物">+</button>
+            </div>
+            <div class="character-panel-body">
+              <div id="statusPanelView" class="status-panel-view"></div>
+              <div id="characterList" class="character-list"></div>
+            </div>
+          </section>
+
+          <section class="panel story-tracker-panel">
+            <div class="panel-head">
+              <h2>剧情追踪</h2>
+            </div>
+            <div id="storyTrackingView" class="story-tracking-view"></div>
+          </section>
+
+          <section class="panel debug-panel">
+            <div class="panel-head">
+              <h2>全局流水线</h2>
+              <button id="toggleDebugButton" class="icon-button" type="button" title="显示流水线">⌁</button>
+            </div>
+            <div id="statsView" class="stats-view"></div>
+            <pre id="debugOutput" class="debug-output"></pre>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="newGameDialog" class="editor-dialog wide-dialog">
+      <form method="dialog" id="newGameForm">
+        <h3>开始新游戏</h3>
+        <p class="dialog-note">只能选择已初始化故事。导入和初始化请先进入“故事库”。</p>
+        <label>
+          <span>故事名</span>
+          <input id="newGameName" placeholder="默认使用故事资料名" />
+        </label>
+        <div id="storyAssetList" class="asset-list"></div>
+        <div id="newGamePreview" class="asset-preview"></div>
+        <div class="dialog-actions">
+          <button value="cancel" type="button" id="cancelNewGameButton" class="ghost-button">取消</button>
+          <button value="default" type="submit">开始</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="storyLibraryDialog" class="editor-dialog wide-dialog">
+      <form method="dialog" id="storyLibraryForm">
+        <h3>故事库</h3>
+        <p class="dialog-note">先导入故事书 / 人物卡 / 世界书，再点击“初始化”。初始化完成后才能开始新游戏。</p>
+        <div class="dialog-actions left-actions">
+          <button id="importStoryAssetButton" class="ghost-button" type="button">导入故事资料</button>
+          <button id="initializeStoryAssetButton" class="ghost-button" type="button">初始化选中故事</button>
+          <button id="refreshStoryLibraryButton" class="ghost-button" type="button">刷新</button>
+          <input id="storyLibraryFileInput" type="file" accept=".json,.md,.txt,.png" multiple hidden />
+        </div>
+        <p id="storyLibraryStatus" class="dialog-status">未开始初始化。</p>
+        <div id="libraryAssetList" class="asset-list"></div>
+        <div id="libraryPreview" class="asset-preview"></div>
+        <div class="dialog-actions">
+          <button value="cancel" type="button" id="closeStoryLibraryButton" class="ghost-button">关闭</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="apiKeyDialog" class="editor-dialog">
+      <form method="dialog" id="apiKeyForm">
+        <h3>DeepSeek API Key</h3>
+        <p class="dialog-note">仅使用 deepseek-v4-pro。Key 保存在当前浏览器本地。</p>
+        <label>
+          <span>API Key</span>
+          <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-..." />
+        </label>
+        <div class="dialog-actions">
+          <button value="clear" type="button" id="clearApiKeyButton" class="ghost-button">清除</button>
+          <button value="cancel" type="button" id="cancelApiKeyButton" class="ghost-button">取消</button>
+          <button value="default" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <template id="emptyConversationTemplate">
+      <div class="empty-state">
+        <strong>未选择故事</strong>
+        <span>请先开始新游戏，选择或导入故事资料。</span>
+      </div>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

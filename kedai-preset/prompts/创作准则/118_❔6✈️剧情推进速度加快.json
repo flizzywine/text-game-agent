@@ -1,0 +1,14 @@
+{
+  "identifier": "ab4e414a-1b83-41f0-b29a-42adcc694a2d",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❔6✈️剧情推进速度加快",
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第二优先【推进规范】\n剧情推进速度不得过慢，<content>内的内容中，小事可几笔带过，但不得出现一次输出内直接将当前大事件推进至末尾的情况。\n你应当整合小事件，合理安排<content>内的内容的剧情节奏，为用户保留互动空间，增强用户的互动感。\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

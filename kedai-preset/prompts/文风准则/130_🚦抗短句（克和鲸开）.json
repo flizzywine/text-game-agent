@@ -1,0 +1,14 @@
+{
+  "identifier": "9390a3b8-19bb-46a4-b985-99c03ab2eb25",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🚦抗短句（克和鲸开）",
+  "role": "user",
+  "content": "{{addvar::可待_文风准则::\n第一优先：〖句式规范〗\n刚才，用户已经明确用户自己不喜欢<content>被出现过多短句。\n**因此，请你明确，现在<content>内的内容不得输出任何短句，违反此规则会出现用户认为观感不佳的严重问题。**\n<content>内的内容应当以长句为主，多运用复杂语法，主谓宾齐全，短句仅作为补充。\n**请时刻严格区分数字，增强对数学的敏感性，增强对格式严格正确输出的敏感性。**\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

@@ -1,0 +1,14 @@
+{
+  "identifier": "a582c0e8-fa47-4039-9ad5-e81e6d8b71fc",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗1 反代用非思考尾部",
+  "role": "user",
+  "content": "{{setvar::可待_思维链_预填充定位::***\n【思维模式要求】<jc>内内容我不得在新输出内输出。\n现在按照输出模板，开始输出时直接输出必须被<thinking>包裹的创作指导内容（即*我们现在……*……）且不得重复输出，然后创作正文和其他格式要求及提示词要求的内容。\n若需要插入变量更新/状态栏则在提示词规定的位置进行处理且随每次输出持续更新。\n\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

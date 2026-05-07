@@ -1,0 +1,17 @@
+{
+  "id": "37651d5b-12b3-4656-a4b1-96d8522005fa",
+  "scriptName": "[可待]-去间断思考",
+  "findRegex": "/<intermittent thinking>[\\s\\S].*?</intermittent thinking>/gs",
+  "replaceString": "",
+  "trimStrings": [],
+  "placement": [
+    2
+  ],
+  "disabled": false,
+  "markdownOnly": false,
+  "promptOnly": false,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": 0,
+  "maxDepth": null
+}

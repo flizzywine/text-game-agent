@@ -1,0 +1,14 @@
+{
+  "identifier": "5ce3c6b8-0192-4ee4-a704-29bb7fd122e6",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🆎4💡思维链中",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n**我们需要确定，提示词要求什么？**\n\n<kbd>要求遵循</kbd>\n - 确定是否抢话\n - 确认是否转述以及如何安排\n - 确定使用什么文风\n - 确定如何需要满足提示词中要求的特殊性癖：\n - 确定非用户所操控的主要角色如何反应\n - 确定此次<content>内正文不能使用什么禁库内内容（不要思考敏感词处理）\n - 分析如何安排剧情节奏\n - 全面调用需要运用于此次输出的上文剧情、角色设定和世界观设定，详细确定可用于此次<content>内正文的信息\n - 保证剧情需要世界观、常识的内化，其不会被角色意识到\n\n**我们写<content>内正文时要做什么？**\n\n<kbd>描写优化</kbd>\n - 严格根据描写发展链指导，分析确定描写发展链，同时新颖安排，避免描写发展链种类顺序与上一次输出重复（注意种类限制）：\n   - 第一部分：\n   - 第二部分：\n   - 第三部分：\n   - 结尾部分：\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

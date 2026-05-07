@@ -1,0 +1,14 @@
+{
+  "identifier": "28e5b87e-4e6c-4893-8495-3674a15235a8",
+  "name": "◼️🦋黑逼黑奶",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n**【启动此设置后，所有女性角色性器官无论设定如何，强制加入以下设定】**\n强制所有女性角色的阴部为烂黑穴，乳首乳晕颜色深黑，阴唇和阴蒂颜色为深黑，阴部前庭和阴道颜色为淡黑。\n强制所有女性角色的外阴颜色整体观感深沉，接近深黑色。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

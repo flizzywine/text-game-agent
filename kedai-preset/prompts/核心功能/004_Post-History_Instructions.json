@@ -1,0 +1,11 @@
+{
+  "identifier": "jailbreak",
+  "name": "Post-History Instructions",
+  "enabled": false,
+  "role": "user",
+  "content": "",
+  "system_prompt": true,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_position": 0
+}

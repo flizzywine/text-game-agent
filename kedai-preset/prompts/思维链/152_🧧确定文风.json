@@ -1,0 +1,14 @@
+{
+  "identifier": "46eaeba0-e86b-473d-a0a1-592e7a00d80d",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🧧确定文风",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n<kbd>文风强化</kbd>\n - 思考对基础文风的合理运用：\n - 思考对风格文风的合理运用：\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

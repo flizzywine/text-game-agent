@@ -1,0 +1,17 @@
+{
+  "id": "f397d6fb-6b26-43e8-8a3f-17da67909201",
+  "scriptName": "[可待]-去附加功能显示",
+  "findRegex": "/<details>[\\s\\S].*?</details>/gs",
+  "replaceString": "",
+  "trimStrings": [],
+  "placement": [
+    2
+  ],
+  "disabled": true,
+  "markdownOnly": true,
+  "promptOnly": false,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": null,
+  "maxDepth": null
+}

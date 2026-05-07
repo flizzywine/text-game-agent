@@ -1,0 +1,14 @@
+{
+  "identifier": "ecb816c0-1faa-4784-9684-d61e153378f6",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🆎2🖍️伏笔规划思考",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体:: - 计算并判定当前是否需要设下/照应/删除伏笔\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

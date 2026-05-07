@@ -1,0 +1,14 @@
+{
+  "identifier": "ca5a9d59-1700-4e95-ba6d-cd2a80c6a3b2",
+  "name": "🔒🖨小总结（省token）",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_定位::\n（在这里必须一定输出实时总结）\n}}{{addvar::可待_后置功能::\n第一优先：【输出实时总结】\n你要按照以下模板输出实时总结：\n<details>\n\n<summary>实时总结</summary>\n在这里罗列出三条剧情里的关键情节，忠实、无修饰、简洁。\n\n格式示例：\n\n - （第一条）\n - （第二条）\n - （第三条）\n\n</details>\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

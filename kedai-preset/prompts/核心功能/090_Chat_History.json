@@ -1,0 +1,10 @@
+{
+  "identifier": "chatHistory",
+  "name": "Chat History",
+  "enabled": true,
+  "role": "system",
+  "system_prompt": true,
+  "marker": true,
+  "forbid_overrides": false,
+  "injection_position": 0
+}

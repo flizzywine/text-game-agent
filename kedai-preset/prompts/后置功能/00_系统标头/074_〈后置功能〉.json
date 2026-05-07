@@ -1,0 +1,14 @@
+{
+  "identifier": "255b1fb3-5513-4144-abdb-2947d01790f3",
+  "name": "〈后置功能〉",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "system",
+  "content": "{{addvar::可待_后置功能::\n最高优先：〖必读-后置功能〗\n总纲：应用于<content>外所有功能的规则，请注意不要缺少空格，不要塞入格式示范里面没有的xml。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

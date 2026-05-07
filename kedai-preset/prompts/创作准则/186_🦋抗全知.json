@@ -1,0 +1,14 @@
+{
+  "identifier": "a3e23c85-dc5a-421d-bfaa-040d71a24875",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🦋抗全知",
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第一优先：〖抗角色全知原则〗\n请明确，剧情中的所有角色都是身处于此作品世界的。\n他们自身所观察事物的视角均为第一人称限知视角，这决定了他们在观察自身所处世界事物时绝对不会直接了解世界观和角色设定，而是需要通过一个或多个感知过程去了解，可能是相对直接的看、听、闻、尝、触、感，也有可能是相对间接的思考推理，具体怎么安排根据剧情需要决定。\n所有，明确这一点之后，在创作角色行为或描述角色所感所想时，必须让角色保持第一人称限知视角，让角色感知事物时保持合适的感知过程，不出现角色无过渡无准备直接了解角色设定和世界观的情况。\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

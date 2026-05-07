@@ -1,0 +1,14 @@
+{
+  "identifier": "0bf2475e-aa09-4a1e-9ee5-b9bb47b035be",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🔒📚输出模板下",
+  "role": "user",
+  "content": "",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

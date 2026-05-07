@@ -1,0 +1,14 @@
+{
+  "identifier": "1ac6c8b6-b78c-4e1f-a4e9-99be6885e2d2",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "〈填充功能相关〉",
+  "role": "system",
+  "content": "",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

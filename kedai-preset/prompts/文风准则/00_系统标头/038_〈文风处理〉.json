@@ -1,0 +1,14 @@
+{
+  "identifier": "2266990e-d3bc-4435-805b-a9cf5922f7a1",
+  "name": "〈文风处理〉",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "system",
+  "content": "{{addvar::可待_文风准则::\n最高优先：〖必读-文风准则〗\n总纲：应用于<content>内内容的描写风格的规则。\n现在，你需要放弃你先前固有的写作手法，严格按照<literary-styles>内的所有内容，有创意的创作<content>内内容。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

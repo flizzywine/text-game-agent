@@ -1,0 +1,14 @@
+{
+  "identifier": "d68610fe-25e7-4e62-8ecb-8f0bce2a3036",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "（必读）〈其他思维链〉",
+  "role": "system",
+  "content": "{{//若开启其他思维链，请把模型预设自带的模块思维链都关掉}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

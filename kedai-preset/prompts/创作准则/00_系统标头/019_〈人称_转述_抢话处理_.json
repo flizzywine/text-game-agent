@@ -1,0 +1,14 @@
+{
+  "identifier": "ac74b640-561d-47cf-a75c-6bddee0e25e1",
+  "name": "〈人称/转述/抢话处理>",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "system",
+  "content": "{{addvar::可待_创作准则::\n最高优先：〖必读-创作准则〗\n总纲：应用于<content>内内容的规则。\n\n第一优先：〖人称/转述/抢话处理如下〗\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

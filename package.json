@@ -1,0 +1,19 @@
+{
+  "name": "text-game-agent",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest --run",
+    "extract-user-config": "tsx scripts/extract-kedai-user-config.ts",
+    "extract-skills": "npm run extract-user-config",
+    "mvp-demo": "tsx scripts/roleplay-mvp-demo.ts",
+    "web": "tsx scripts/web-server.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "tsx": "^4.21.0",
+    "typescript": "~6.0.2",
+    "vitest": "^4.1.4"
+  }
+}

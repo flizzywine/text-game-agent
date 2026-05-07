@@ -1,0 +1,13 @@
+{
+  "identifier": "55ab22b5-b967-4bb7-a18e-4d1bf603274b",
+  "name": "🔒🗣️前置处理",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "<overall-rules>{{addvar::可待_前置处理::\n</overall-rules>}}{{getvar::可待_前置处理}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false
+}

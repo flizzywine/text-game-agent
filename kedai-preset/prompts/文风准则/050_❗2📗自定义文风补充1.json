@@ -1,0 +1,14 @@
+{
+  "identifier": "8607824a-face-4cf2-9210-84e5a18d4828",
+  "name": "❗2📗自定义文风补充1",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_文风准则::以下是XXXX原文部分片段及点评参考，你需要模仿参考学习示例的语言风格和文风，并加以活用：\n\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

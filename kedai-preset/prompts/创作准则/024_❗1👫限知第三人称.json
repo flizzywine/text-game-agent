@@ -1,0 +1,14 @@
+{
+  "identifier": "c07a7cc4-b87d-4c9c-8829-e6aa0e5ef8dc",
+  "name": "❗1👫限知第三人称",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第二优先：【人称要求】\n<content>内的正文采用限知第三人称视角，描写视角站在第三者角度，描写内容则以当前在场非创作系统的所有角色可感知内容为出发点。读者只知道当前在场所有角色可知道的信息。\n请注意，<content>内的正文描写是由创作系统所创作的，角色无法干涉描写内容，无法意识到自己被描写。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

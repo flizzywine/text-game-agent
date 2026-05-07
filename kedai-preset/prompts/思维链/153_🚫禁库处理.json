@@ -1,0 +1,14 @@
+{
+  "identifier": "4f53e65d-b98b-4e29-909c-21a1eaea46b4",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🚫禁库处理",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n<kbd>禁库规避</kbd>\n - 全面分析并思辨如何让此次输出的<content>内正文中不出现所有禁库内容且不留痕迹（尤其不能出现先否后肯转折句式、不是……是……、破折号、把角色比喻成动物的描写、手指发白、滥用性声音描写、锁骨和石子等等禁库内容）\n - 思考如何使用更好的词汇进行表达\n - 分析上两次输出内<content>正文出现的重复描写并避免\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

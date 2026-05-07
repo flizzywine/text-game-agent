@@ -1,0 +1,13 @@
+{
+  "identifier": "a011f68d-d5d2-4c80-b3ef-60cbb84b941b",
+  "name": "〈核心功能〉",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "system",
+  "content": "",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false
+}
