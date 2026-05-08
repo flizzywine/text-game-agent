@@ -232,7 +232,7 @@ export function buildRoleplayPipeline(
         directSkillBlock(directDirectorSkills),
         ...sectionBlock('可请求动态注入模块 registry', moduleRegistry, '当前 MVP 暂未加载动态注入模块 registry。后续只允许请求人物、世界、地点、剧情素材模块，不允许请求 director.* 能力模块。'),
       ].join('\n')),
-      expectedOutput: 'JSON: { "intent": "string", "npc": "string", "policy": "string[]", "craft": "string[]", "load": "string[]", "beats": "string[]", "focus": "string[]", "mustNotResolve": "string[]", "brief": "string" }',
+      expectedOutput: 'JSON: { "intent": "string", "npc": "string", "policy": "string[]", "craft": "string[]", "load": "string[]", "beats": "string[]", "focus": "string[]", "sceneDecision": "string", "mustNotResolve": "string[]", "brief": "string" }',
     },
     {
       layer: 'narrator',

@@ -1635,6 +1635,7 @@ function compactDirectorPlan(value: unknown): Record<string, unknown> {
       .slice(0, 4)
       .map(compactDescriptionFocus)
       .filter(Boolean),
+    sceneDecision: compactText(source.sceneDecision || source.sceneTransition || source.transitionDecision, 100),
     foreshadow: compactStringArray(foreshadow, 3, 65),
     currentPlot: compactStringArray(currentPlot, 4, 70),
     mustNotResolve: compactStringArray(source.mustNotResolve, 3, 70),

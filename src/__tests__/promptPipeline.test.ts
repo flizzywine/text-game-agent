@@ -107,6 +107,7 @@ describe('buildRoleplayPipeline', () => {
     expect(pipeline[1].user).toContain('{"beats":[]}')
     expect(pipeline[1].selectedModuleIds).toContain('🔒🖊️基础文风')
     expect(pipeline[0].expectedOutput).toContain('"beats": "string[]"')
+    expect(pipeline[0].expectedOutput).toContain('"sceneDecision": "string"')
     expect(pipeline[0].expectedOutput).not.toContain('"sceneLimits": "string[]"')
   })
 
