@@ -228,7 +228,7 @@ function normalizeStory(raw, fallbackName = '故事') {
     statusSubject: String(raw?.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw?.statusPanelSchema || ''), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
     statusPanel: ensureSpatialStatusPanel(pickLatestStatusPanel(raw), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
-    physicalSceneState: normalizePhysicalSceneState(raw?.physicalSceneState ?? raw?.sceneState, base.physicalSceneState),
+    physicalSceneState: normalizePhysicalSceneState(pickStoredPhysicalSceneState(raw), base.physicalSceneState),
     globalContext: String(raw?.globalContext || ''),
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     model: normalizeModel(raw?.model || base.model),
@@ -245,6 +245,23 @@ function defaultPhysicalSceneState() {
     transitionRule: '',
     currentSceneForbidden: '',
   }
+}
+
+function pickStoredPhysicalSceneState(raw) {
+  const candidates = [
+    raw?.physicalSceneState,
+    raw?.sceneState,
+    raw?.debug?.postprocess?.physicalSceneState,
+    raw?.debug?.postprocess?.sceneState,
+  ]
+  return candidates.find(hasPhysicalSceneStateContent)
+}
+
+function hasPhysicalSceneStateContent(value) {
+  if (typeof value === 'string') return Boolean(value.trim())
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return ['currentScene', 'nextScene', 'transitionRule', 'currentSceneForbidden']
+    .some(key => String(value[key] || '').trim())
 }
 
 function normalizePhysicalSceneState(value, fallback = defaultPhysicalSceneState()) {
@@ -283,11 +300,19 @@ function applyLegacyMigrations() {
   const shouldPersistMultiSpatial = !appState.multiSpatialMigration
   const shouldSwitchToReviewerPatch = !appState.reviewerPatchMigration
   const shouldRemoveSpatialStatusPanel = !appState.removeSpatialStatusPanelMigration
-  if (!shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch && !shouldRemoveSpatialStatusPanel) return
+  let shouldPersistPhysicalSceneState = false
   for (const story of appState.stories) {
     story.statusPanelSchema = ensureSpatialStatusPanelSchema(story.statusPanelSchema, story.statusSubject || '人物', story.characters)
     story.statusPanel = ensureSpatialStatusPanel(story.statusPanel, story.statusSubject || '人物', story.characters)
+    if (!hasPhysicalSceneStateContent(story.physicalSceneState)) {
+      const migrated = normalizePhysicalSceneState(pickStoredPhysicalSceneState(story))
+      if (hasPhysicalSceneStateContent(migrated)) {
+        story.physicalSceneState = migrated
+        shouldPersistPhysicalSceneState = true
+      }
+    }
   }
+  if (!shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch && !shouldRemoveSpatialStatusPanel && !shouldPersistPhysicalSceneState) return
   appState.multiSpatialMigration = true
   appState.reviewerPatchMigration = true
   appState.removeSpatialStatusPanelMigration = true

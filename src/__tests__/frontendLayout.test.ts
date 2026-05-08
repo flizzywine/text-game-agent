@@ -243,6 +243,9 @@ describe('frontend layout', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
     expect(appJs).toContain('function defaultPhysicalSceneState')
+    expect(appJs).toContain('function pickStoredPhysicalSceneState')
+    expect(appJs).toContain('raw?.debug?.postprocess?.physicalSceneState')
+    expect(appJs).toContain('function hasPhysicalSceneStateContent')
     expect(appJs).toContain('function normalizePhysicalSceneState')
     expect(appJs).toContain('function renderPhysicalSceneState')
     expect(appJs).toContain('currentScene')

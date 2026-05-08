@@ -891,6 +891,29 @@ function normalizePhysicalSceneState(value: unknown, fallback?: unknown): Physic
   }
 }
 
+function hasPhysicalSceneStateContent(value: unknown): boolean {
+  if (typeof value === 'string') return Boolean(value.trim())
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return ['currentScene', 'nextScene', 'transitionRule', 'currentSceneForbidden']
+    .some(key => String(record[key] || '').trim())
+}
+
+function pickStoredPhysicalSceneState(raw: Record<string, unknown>): unknown {
+  const debug = raw.debug && typeof raw.debug === 'object' && !Array.isArray(raw.debug)
+    ? raw.debug as Record<string, unknown>
+    : {}
+  const postprocess = debug.postprocess && typeof debug.postprocess === 'object' && !Array.isArray(debug.postprocess)
+    ? debug.postprocess as Record<string, unknown>
+    : {}
+  return [
+    raw.physicalSceneState,
+    raw.sceneState,
+    postprocess.physicalSceneState,
+    postprocess.sceneState,
+  ].find(hasPhysicalSceneStateContent)
+}
+
 function renderPhysicalSceneState(value: unknown, fallback = '（无）'): string {
   const scene = normalizePhysicalSceneState(value)
   const lines = [
@@ -1030,7 +1053,7 @@ function normalizeProgramConfig(raw: Record<string, unknown>, fallback: StoryPro
     statusSubject: String(raw.statusSubject || fallback.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw.statusPanelSchema || fallback.statusPanelSchema || ''), String(raw.statusSubject || fallback.statusSubject || '人物'), cast as CharacterState[]),
     statusPanel: ensureSpatialStatusPanel(formatStatusPanelPayload(raw.statusPanel || fallback.statusPanel), String(raw.statusSubject || fallback.statusSubject || '人物'), cast as CharacterState[]),
-    physicalSceneState: normalizePhysicalSceneState(raw.physicalSceneState ?? raw.sceneState, fallback.physicalSceneState ?? fallback.sceneState),
+    physicalSceneState: normalizePhysicalSceneState(pickStoredPhysicalSceneState(raw), fallback.physicalSceneState ?? fallback.sceneState),
     initialPlayerOptions: initialPlayerOptions as PlayerOption[],
     normalizedEntries: normalizedEntries as StorybookEntry[],
     globalContextSeed: String(raw.globalContextSeed || fallback.globalContextSeed || ''),
