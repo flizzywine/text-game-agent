@@ -1,31 +1,53 @@
 const storageKey = 'text-game-agent.web-state.v2'
 const legacyStorageKey = 'text-game-agent.web-state.v1'
-const apiKeyStorageKey = 'text-game-agent.deepseek-api-key'
-const defaultModel = 'deepseek-v4-pro'
-const modelOptions = new Set(['deepseek-v4-pro', 'deepseek-v4-flash'])
+const deepSeekApiKeyStorageKey = 'text-game-agent.deepseek-api-key'
+const fireworksApiKeyStorageKey = 'text-game-agent.fireworks-api-key'
+const fireworksDeepSeekV4ProModel = 'accounts/fireworks/models/deepseek-v4-pro'
+const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
+const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
+const defaultModel = fireworksDeepSeekV4ProPriorityModel
+const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, officialDeepSeekV4ProModel])
 
 const appState = loadAppState()
 let state = getCurrentStory()
 let builtinModules = []
 let storyLibraryAssets = []
 let selectedNewGameAssetId = ''
+let generationBusy = false
+let prewarmController = null
 let config = {
   model: defaultModel,
   baseUrl: 'https://api.deepseek.com',
   hasApiKey: false,
+  providers: {
+    deepseek: { baseUrl: 'https://api.deepseek.com', hasApiKey: false },
+    fireworks: { baseUrl: 'https://api.fireworks.ai/inference/v1', hasApiKey: false },
+  },
 }
 
 const els = {
   connectionStatus: document.querySelector('#connectionStatus'),
+  turnStatus: document.querySelector('#turnStatus'),
   modelSelect: document.querySelector('#modelSelect'),
   temperatureInput: document.querySelector('#temperatureInput'),
   apiKeyButton: document.querySelector('#apiKeyButton'),
   apiKeyDialog: document.querySelector('#apiKeyDialog'),
   apiKeyForm: document.querySelector('#apiKeyForm'),
+  apiKeyTitle: document.querySelector('#apiKeyTitle'),
+  apiKeyHelp: document.querySelector('#apiKeyHelp'),
+  apiKeyLabel: document.querySelector('#apiKeyLabel'),
   apiKeyInput: document.querySelector('#apiKeyInput'),
   clearApiKeyButton: document.querySelector('#clearApiKeyButton'),
   cancelApiKeyButton: document.querySelector('#cancelApiKeyButton'),
-  refineToggle: document.querySelector('#refineToggle'),
+  directorControlButton: document.querySelector('#directorControlButton'),
+  directorControlDialog: document.querySelector('#directorControlDialog'),
+  directorControlForm: document.querySelector('#directorControlForm'),
+  directorLongRangeInput: document.querySelector('#directorLongRangeInput'),
+  directorGuidanceInput: document.querySelector('#directorGuidanceInput'),
+  cancelDirectorControlButton: document.querySelector('#cancelDirectorControlButton'),
+  moduleConfigButton: document.querySelector('#moduleConfigButton'),
+  moduleConfigDialog: document.querySelector('#moduleConfigDialog'),
+  closeModuleConfigButton: document.querySelector('#closeModuleConfigButton'),
   resetButton: document.querySelector('#resetButton'),
   storySelect: document.querySelector('#storySelect'),
   storyNameInput: document.querySelector('#storyNameInput'),
@@ -55,6 +77,8 @@ const els = {
   optionTray: document.querySelector('#optionTray'),
   playForm: document.querySelector('#playForm'),
   playerInput: document.querySelector('#playerInput'),
+  retryStageButton: document.querySelector('#retryStageButton'),
+  regenerateButton: document.querySelector('#regenerateButton'),
   sendButton: document.querySelector('#sendButton'),
   addCharacterButton: document.querySelector('#addCharacterButton'),
   statusPanelView: document.querySelector('#statusPanelView'),
@@ -73,7 +97,7 @@ async function init() {
   await loadConfig()
   await loadModules()
   await loadServerState()
-  applyPhysicalEditorMigration()
+  applyLegacyMigrations()
   render()
 }
 
@@ -105,18 +129,20 @@ function defaultStory(name = '未选择故事') {
     chapterSummary: '',
     outline: '',
     longRangeOutline: '',
+    directorGuidance: '',
     plotLines: [],
     foreshadowRecords: [],
-    logicGuidance: '',
+    qualityFeedback: '',
     programConfigFile: '',
     statusSubject: '',
     statusPanelSchema: '',
     statusPanel: '',
+    sceneState: '',
     globalContext: '',
     playerOptions: [],
     model: defaultModel,
     runtimeStats: null,
-    enableEditor: false,
+    lastTurnSnapshot: null,
     debug: {},
   }
 }
@@ -126,9 +152,9 @@ function defaultAppState() {
   return {
     currentStoryId: story.id,
     stories: [story],
-    physicalEditorMigration: true,
     multiSpatialMigration: true,
     reviewerPatchMigration: true,
+    removeSpatialStatusPanelMigration: true,
   }
 }
 
@@ -143,9 +169,9 @@ function loadAppState() {
       return {
         currentStoryId: story.id,
         stories: [story],
-        physicalEditorMigration: false,
         multiSpatialMigration: false,
         reviewerPatchMigration: false,
+        removeSpatialStatusPanelMigration: false,
       }
     }
 
@@ -167,9 +193,9 @@ function normalizeAppState(raw) {
   return {
     currentStoryId,
     stories,
-    physicalEditorMigration: Boolean(raw?.physicalEditorMigration),
     multiSpatialMigration: Boolean(raw?.multiSpatialMigration),
     reviewerPatchMigration: Boolean(raw?.reviewerPatchMigration),
+    removeSpatialStatusPanelMigration: Boolean(raw?.removeSpatialStatusPanelMigration),
   }
 }
 
@@ -192,34 +218,36 @@ function normalizeStory(raw, fallbackName = '故事') {
     chapterSummary: String(raw?.chapterSummary || raw?.currentSituation || ''),
     outline: String(raw?.outline || ''),
     longRangeOutline: String(raw?.longRangeOutline || ''),
+    directorGuidance: String(raw?.directorGuidance || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
     foreshadowRecords: Array.isArray(raw?.foreshadowRecords) ? raw.foreshadowRecords : [],
-    logicGuidance: String(raw?.logicGuidance || ''),
+    qualityFeedback: String(raw?.qualityFeedback || ''),
     programConfigFile: String(raw?.programConfigFile || ''),
     statusSubject: String(raw?.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw?.statusPanelSchema || ''), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
     statusPanel: ensureSpatialStatusPanel(pickLatestStatusPanel(raw), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
+    sceneState: String(raw?.sceneState || ''),
     globalContext: String(raw?.globalContext || ''),
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     model: normalizeModel(raw?.model || base.model),
     runtimeStats: raw?.runtimeStats && typeof raw.runtimeStats === 'object' ? raw.runtimeStats : null,
-    enableEditor: raw?.enableEditor === undefined ? false : Boolean(raw.enableEditor),
+    lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
     debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
   }
 }
 
-function applyPhysicalEditorMigration() {
+function applyLegacyMigrations() {
   const shouldPersistMultiSpatial = !appState.multiSpatialMigration
   const shouldSwitchToReviewerPatch = !appState.reviewerPatchMigration
-  if (appState.physicalEditorMigration && !shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch) return
+  const shouldRemoveSpatialStatusPanel = !appState.removeSpatialStatusPanelMigration
+  if (!shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch && !shouldRemoveSpatialStatusPanel) return
   for (const story of appState.stories) {
-    if (shouldSwitchToReviewerPatch) story.enableEditor = false
     story.statusPanelSchema = ensureSpatialStatusPanelSchema(story.statusPanelSchema, story.statusSubject || '人物', story.characters)
     story.statusPanel = ensureSpatialStatusPanel(story.statusPanel, story.statusSubject || '人物', story.characters)
   }
-  appState.physicalEditorMigration = true
   appState.multiSpatialMigration = true
   appState.reviewerPatchMigration = true
+  appState.removeSpatialStatusPanelMigration = true
   saveState()
 }
 
@@ -275,22 +303,51 @@ function normalizeModel(value) {
   return modelOptions.has(model) ? model : defaultModel
 }
 
+function providerForModel(model) {
+  const normalized = normalizeModel(model)
+  if (normalized === fireworksDeepSeekV4ProModel || normalized === fireworksDeepSeekV4ProPriorityModel) return 'fireworks'
+  return 'deepseek'
+}
+
+function providerLabel(provider) {
+  if (provider === 'fireworks') return 'Fireworks'
+  return 'DeepSeek'
+}
+
 function modelLabel(model) {
   return {
-    'deepseek-v4-pro': 'V4 Pro',
-    'deepseek-v4-flash': 'V4 Flash',
+    [officialDeepSeekV4ProModel]: 'V4 Pro Official',
+    [fireworksDeepSeekV4ProPriorityModel]: 'V4 Pro Fireworks Priority',
   }[model] || model
 }
 
 async function loadConfig() {
   try {
     const response = await fetch('/api/config')
-    config = await response.json()
+    config = normalizeRuntimeConfig(await response.json())
     state.model = normalizeModel(state.model || config.model)
     els.modelSelect.value = state.model
     renderConnection()
   } catch (error) {
     els.connectionStatus.textContent = `配置读取失败：${error.message}`
+  }
+}
+
+function normalizeRuntimeConfig(raw) {
+  return {
+    model: normalizeModel(raw?.model || defaultModel),
+    baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
+    hasApiKey: Boolean(raw?.hasApiKey || raw?.providers?.deepseek?.hasApiKey),
+    providers: {
+      deepseek: {
+        baseUrl: String(raw?.providers?.deepseek?.baseUrl || raw?.baseUrl || 'https://api.deepseek.com'),
+        hasApiKey: Boolean(raw?.providers?.deepseek?.hasApiKey || raw?.hasApiKey),
+      },
+      fireworks: {
+        baseUrl: String(raw?.providers?.fireworks?.baseUrl || 'https://api.fireworks.ai/inference/v1'),
+        hasApiKey: Boolean(raw?.providers?.fireworks?.hasApiKey),
+      },
+    },
   }
 }
 
@@ -310,8 +367,16 @@ function bindEvents() {
     submitTurn()
   })
 
+  els.retryStageButton.addEventListener('click', () => {
+    retryUnfinishedStage()
+  })
+
+  els.regenerateButton.addEventListener('click', () => {
+    regenerateLastTurn()
+  })
+
   els.apiKeyButton.addEventListener('click', () => {
-    els.apiKeyInput.value = getLocalApiKey()
+    renderApiKeyDialog()
     els.apiKeyDialog.showModal()
   })
 
@@ -320,21 +385,44 @@ function bindEvents() {
   })
 
   els.clearApiKeyButton.addEventListener('click', () => {
-    localStorage.removeItem(apiKeyStorageKey)
+    localStorage.removeItem(apiKeyStorageKeyForProvider(currentProvider()))
     els.apiKeyInput.value = ''
     els.apiKeyDialog.close()
     renderConnection()
   })
 
+  els.moduleConfigButton.addEventListener('click', () => {
+    renderModules()
+    els.moduleConfigDialog.showModal()
+  })
+
+  els.closeModuleConfigButton.addEventListener('click', () => {
+    els.moduleConfigDialog.close()
+  })
+
+  els.directorControlButton.addEventListener('click', () => {
+    openDirectorControl()
+  })
+
+  els.cancelDirectorControlButton.addEventListener('click', () => {
+    els.directorControlDialog.close()
+  })
+
+  els.directorControlForm.addEventListener('submit', event => {
+    event.preventDefault()
+    saveDirectorControl()
+  })
+
   els.apiKeyForm.addEventListener('submit', event => {
     event.preventDefault()
+    const provider = currentProvider()
     const key = els.apiKeyInput.value.trim()
-    if (key && !/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) {
+    if (provider === 'deepseek' && key && !/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) {
       alert('API Key 格式不对。DeepSeek key 通常以 sk- 开头，请重新粘贴完整 key。')
       return
     }
-    if (key) localStorage.setItem(apiKeyStorageKey, key)
-    else localStorage.removeItem(apiKeyStorageKey)
+    if (key) localStorage.setItem(apiKeyStorageKeyForProvider(provider), key)
+    else localStorage.removeItem(apiKeyStorageKeyForProvider(provider))
     els.apiKeyDialog.close()
     renderConnection()
   })
@@ -343,6 +431,7 @@ function bindEvents() {
     state.model = normalizeModel(event.target.value)
     saveState()
     renderConnection()
+    if (els.apiKeyDialog.open) renderApiKeyDialog()
   })
 
   els.resetButton.addEventListener('click', () => {
@@ -474,12 +563,6 @@ function bindEvents() {
     persistAndRender()
   })
 
-  els.refineToggle.addEventListener('change', () => {
-    state.enableEditor = els.refineToggle.checked
-    saveState()
-    renderConnection()
-  })
-
   els.toggleDebugButton.addEventListener('click', () => {
     document.querySelector('.debug-panel').classList.toggle('collapsed')
   })
@@ -494,8 +577,9 @@ function render() {
   renderStoryTracking()
   renderConversation()
   renderOptions()
+  renderRetryStageButton()
+  renderRegenerateButton()
   els.modelSelect.value = normalizeModel(state.model || config.model)
-  els.refineToggle.checked = Boolean(state.enableEditor)
   renderStats()
   renderDebug()
 }
@@ -527,9 +611,7 @@ function renderDebug() {
     initializer: debug.initializer,
     director: debug.director,
     narrator: debug.narrator,
-    editor: debug.editor,
     postprocess: debug.postprocess,
-    patchReport: debug.patchReport,
   }
   if (Object.values(payload).some(Boolean)) {
     lines.push('', 'stages:', JSON.stringify(payload, null, 2))
@@ -556,7 +638,7 @@ function renderStats() {
     ${stageRows.length ? `
       <details class="stats-detail">
         <summary>分层耗时</summary>
-        <pre>${escapeHtml(stageRows.map(row => `${row.label || row.stage}: ${formatMs(row.durationMs)} · out ${formatNumber(row.outputTokens)}`).join('\n'))}</pre>
+        <pre>${escapeHtml(stageRows.map(formatStageStatsLine).join('\n'))}</pre>
       </details>
     ` : ''}
   `
@@ -564,6 +646,17 @@ function renderStats() {
 
 function renderStatItem(label, value) {
   return `<div class="stat-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`
+}
+
+function formatStageStatsLine(row) {
+  const label = row.label || row.stage
+  const parts = [
+    row.cacheHit ? 'cache hit' : '',
+    `TTFT ${formatMs(row.ttftMs)}`,
+    `总 ${formatMs(row.durationMs)}`,
+    `out ${formatNumber(row.outputTokens)}`,
+  ].filter(Boolean)
+  return `${label}: ${parts.join(' · ')}`
 }
 
 function formatMs(value) {
@@ -582,6 +675,73 @@ function formatNumber(value) {
   const n = Number(value)
   if (!Number.isFinite(n) || n <= 0) return '-'
   return String(Math.round(n))
+}
+
+function updateRuntimeStatsFromPipeline() {
+  if (!state.debug?.startedAt) return
+  state.runtimeStats = buildClientRuntimeStats()
+  renderStats()
+}
+
+function buildClientRuntimeStats(payload = {}) {
+  const debug = state.debug || {}
+  const startedAt = Number(state.debug.startedAt || Date.now())
+  const now = Date.now()
+  const progress = Array.isArray(debug.progress) ? debug.progress : []
+  const stages = progress.map(row => buildClientStageStat(row, now))
+  const visibleText = lastVisibleAssistantText()
+  const visibleOutputTokens = estimateClientTokens(visibleText)
+  const outputTokens = stages.reduce((sum, row) => sum + (Number(row.outputTokens) || 0), 0) || visibleOutputTokens
+  const totalMs = Math.max(0, now - startedAt)
+  const firstEventAt = Number(debug.firstEventAtMs || 0)
+  return {
+    source: 'client',
+    model: normalizeModel(payload.model || state.model || config.model),
+    firstResponseMs: firstEventAt > startedAt ? firstEventAt - startedAt : totalMs,
+    totalMs,
+    tps: totalMs > 0 && outputTokens > 0 ? outputTokens / (totalMs / 1000) : 0,
+    inputTokens: 0,
+    outputTokens,
+    totalTokens: outputTokens,
+    visibleOutputTokens,
+    stages,
+  }
+}
+
+function buildClientStageStat(row, now) {
+  const startedAt = Number(row.startedAtMs || 0)
+  const endedAt = Number(row.endedAtMs || 0)
+  const updatedAt = Number(row.updatedAtMs || 0)
+  const effectiveEnd = endedAt || (row.status === 'running' ? now : updatedAt)
+  return {
+    stage: row.stage,
+    label: row.label || row.stage,
+    model: normalizeModel(state.model || config.model),
+    durationMs: startedAt && effectiveEnd ? Math.max(0, effectiveEnd - startedAt) : 0,
+    ttftMs: Number(row.ttftMs || 0),
+    inputTokens: 0,
+    outputTokens: Number(row.outputTokens || 0),
+    totalTokens: Number(row.outputTokens || 0),
+  }
+}
+
+function lastVisibleAssistantText() {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index]
+    if (message?.role === 'assistant') return String(message.content || '')
+  }
+  return ''
+}
+
+function estimateClientTokens(text) {
+  const value = String(text || '').trim()
+  if (!value) return 0
+  return Math.ceil(value.length / 1.6)
+}
+
+function parseOutputTokens(message) {
+  const match = String(message || '').match(/输出\s+(\d+)\s+tokens/)
+  return match ? Number(match[1]) : 0
 }
 
 function renderStoryControls() {
@@ -821,17 +981,20 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.chapterSummary = ''
   story.outline = ''
   story.longRangeOutline = ''
+  story.directorGuidance = ''
   story.plotLines = []
   story.foreshadowRecords = []
-  story.logicGuidance = ''
+  story.qualityFeedback = ''
   story.programConfigFile = String(asset.programConfigFile || init.programConfigFile || '')
   story.statusSubject = String(init.statusSubject || '')
   story.statusPanelSchema = ensureSpatialStatusPanelSchema(String(init.statusPanelSchema || buildFallbackStatusPanelSchema(asset, story.characters)), story.statusSubject || '人物', story.characters)
   story.statusPanel = ensureSpatialStatusPanel(String(init.statusPanel || buildFallbackStatusPanel(asset, story.characters)), story.statusSubject || '人物', story.characters)
+  story.sceneState = String(init.sceneState || init.currentSituation || '').trim()
   story.globalContext = [
     `当前故事资料：${asset.sourceName || asset.id}`,
     story.worldview ? `世界观：${story.worldview}` : '',
     story.statusSubject ? `状态追踪人物：${story.statusSubject}` : '',
+    story.sceneState ? `环境状态：${story.sceneState}` : '',
     asset.markdownFile ? `资料文件：${asset.markdownFile}` : '',
     story.programConfigFile ? `初始化配置：${story.programConfigFile}` : '',
     story.openingText ? `开场白：${story.openingText.slice(0, 300)}` : '',
@@ -854,8 +1017,9 @@ async function initializeSelectedStoryAsset() {
     alert('请先选择一个故事资料。')
     return
   }
-  if (!hasRuntimeApiKey()) {
-    alert('请先配置 DeepSeek API Key。')
+  const provider = currentProvider()
+  if (!hasRuntimeApiKey(provider)) {
+    alert(`请先配置 ${providerLabel(provider)} API Key。`)
     return
   }
 
@@ -869,7 +1033,7 @@ async function initializeSelectedStoryAsset() {
   renderDebug()
   els.initializeStoryAssetButton.disabled = true
   els.initializeStoryAssetButton.textContent = '初始化中'
-  setStoryLibraryStatus('初始化中：正在等待 DeepSeek 返回结构化故事配置。', 'running')
+  setStoryLibraryStatus(`初始化中：正在等待 ${providerLabel(provider)} 返回结构化故事配置。`, 'running')
 
   try {
     const payload = await initializeStoryAssetStream(asset, true)
@@ -903,7 +1067,8 @@ async function initializeStoryAssetStream(asset, force = true) {
       sourceName: asset.sourceName || asset.id,
       entries: asset.entries || [],
       characters: asset.characters || [],
-      apiKey: getLocalApiKey(),
+      model: normalizeModel(state.model || config.model),
+      apiKey: getLocalApiKey(providerForModel(state.model || config.model)),
       force,
     }),
   })
@@ -938,12 +1103,18 @@ function assertInitializedProgramConfig(config) {
 
 function normalizeInitialPlayerOptions(options) {
   if (!Array.isArray(options)) return []
-  return options.slice(0, 3).map((option, index) => ({
-    id: option.id || ['A', 'B', 'C'][index],
-    label: option.label || `选项 ${['A', 'B', 'C'][index]}`,
-    description: option.description || option.inputText || '',
-    inputText: option.inputText || option.label || '',
-  }))
+  return options.slice(0, 3).map((option, index) => {
+    const id = ['A', 'B', 'C'][index]
+    if (typeof option === 'string') {
+      return { id, label: option, description: '', inputText: option }
+    }
+    return {
+      id: option.id || id,
+      label: option.label || option.inputText || `选项 ${id}`,
+      description: option.description || '',
+      inputText: option.inputText || option.label || option.description || '',
+    }
+  })
 }
 
 function buildFallbackStatusPanelSchema(asset, characters) {
@@ -1008,24 +1179,80 @@ async function loadDiskSave() {
 }
 
 function renderConnection() {
-  const keyState = hasRuntimeApiKey() ? 'key ready' : 'no API key'
-  const mode = state.enableEditor ? 'refine: full editor + reviewer patch' : 'reviewer patch'
-  els.connectionStatus.textContent = `${config.baseUrl || 'https://api.deepseek.com'} · ${normalizeModel(state.model || config.model)} · ${mode} · ${keyState}`
+  const model = normalizeModel(state.model || config.model)
+  const provider = providerForModel(model)
+  const providerConfig = getProviderConfig(provider)
+  const keyState = hasRuntimeApiKey(provider) ? 'key ready' : 'no API key'
+  const mode = 'narrator + postprocess'
+  els.connectionStatus.textContent = `${providerConfig.baseUrl} · ${modelLabel(model)} · ${providerLabel(provider)} · ${mode} · ${keyState}`
+  renderTurnStatus()
 }
 
-function getLocalApiKey() {
-  return localStorage.getItem(apiKeyStorageKey) || ''
+function openDirectorControl() {
+  els.directorLongRangeInput.value = state.longRangeOutline || ''
+  els.directorGuidanceInput.value = state.directorGuidance || ''
+  els.directorControlDialog.showModal()
 }
 
-function hasRuntimeApiKey() {
-  return Boolean(getLocalApiKey() || config.hasApiKey)
+function saveDirectorControl() {
+  state.longRangeOutline = els.directorLongRangeInput.value.trim()
+  state.directorGuidance = els.directorGuidanceInput.value.trim()
+  saveState()
+  renderStoryTracking()
+  els.directorControlDialog.close()
+}
+
+function renderTurnStatus() {
+  const completed = completedAssistantTurnCount()
+  const generating = Boolean(generationBusy && state.debug?.startedAt)
+  const target = generating ? nextAssistantTurnIndex() : completed
+  els.turnStatus.textContent = generating
+    ? `正在生成第 ${target} 轮`
+    : `当前第 ${completed} 轮`
+}
+
+function currentProvider() {
+  return providerForModel(state.model || config.model)
+}
+
+function getProviderConfig(provider) {
+  if (config.providers?.[provider]) return config.providers[provider]
+  if (provider === 'fireworks') return { baseUrl: 'https://api.fireworks.ai/inference/v1', hasApiKey: false }
+  return { baseUrl: config.baseUrl || 'https://api.deepseek.com', hasApiKey: config.hasApiKey }
+}
+
+function apiKeyStorageKeyForProvider(provider) {
+  if (provider === 'fireworks') return fireworksApiKeyStorageKey
+  return deepSeekApiKeyStorageKey
+}
+
+function getLocalApiKey(provider = currentProvider()) {
+  return localStorage.getItem(apiKeyStorageKeyForProvider(provider)) || ''
+}
+
+function hasRuntimeApiKey(provider = currentProvider()) {
+  return Boolean(getLocalApiKey(provider) || getProviderConfig(provider).hasApiKey)
+}
+
+function renderApiKeyDialog() {
+  const provider = currentProvider()
+  const model = normalizeModel(state.model || config.model)
+  els.apiKeyTitle.textContent = `${providerLabel(provider)} API Key`
+  const helpByProvider = {
+    fireworks: `当前模型：${modelLabel(model)}。请填写 Fireworks API key，Key 只保存在当前浏览器本地。`,
+    deepseek: `当前模型：${modelLabel(model)}。请填写 DeepSeek API key，Key 只保存在当前浏览器本地。`,
+  }
+  els.apiKeyHelp.textContent = helpByProvider[provider] || helpByProvider.deepseek
+  els.apiKeyLabel.textContent = provider === 'fireworks' ? 'Fireworks Key' : 'DeepSeek Key'
+  els.apiKeyInput.placeholder = provider === 'fireworks' ? 'FIREWORKS_API_KEY' : 'sk-...'
+  els.apiKeyInput.value = getLocalApiKey(provider)
 }
 
 function allModules() {
-  return builtinModules.map(module => ({
+  return enforceSingleEnabledStyles(builtinModules.map(module => ({
     ...module,
     enabled: state.moduleEnabled[module.id] ?? module.enabled,
-  }))
+  })))
 }
 
 function renderModules() {
@@ -1049,7 +1276,7 @@ function renderModules() {
           <input type="checkbox" data-module-toggle="${escapeAttr(module.id)}" ${module.enabled ? 'checked' : ''} />
           <strong>${escapeHtml(module.name || module.id)}</strong>
         </label>
-        <span class="tag">${escapeHtml(module.exclusiveGroup ? '单选 · 全部注入' : '可多选 · 全部注入')}</span>
+        <span class="tag">${escapeHtml(`单选 · ${moduleLayerLabel(module)}`)}</span>
       </div>
       <p class="meta">${escapeHtml(module.description || module.id)}</p>
       ${module.file ? `<p class="meta">文件：${escapeHtml(module.file)}</p>` : ''}
@@ -1071,22 +1298,12 @@ function renderModules() {
 
 function groupModules(modules) {
   const order = [
-    '文风',
-    '字数限制',
-    '叙事人称',
-    '交互方式',
-    '叙事节奏',
-    '叙事主导者',
-    '性',
-    'XP',
-    '质量控制',
-    '指令控制',
-    '其他',
+    '导演风格',
+    '叙事风格',
   ]
   const buckets = new Map()
   for (const module of modules) {
-    const dirName = moduleDirName(module)
-    const name = dirName || module.group || '其他'
+    const name = moduleLayerGroupName(module)
     if (!buckets.has(name)) buckets.set(name, [])
     buckets.get(name).push(module)
   }
@@ -1098,23 +1315,51 @@ function groupModules(modules) {
     })
     .map(([name, groupModules]) => ({
       name,
-      modules: groupModules,
+      modules: groupModules.sort((a, b) => moduleSortName(a).localeCompare(moduleSortName(b), 'zh-Hans-CN')),
       enabledCount: groupModules.filter(module => module.enabled).length,
     }))
 }
 
-function moduleDirName(module) {
-  if (!module.file) return ''
-  const rel = module.file.replace(/^prompts\/user-config\//, '')
-  const idx = rel.indexOf('/')
-  return idx >= 0 ? rel.slice(0, idx) : ''
+function moduleLayerGroupName(module) {
+  return {
+    'director': '导演风格',
+    'narrator': '叙事风格',
+  }[module.layer] || '叙事风格'
+}
+
+function moduleLayerLabel(module) {
+  return {
+    director: 'Director',
+    narrator: 'Narrator',
+  }[module.layer] || 'Narrator'
+}
+
+function moduleStyleExclusiveGroup(module) {
+  return module?.layer === 'director' ? 'director-style' : 'narrator-style'
+}
+
+function moduleSortName(module) {
+  const group = module.group ? `${module.group} / ` : ''
+  return `${group}${module.name || module.id}`
+}
+
+function enforceSingleEnabledStyles(modules) {
+  const enabledGroups = new Set()
+  return modules.map(module => {
+    if (!module.enabled) return module
+    const group = moduleStyleExclusiveGroup(module)
+    if (enabledGroups.has(group)) return { ...module, enabled: false }
+    enabledGroups.add(group)
+    return module
+  })
 }
 
 function setModuleEnabled(id, enabled) {
   const target = allModules().find(module => module.id === id)
-  if (enabled && target?.exclusiveGroup) {
+  if (enabled && target) {
+    const targetGroup = moduleStyleExclusiveGroup(target)
     for (const module of allModules()) {
-      if (module.id === id || module.exclusiveGroup !== target.exclusiveGroup) continue
+      if (module.id === id || moduleStyleExclusiveGroup(module) !== targetGroup) continue
       state.moduleEnabled[module.id] = false
     }
   }
@@ -1129,14 +1374,13 @@ function renderStatusPanel() {
     return
   }
   const subject = state.statusSubject ? `追踪：${state.statusSubject}` : 'Postprocess 状态'
-  const body = formatStatusPanelForDisplay(state.statusPanel) || '状态栏尚未生成。'
   els.statusPanelView.innerHTML = `
     <div class="status-card">
       <div class="status-card-head">
         <span>${escapeHtml(subject)}</span>
         <small>每轮后处理更新</small>
       </div>
-      <pre>${escapeHtml(body)}</pre>
+      ${renderStatusPanelBody(state.statusPanel)}
     </div>
     ${state.statusPanelSchema ? `
       <details class="status-schema">
@@ -1145,6 +1389,91 @@ function renderStatusPanel() {
       </details>
     ` : ''}
   `
+}
+
+function renderStatusPanelBody(value) {
+  const parsed = tryParseJsonStatusPanel(value)
+  if (parsed !== null) {
+    return `<div class="status-body structured">${renderStatusValue(parsed)}</div>`
+  }
+  const body = formatStatusPanelForDisplay(value) || '状态栏尚未生成。'
+  const lines = body.split('\n').map(line => line.trim()).filter(Boolean)
+  if (lines.length === 0) return '<div class="status-body"><p class="meta no-indent">状态栏尚未生成。</p></div>'
+  return `
+    <div class="status-body">
+      ${lines.map(line => renderStatusTextLine(line)).join('')}
+    </div>
+  `
+}
+
+function tryParseJsonStatusPanel(value) {
+  if (!value || typeof value === 'object') return value && typeof value === 'object' ? value : null
+  const text = extractJsonCandidate(String(value))
+  if (!/^[\[{]/.test(text)) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+function extractJsonCandidate(value) {
+  const text = String(value || '').trim()
+  const fenced = text.match(/```(?:json|JSON)?\s*([\s\S]*?)\s*```/)
+  if (fenced) return fenced[1].trim()
+  if (/^[\[{]/.test(text)) return text
+  const objectStart = text.indexOf('{')
+  const objectEnd = text.lastIndexOf('}')
+  if (objectStart >= 0 && objectEnd > objectStart) return text.slice(objectStart, objectEnd + 1).trim()
+  const arrayStart = text.indexOf('[')
+  const arrayEnd = text.lastIndexOf(']')
+  if (arrayStart >= 0 && arrayEnd > arrayStart) return text.slice(arrayStart, arrayEnd + 1).trim()
+  return text
+}
+
+function renderStatusValue(value, depth = 0, key = '') {
+  if (Array.isArray(value)) {
+    if (value.length === 0) return ''
+    return `
+      <div class="status-list">
+        ${value.map(item => `<div class="status-list-item">${renderStatusValue(item, depth + 1)}</div>`).join('')}
+      </div>
+    `
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined && item !== null && String(item).trim() !== '')
+    if (entries.length === 0) return ''
+    return entries.map(([name, item]) => {
+      if (item && typeof item === 'object') {
+        return `
+          <section class="status-section depth-${Math.min(depth, 3)}">
+            <h4>${escapeHtml(name)}</h4>
+            ${renderStatusValue(item, depth + 1, name)}
+          </section>
+        `
+      }
+      return renderStatusField(name, item)
+    }).join('')
+  }
+  if (!key) return `<p class="status-text">${escapeHtml(value ?? '')}</p>`
+  return renderStatusField(key, value)
+}
+
+function renderStatusField(name, value) {
+  return `
+    <div class="status-field">
+      <span>${escapeHtml(name)}</span>
+      <strong>${escapeHtml(value ?? '')}</strong>
+    </div>
+  `
+}
+
+function renderStatusTextLine(line) {
+  const heading = line.match(/^#{1,4}\s+(.+)$/)
+  if (heading) return `<h4 class="status-line-heading">${escapeHtml(heading[1])}</h4>`
+  const field = line.match(/^(?:[-*]\s*)?([^：:]{1,24})[：:]\s*(.+)$/)
+  if (field) return renderStatusField(field[1].trim(), field[2].trim())
+  return `<p class="status-text">${escapeHtml(line.replace(/^[-*]\s*/, ''))}</p>`
 }
 
 function formatStatusPanelForDisplay(value) {
@@ -1202,63 +1531,25 @@ function formatStatusPanelObject(value, depth = 2) {
 function ensureSpatialStatusPanelSchema(value, subject = '人物', characters = []) {
   const text = String(value || '').trim()
   if (!text) return ''
-  if (/多人物身体\/空间状态/.test(text)) return text
-  return [
-    text,
-    '',
-    renderMultiCharacterSpatialSchema(subject, characters),
-  ].join('\n')
+  void subject
+  void characters
+  return stripSpatialStatusSection(text)
 }
 
 function ensureSpatialStatusPanel(value, subject = '人物', characters = []) {
   const text = String(value || '').trim()
   if (!text) return ''
-  if (/多人物身体\/空间状态/.test(text)) return text
-  return [
-    text,
-    '',
-    renderMultiCharacterSpatialPanel(subject, characters),
-  ].join('\n')
+  void subject
+  void characters
+  return stripSpatialStatusSection(text)
 }
 
-function spatialParticipantNames(subject = '人物', characters = []) {
-  const names = [
-    subject,
-    ...characters.map(character => character?.name || character?.id || '').filter(Boolean),
-  ]
-  return [...new Set(names.map(name => String(name).trim()).filter(Boolean))]
-}
-
-function renderMultiCharacterSpatialSchema(subject = '人物', characters = []) {
-  const names = spatialParticipantNames(subject, characters)
-  return [
-    '## 多人物身体/空间状态（硬性维护）',
-    `- 追踪对象：${names.join('、') || subject}`,
-    '- 每个在场人物都必须有一行状态，不只记录核心人物。',
-    '- 字段：姿势、朝向、相对位置/接触关系、双手占用、可触达区域、动作限制。',
-    '- 姿势：站立、坐着、趴着、仰躺、侧躺、跪坐、靠墙、被遮挡等。',
-    '- 朝向：面向谁、背对谁、侧向谁。',
-    '- 相对位置/接触关系：谁在上方、侧边、身后、前方；是否贴近；中间是否有物件阻隔。',
-    '- 双手占用：左手、右手分别在哪里，是否撑住、抓握、被压住、被遮挡或空闲。',
-    '- 可触达区域：当前姿势下自然能碰到哪里，不能碰到哪里。',
-    '- 动作限制：不可达动作必须先发生转身、侧身、起身、伸臂、移动位置或改变朝向。',
-  ].join('\n')
-}
-
-function renderMultiCharacterSpatialPanel(subject = '人物', characters = []) {
-  const names = spatialParticipantNames(subject, characters)
-  return [
-    '## 多人物身体/空间状态',
-    ...(names.length ? names : [subject]).map(name => [
-      `### ${name}`,
-      '姿势：开场，未发生具体姿势变化',
-      '朝向：未定，等待正文建立',
-      '相对位置/接触关系：未建立明确身体接触',
-      '双手占用：左手未占用；右手未占用',
-      '可触达区域：常规可达范围；具体动作以后续正文为准',
-      '动作限制：若要执行当前姿势不可达动作，必须先写清楚姿势或位置调整',
-    ].join('\n')),
-  ].join('\n\n')
+function stripSpatialStatusSection(value) {
+  return String(value || '')
+    .split(/\n(?=##\s+)/)
+    .filter(section => !/^##\s*多人物身体\/空间状态/.test(section.trim()))
+    .join('\n')
+    .trim()
 }
 
 function renderCharacters() {
@@ -1289,12 +1580,12 @@ function renderCharacters() {
     </article>
   `).join('')
   els.characterList.innerHTML = `
-    <details class="character-editor" ${shouldOpen ? 'open' : ''}>
+    <details class="character-detail" ${shouldOpen ? 'open' : ''}>
       <summary>
         <span>人物档案（可编辑）</span>
         <small>${state.characters.length} 人物</small>
       </summary>
-      <div class="character-editor-body">${items}</div>
+      <div class="character-detail-body">${items}</div>
     </details>
   `
 
@@ -1319,20 +1610,24 @@ function renderCharacters() {
 
 function renderStoryTracking() {
   const summary = state.chapterSummary || deriveGlobalContextBlock('summary')
-  const currentPlot = state.outline || deriveGlobalContextBlock('outline') || formatDirectorOutline(state.debug?.director)
+  const currentPlot = state.outline || state.currentSituation || formatDirectorOutline(state.debug?.director)
   const longRangeOutline = state.longRangeOutline || formatDirectorLongRange(state.debug?.director)
   const foreshadows = normalizeForeshadowRecords(state.foreshadowRecords)
+    .filter(item => item.status === 'active')
+    .slice(0, 3)
   const foreshadowText = foreshadows.length
-    ? foreshadows.map(item => `- ${item.type ? `${foreshadowTypeLabel(item.type)}：` : ''}${item.text}`).join('\n')
+    ? foreshadows.map(item => {
+      const status = foreshadowStatusLabel(item.status)
+      return `- ${item.type ? `${foreshadowTypeLabel(item.type)}：` : ''}${item.text}${status ? `（${status}）` : ''}`
+    }).join('\n')
     : deriveGlobalContextBlock('foreshadow') || formatDirectorForeshadows(state.debug?.director)
-  const logic = state.logicGuidance || deriveGlobalContextBlock('logic')
-
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', summary || '暂无历史总结。')}
     ${renderTrackerSection('当前剧情', currentPlot || '暂无当前剧情。')}
-    ${renderTrackerSection('大纲（远期剧情规划）', longRangeOutline || '暂无远期剧情规划。')}
+    ${renderTrackerSection('环境状态', state.sceneState || '暂无环境状态。')}
+    ${renderTrackerSection('当前长期剧情', longRangeOutline || '暂无当前长期剧情。')}
     ${renderTrackerSection('伏笔', foreshadowText || '暂无伏笔。')}
-    ${logic ? renderTrackerSection('逻辑提醒', logic) : ''}
+    ${state.qualityFeedback ? renderTrackerSection('写作负反馈', state.qualityFeedback) : ''}
   `
 }
 
@@ -1358,7 +1653,7 @@ function deriveGlobalContextBlock(type) {
   const picked = []
   for (const line of lines) {
     const text = line.replace(/^-\s*/, '')
-    if (type === 'outline' && (text.includes('[当前剧情]') || text.includes('[大纲]'))) {
+    if (type === 'outline' && text.includes('[大纲]')) {
       picked.push(text.replace(/^\[(当前剧情|大纲)\]\s*/, ''))
     }
     if (type === 'foreshadow' && text.includes('[伏笔')) picked.push(text)
@@ -1381,8 +1676,13 @@ function normalizeForeshadowRecords(records) {
   return records
     .filter(item => item && typeof item === 'object' && String(item.text || '').trim())
     .map(item => ({
-      type: String(item.type || '').trim(),
+      type: normalizeForeshadowType(item.type),
       text: String(item.text || '').trim(),
+      status: normalizeForeshadowStatus(item),
+      key: String(item.key || makeForeshadowKey(item.text)).trim(),
+      createdTurn: Number.isFinite(Number(item.createdTurn)) ? Number(item.createdTurn) : 0,
+      updatedTurn: Number.isFinite(Number(item.updatedTurn)) ? Number(item.updatedTurn) : 0,
+      delayCount: Number.isFinite(Number(item.delayCount)) ? Number(item.delayCount) : 0,
     }))
     .slice(-12)
 }
@@ -1393,6 +1693,13 @@ function foreshadowTypeLabel(type) {
     delay: '延迟',
     payoff: '回收',
   }[type] || type
+}
+
+function foreshadowStatusLabel(status) {
+  return {
+    active: '未回收',
+    paid: '已回收',
+  }[status] || ''
 }
 
 function formatDirectorOutline(director) {
@@ -1424,8 +1731,21 @@ function formatDirectorForeshadows(director) {
 }
 
 function formatDirectorLongRange(director) {
-  const planning = director && typeof director === 'object' ? director.longRangePlanning : null
+  const planning = director && typeof director === 'object'
+    ? (director.longRangeUpdate || director.future || director.longRangePlanning)
+    : null
   if (!planning || typeof planning !== 'object') return ''
+  const longArc = planning.longArc || planning.arc
+  if (longArc && typeof longArc === 'object') {
+    const lines = []
+    if (longArc.goal) lines.push(`目标：${String(longArc.goal).trim()}`)
+    if (longArc.pressure) lines.push(`压力：${String(longArc.pressure).trim()}`)
+    const direction = Array.isArray(longArc.direction) ? longArc.direction : []
+    if (direction.length) lines.push(`方向：\n${direction.map(item => `- ${String(item).trim()}`).join('\n')}`)
+    const prototypes = Array.isArray(longArc.prototypes) ? longArc.prototypes : []
+    if (prototypes.length) lines.push(`可用原型：${prototypes.map(item => String(item).trim()).filter(Boolean).join(' / ')}`)
+    return lines.filter(Boolean).join('\n')
+  }
   const blocks = Array.isArray(planning.blocks) ? planning.blocks : []
   return blocks
     .map((block, index) => {
@@ -1487,7 +1807,7 @@ function renderEmptyConversation() {
 }
 
 function renderOptions() {
-  const options = state.playerOptions || []
+  const options = normalizeInitialPlayerOptions(state.playerOptions || [])
   if (options.length === 0) {
     els.optionTray.innerHTML = ''
     return
@@ -1507,51 +1827,205 @@ function renderOptions() {
   })
 }
 
+function renderRegenerateButton() {
+  const hasSnapshot = Boolean(getRegenerationSnapshot())
+  const pending = Boolean(getPendingPostprocess())
+  els.regenerateButton.disabled = generationBusy || pending || !hasSnapshot
+  els.regenerateButton.title = pending
+    ? '先重试未完成阶段，避免丢失上一轮状态。'
+    : hasSnapshot
+    ? '删除上次 AI 回复，恢复本轮前状态，并用当前模型重新生成'
+    : '发送一轮后才能重新生成'
+}
+
+function renderRetryStageButton() {
+  const pending = getPendingPostprocess()
+  const canRetryFullTurn = state.debug?.status === 'error' && Boolean(getRegenerationSnapshot())
+  els.retryStageButton.disabled = generationBusy || (!pending && !canRetryFullTurn)
+  els.retryStageButton.title = pending
+    ? '上一轮正文已生成，但 Postprocess 未完成。点击只重试后处理。'
+    : canRetryFullTurn
+      ? '上一轮在正文显示前失败。点击重新生成本轮。'
+      : '没有未完成阶段。'
+}
+
 function nextAssistantTurnIndex() {
-  return state.messages.filter(message => message.role === 'assistant').length + 1
+  return completedAssistantTurnCount() + 1
+}
+
+function completedAssistantTurnCount() {
+  return state.messages.filter(message => message.role === 'assistant').length
 }
 
 async function submitTurn() {
   const playerInput = els.playerInput.value.trim()
   if (!playerInput) return
 
+  const snapshot = createTurnSnapshot(playerInput)
+  await generateTurn(playerInput, { snapshot, modeLabel: 'running' })
+}
+
+async function regenerateLastTurn() {
+  const snapshot = getRegenerationSnapshot()
+  if (!snapshot) {
+    alert('没有可重新生成的上一轮。')
+    return
+  }
+  if (!snapshot.playerInput) {
+    alert('上一轮玩家输入为空，不能重新生成。')
+    return
+  }
+  restoreTurnSnapshot(snapshot)
+  await generateTurn(snapshot.playerInput, { snapshot, modeLabel: 'regenerating' })
+}
+
+async function retryUnfinishedStage() {
+  const pending = getPendingPostprocess()
+  if (pending) {
+    await retryPendingPostprocess(pending)
+    return
+  }
+  if (state.debug?.status === 'error' && getRegenerationSnapshot()) {
+    await regenerateLastTurn()
+    return
+  }
+  alert('没有可重试的未完成阶段。')
+}
+
+function getPendingPostprocess() {
+  const pending = state.debug?.pendingPostprocess
+  if (!state.debug?.postprocessPending) return null
+  if (!pending || typeof pending !== 'object') return buildPendingPostprocessFromState()
+  if (!String(pending.finalText || '').trim()) return null
+  return pending
+}
+
+function buildPendingPostprocessFromState() {
+  const messages = Array.isArray(state.messages) ? state.messages : []
+  let assistantIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'assistant') {
+      assistantIndex = index
+      break
+    }
+  }
+  if (assistantIndex < 0) return null
+  let userIndex = -1
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') {
+      userIndex = index
+      break
+    }
+  }
+  const playerInput = String(messages[userIndex]?.content || '').trim()
+  const finalText = String(messages[assistantIndex]?.content || '').trim()
+  if (!playerInput || !finalText) return null
+  return {
+    playerInput,
+    finalText,
+    director: state.debug?.director || {},
+    recentTurns: messages
+      .slice(Math.max(0, assistantIndex - 12), assistantIndex)
+      .filter(message => message.role === 'user' || message.role === 'assistant'),
+    characters: state.characters,
+    userModules: allModules().filter(module => module.enabled),
+    foreshadowRecords: state.foreshadowRecords,
+    statusPanelSchema: state.statusPanelSchema,
+    statusPanel: state.statusPanel,
+    sceneState: state.sceneState,
+    longRangeOutline: state.longRangeOutline,
+    turnIndex: completedAssistantTurnCount(),
+    model: normalizeModel(state.model || config.model),
+    temperature: Number(els.temperatureInput.value || 0.8),
+    createdAt: new Date().toISOString(),
+  }
+}
+
+async function retryPendingPostprocess(pending) {
   setBusy(true)
+  state.debug.status = '重试 Postprocess'
+  state.debug.error = ''
+  state.debug.note = '正在重试上一轮未完成的 Postprocess；完成后会补上状态、总结和候选项。'
+  state.runtimeStats = buildClientRuntimeStats()
+  render()
+
+  try {
+    const response = await fetch('/api/postprocess-stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...pending,
+        apiKey: getLocalApiKey(),
+        model: normalizeModel(state.model || config.model),
+      }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      throw new Error(payload.error || 'Postprocess 重试失败')
+    }
+    const payload = await readNdjsonStream(response, handlePipelineEvent)
+    if (!payload) throw new Error('Postprocess 重试失败：没有收到最终结果。')
+
+    removeTrailingErrorMessages()
+    state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : []
+    state.debug.status = 'done'
+    state.debug.postprocessPending = false
+    state.debug.pendingPostprocess = null
+    state.debug.postprocessRecoveryBase = null
+    state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
+    state.debug.postprocess = payload.postprocess
+    state.runtimeStats = payload.metrics || buildClientRuntimeStats(payload)
+    state.model = normalizeModel(payload.model || state.model)
+    applyPostprocess(payload)
+    persistPostprocessResult()
+    triggerDirectorPrewarm()
+  } catch (error) {
+    state.debug.status = 'error'
+    state.debug.postprocessPending = true
+    state.debug.error = error.message
+    state.debug.note = 'Postprocess 仍未完成。可再次点击“重试未完成阶段”。'
+    persistAndRender()
+  } finally {
+    setBusy(false)
+  }
+}
+
+async function generateTurn(playerInput, { snapshot, modeLabel = 'running' } = {}) {
+  cancelClientPrewarm('player-input')
+  setBusy(true)
+  const startedAt = Date.now()
+  if (snapshot) state.lastTurnSnapshot = snapshot
   state.messages.push({ role: 'user', content: playerInput })
   state.playerOptions = []
   state.debug = {
-    status: 'running',
-    pipelineMode: state.enableEditor ? 'refine+reviewer-patch' : 'reviewer-patch',
-    note: 'Narrator 输出段落化正文；ReviewerPostprocess 输出局部 patch 和人物状态；程序应用 patch。',
+    status: modeLabel,
+    startedAt,
+    pipelineMode: 'narrator+postprocess',
+    note: modeLabel === 'regenerating'
+      ? '正在回滚并重新生成本次对话；会使用当前选择的模型和配置。'
+      : 'Narrator 正文会直接显示；Postprocess 继续后台更新状态，完成前不能发送下一轮。',
+    visibleTextShown: false,
+    postprocessPending: false,
     progress: [],
     director: null,
     narrator: null,
-    editor: null,
     postprocess: null,
-    patchReport: null,
+    pendingPostprocess: null,
+    postprocessRecoveryBase: null,
   }
+  state.runtimeStats = buildClientRuntimeStats()
   els.playerInput.value = ''
   render()
 
   try {
+    const requestPayload = buildGenerateRequestPayload(playerInput, {
+      bypassGenerationCache: modeLabel === 'regenerating',
+    })
+    state.debug.postprocessRecoveryBase = sanitizePostprocessRecoveryBase(requestPayload)
     const response = await fetch('/api/generate-stream', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        playerInput,
-        globalContext: state.globalContext,
-        longRangeOutline: state.longRangeOutline,
-        turnIndex: nextAssistantTurnIndex(),
-        recentTurns: state.messages.slice(-12),
-        characters: state.characters,
-        userModules: allModules().filter(module => module.enabled),
-        storybookEntries: state.storybookEntries.filter(entry => entry.enabled),
-        statusPanelSchema: state.statusPanelSchema,
-        statusPanel: state.statusPanel,
-        enableEditor: Boolean(state.enableEditor),
-        model: normalizeModel(state.model || config.model),
-        apiKey: getLocalApiKey(),
-        temperature: Number(els.temperatureInput.value || 0.8),
-      }),
+      body: JSON.stringify(requestPayload),
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}))
@@ -1560,27 +2034,232 @@ async function submitTurn() {
     const payload = await readNdjsonStream(response, handlePipelineEvent)
     if (!payload) throw new Error('生成失败：没有收到最终结果。')
 
-    state.messages.push({ role: 'assistant', content: payload.finalText || '' })
+    if (state.debug.visibleTextShown) {
+      const last = state.messages[state.messages.length - 1]
+      if (last?.role === 'assistant' && payload.finalText) last.content = payload.finalText
+    } else {
+      state.messages.push({ role: 'assistant', content: payload.finalText || '' })
+    }
     state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : []
     state.debug.status = 'done'
+    state.debug.postprocessPending = false
+    state.debug.pendingPostprocess = null
+    state.debug.postprocessRecoveryBase = null
     state.debug.pipelineMode = payload.pipelineMode
     state.debug.director = payload.director
     state.debug.narrator = payload.narrator
-    state.debug.editor = payload.editor
     state.debug.postprocess = payload.postprocess
-    state.debug.patchReport = payload.patchReport || payload.postprocess?.patchReport || null
-    state.runtimeStats = payload.metrics || null
+    state.runtimeStats = payload.metrics || buildClientRuntimeStats(payload)
     state.model = normalizeModel(payload.model || state.model)
     applyPostprocess(payload)
-    persistAndRender()
+    persistPostprocessResult()
+    triggerDirectorPrewarm()
   } catch (error) {
     state.debug.status = 'error'
     state.debug.error = error.message
-    state.messages.push({ role: 'error', content: error.message })
+    if (state.debug.visibleTextShown && state.debug.postprocessPending) {
+      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“重试未完成阶段”补上状态、总结和候选项。'
+    } else {
+      state.messages.push({ role: 'error', content: error.message })
+    }
     persistAndRender()
   } finally {
     setBusy(false)
   }
+}
+
+function buildGenerateRequestPayload(playerInput, options = {}) {
+  return {
+    playerInput,
+    globalContext: state.globalContext,
+    qualityFeedback: state.qualityFeedback,
+    longRangeOutline: state.longRangeOutline,
+    directorGuidance: state.directorGuidance,
+    turnIndex: nextAssistantTurnIndex(),
+    recentTurns: buildRecentTurnsForRequest(playerInput),
+    characters: state.characters,
+    userModules: allModules().filter(module => module.enabled),
+    storybookEntries: state.storybookEntries.filter(entry => entry.enabled),
+    foreshadowRecords: state.foreshadowRecords,
+    statusPanelSchema: state.statusPanelSchema,
+    statusPanel: state.statusPanel,
+    sceneState: state.sceneState,
+    bypassGenerationCache: Boolean(options.bypassGenerationCache),
+    model: normalizeModel(state.model || config.model),
+    apiKey: getLocalApiKey(),
+    temperature: Number(els.temperatureInput.value || 0.8),
+  }
+}
+
+function buildRecentTurnsForRequest(playerInput) {
+  const turns = Array.isArray(state.messages) ? state.messages : []
+  const last = turns[turns.length - 1]
+  const inputText = String(playerInput || '').trim()
+  const withoutPendingUser = last?.role === 'user' && String(last.content || '').trim() === inputText
+    ? turns.slice(0, -1)
+    : turns
+  return withoutPendingUser.slice(-12)
+}
+
+function triggerDirectorPrewarm() {
+  const options = normalizeInitialPlayerOptions(state.playerOptions || [])
+    .map(option => String(option.inputText || option.label || '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  if (!options.length) return
+  if (state.debug?.postprocessPending) return
+  if (!hasRuntimeApiKey(providerForModel(state.model || config.model))) return
+  const requests = options.map(inputText => buildGenerateRequestPayload(inputText))
+  cancelClientPrewarm('new-prewarm')
+  const controller = new AbortController()
+  prewarmController = controller
+  updatePrewarmProgress('running', `正在预生成 ${requests.length} 个下一轮 Director / Narrator 缓存。`)
+  fetch('/api/director-prewarm', {
+    method: 'POST',
+    signal: prewarmController.signal,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ requests }),
+  })
+    .then(response => response.ok ? response.json() : response.json().catch(() => ({})).then(payload => Promise.reject(new Error(payload.error || 'Director 预生成失败'))))
+    .then(payload => {
+      const queued = Number(payload.queued || 0)
+      const cached = Number(payload.cached || 0)
+      const running = Number(payload.running || 0)
+      const completed = Number(payload.completed || 0)
+      const failed = Number(payload.failed || 0)
+      const narratorCompleted = Number(payload.narratorCompleted || 0)
+      const narratorCached = Number(payload.narratorCached || 0)
+      const narratorRunning = Number(payload.narratorRunning || 0)
+      const narratorSkipped = Number(payload.narratorSkipped || 0)
+      const narratorFailed = Number(payload.narratorFailed || 0)
+      if (prewarmController === controller) prewarmController = null
+      updatePrewarmProgress('done', `预生成完成：Director ${completed} 新写入 / ${cached} 命中 / ${running} 复用 / ${failed} 失败；Narrator ${narratorCompleted} 新写入 / ${narratorCached} 命中 / ${narratorRunning} 复用 / ${narratorSkipped} 跳过 / ${narratorFailed} 失败。`)
+    })
+    .catch(error => {
+      if (error.name === 'AbortError') return
+      if (prewarmController === controller) prewarmController = null
+      updatePrewarmProgress('error', `下一轮预生成失败：${error.message}`)
+      console.warn('Director prewarm failed', error)
+  })
+}
+
+function cancelClientPrewarm(reason) {
+  if (!prewarmController) return
+  prewarmController.abort()
+  prewarmController = null
+  if (reason === 'player-input') {
+    updatePrewarmProgress('cancelled', '玩家已输入，取消本地等待中的后台预热请求。')
+  }
+}
+
+function updatePrewarmProgress(status, message) {
+  state.debug = state.debug && typeof state.debug === 'object' ? state.debug : {}
+  const progress = Array.isArray(state.debug.progress) ? state.debug.progress : []
+  let row = progress.find(item => item.stage === 'director-prewarm')
+  if (!row) {
+    row = { stage: 'director-prewarm', label: 'Next Turn Prewarm', status: 'pending' }
+    progress.push(row)
+  }
+  row.status = status
+  row.message = message
+  row.updatedAt = new Date().toISOString()
+  if (status === 'running') row.startedAtMs = Date.now()
+  if (status === 'done' || status === 'error' || status === 'cancelled') row.endedAtMs = Date.now()
+  state.debug.progress = progress
+  saveState()
+  renderDebug()
+}
+
+function createTurnSnapshot(playerInput) {
+  return {
+    playerInput,
+    storyState: pickRegenerableStoryState(state),
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function normalizeTurnSnapshot(value) {
+  if (!value || typeof value !== 'object') return null
+  const playerInput = String(value.playerInput || '').trim()
+  const storyState = value.storyState && typeof value.storyState === 'object' ? value.storyState : null
+  if (!playerInput || !storyState) return null
+  return {
+    playerInput,
+    storyState: deepClone(storyState),
+    createdAt: String(value.createdAt || ''),
+  }
+}
+
+function getRegenerationSnapshot() {
+  return normalizeTurnSnapshot(state.lastTurnSnapshot) || inferRegenerationSnapshotFromMessages()
+}
+
+function inferRegenerationSnapshotFromMessages() {
+  const messages = Array.isArray(state.messages) ? state.messages : []
+  let userIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') {
+      userIndex = index
+      break
+    }
+  }
+  if (userIndex < 0) return null
+  const playerInput = String(messages[userIndex]?.content || '').trim()
+  if (!playerInput) return null
+  const storyState = pickRegenerableStoryState(state)
+  storyState.messages = messages.slice(0, userIndex)
+  storyState.playerOptions = []
+  storyState.runtimeStats = null
+  storyState.debug = {}
+  return {
+    playerInput,
+    storyState,
+    createdAt: '',
+  }
+}
+
+function restoreTurnSnapshot(snapshot) {
+  Object.assign(state, deepClone(snapshot.storyState))
+  state.lastTurnSnapshot = snapshot
+  state.model = normalizeModel(state.model || config.model)
+}
+
+function sanitizePostprocessRecoveryBase(payload) {
+  const { apiKey, ...safePayload } = payload
+  return deepClone(safePayload)
+}
+
+function pickRegenerableStoryState(story) {
+  const fields = [
+    'messages',
+    'characters',
+    'openingText',
+    'worldview',
+    'currentSituation',
+    'chapterSummary',
+    'outline',
+    'longRangeOutline',
+    'directorGuidance',
+    'plotLines',
+    'foreshadowRecords',
+    'qualityFeedback',
+    'programConfigFile',
+    'statusSubject',
+    'statusPanelSchema',
+    'statusPanel',
+    'sceneState',
+    'globalContext',
+    'playerOptions',
+    'runtimeStats',
+    'debug',
+  ]
+  const snapshot = {}
+  for (const field of fields) snapshot[field] = deepClone(story[field])
+  return snapshot
+}
+
+function deepClone(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 }
 
 async function readNdjsonStream(response, onEvent) {
@@ -1617,8 +2296,15 @@ async function readNdjsonStream(response, onEvent) {
 }
 
 function handlePipelineEvent(event) {
+  if (event.type === 'visible_text') {
+    applyVisibleTextEvent(event)
+    return
+  }
+
   const stage = event.stage
   if (!stage) return
+  const eventMs = Date.parse(event.at || '') || Date.now()
+  if (!state.debug.firstEventAtMs) state.debug.firstEventAtMs = eventMs
   const progress = Array.isArray(state.debug.progress) ? state.debug.progress : []
   let row = progress.find(item => item.stage === stage)
   if (!row) {
@@ -1629,66 +2315,95 @@ function handlePipelineEvent(event) {
   if (event.type === 'stage_tick') {
     row.logs = Array.isArray(row.logs) ? row.logs : []
     if (event.message) row.logs.push(event.message)
+    const outputTokens = parseOutputTokens(event.message)
+    if (outputTokens) row.outputTokens = outputTokens
   } else {
     row.message = event.message || row.message || ''
   }
   row.updatedAt = event.at || new Date().toISOString()
+  row.updatedAtMs = eventMs
 
-  if (event.type === 'stage_start') row.status = 'running'
+  if (event.type === 'stage_start') {
+    row.status = 'running'
+    row.startedAtMs = row.startedAtMs || eventMs
+  }
   if (event.type === 'stage_tick') row.status = 'running'
-  if (event.type === 'stage_skip') row.status = 'skipped'
+  if (event.type === 'stage_skip') {
+    row.status = 'skipped'
+    row.endedAtMs = eventMs
+  }
   if (event.type === 'stage_result') {
     row.status = 'done'
+    row.endedAtMs = eventMs
     state.debug[stage] = event.json
   }
 
   state.debug.progress = progress
+  updateRuntimeStatsFromPipeline()
   renderDebug()
+}
+
+function applyVisibleTextEvent(event) {
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
+  const finalText = String(payload.finalText || event.finalText || '').trim()
+  if (!finalText) return
+
+  if (state.debug.visibleTextShown) {
+    const last = state.messages[state.messages.length - 1]
+    if (last?.role === 'assistant') last.content = finalText
+  } else {
+    state.messages.push({ role: 'assistant', content: finalText })
+  }
+
+  state.debug.visibleTextShown = true
+  state.debug.postprocessPending = true
+  state.debug.pendingPostprocess = {
+    ...(state.debug.postprocessRecoveryBase || {}),
+    finalText,
+    director: state.debug.director || {},
+    createdAt: new Date().toISOString(),
+  }
+  state.debug.status = '状态更新中'
+  state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
+  state.debug.note = '正文已显示；Postprocess 正在后台更新状态，完成前不能发送下一轮。'
+
+  updateRuntimeStatsFromPipeline()
+  renderConversation()
+  renderOptions()
+  renderDebug()
+  renderRetryStageButton()
+  renderRegenerateButton()
+  els.sendButton.textContent = '状态更新中'
+  els.regenerateButton.textContent = '状态更新中'
 }
 
 function applyPostprocess(payload) {
   const contextLines = []
-  const patch = payload.globalContextPatch || payload.turnSummary
-  if (patch) contextLines.push(patch)
-  if (Array.isArray(payload.foreshadowRecords)) {
-    for (const item of payload.foreshadowRecords) {
-      if (!item || !item.text) continue
-      const type = item.type ? `:${item.type}` : ''
-      contextLines.push(`[伏笔${type}] ${item.text}`)
-    }
-  }
-  if (payload.outlinePatch) contextLines.push(`[当前剧情] ${payload.outlinePatch}`)
-  if (payload.logicGuidance) contextLines.push(`[逻辑] ${payload.logicGuidance}`)
+  if (payload.turnSummary) contextLines.push(payload.turnSummary)
   if (contextLines.length) {
     state.globalContext = `${state.globalContext || ''}\n${contextLines.map(line => `- ${line}`).join('\n')}`.trim()
   }
   if (payload.turnSummary) {
     state.chapterSummary = appendBulletText(state.chapterSummary, payload.turnSummary)
     state.currentSituation = String(payload.turnSummary).trim()
-  }
-  if (payload.outlinePatch) {
-    state.outline = appendBulletText(state.outline, payload.outlinePatch, 10)
+    state.outline = String(payload.turnSummary).trim()
   }
   if (typeof payload.longRangeOutline === 'string' && payload.longRangeOutline.trim()) {
     state.longRangeOutline = payload.longRangeOutline.trim()
   }
-  if (payload.logicGuidance) {
-    state.logicGuidance = String(payload.logicGuidance).trim()
-  }
+  state.qualityFeedback = String(payload.qualityFeedback || '').trim()
   if (Array.isArray(payload.foreshadowRecords)) {
-    state.foreshadowRecords = mergeForeshadowRecords(state.foreshadowRecords, payload.foreshadowRecords)
-  }
-  if (Array.isArray(payload.characterUpdates)) {
-    for (const update of payload.characterUpdates) {
-      const target = state.characters.find(character => character.name === update.name)
-      if (!target || !update.patch) continue
-      target.notes = `${target.notes || ''}\n${update.patch}`.trim()
-    }
+    state.foreshadowRecords = mergeForeshadowRecords(
+      state.foreshadowRecords,
+      payload.foreshadowRecords,
+      completedAssistantTurnCount(),
+    )
   }
   const statusPanel = formatStatusPanelPayload(payload.statusPanel)
   if (statusPanel) {
     state.statusPanel = ensureSpatialStatusPanel(statusPanel, state.statusSubject || '人物', state.characters)
   }
+  state.sceneState = String(payload.sceneState || state.sceneState || '').trim()
 }
 
 function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {
@@ -1703,19 +2418,140 @@ function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {
   return kept.map(line => `- ${line}`).join('\n')
 }
 
-function mergeForeshadowRecords(existing, incoming) {
+function normalizeForeshadowStatus(item) {
+  const type = normalizeForeshadowType(item.type)
+  const status = String(item.status || '').trim().toLowerCase()
+  if (type === 'payoff' || status === 'paid') return 'paid'
+  if (type === 'drop' || status === 'dropped') return 'dropped'
+  return 'active'
+}
+
+function mergeForeshadowRecords(existing, incoming, turnIndex = completedAssistantTurnCount()) {
+  const currentTurn = Number(turnIndex || 0)
   const records = normalizeForeshadowRecords(existing)
+    .filter(item => item.status === 'active')
+    .map(item => ({
+      ...item,
+      key: item.key || makeForeshadowKey(item.text),
+      createdTurn: item.createdTurn || currentTurn,
+      updatedTurn: item.updatedTurn || item.createdTurn || currentTurn,
+      delayCount: item.delayCount || 0,
+    }))
+
   for (const item of normalizeForeshadowRecords(incoming)) {
-    const oldIndex = records.findIndex(record => record.text === item.text)
-    if (oldIndex >= 0) records.splice(oldIndex, 1)
-    records.push(item)
+    const type = normalizeForeshadowType(item.type)
+    const oldIndex = findForeshadowRecordIndex(records, item)
+
+    if (type === 'payoff' || type === 'drop') {
+      if (oldIndex >= 0) records.splice(oldIndex, 1)
+      continue
+    }
+
+    if (type === 'delay') {
+      if (oldIndex >= 0) {
+        records[oldIndex] = {
+          ...records[oldIndex],
+          type: 'delay',
+          updatedTurn: currentTurn,
+          delayCount: Number(records[oldIndex].delayCount || 0) + 1,
+        }
+      }
+      continue
+    }
+
+    if (oldIndex >= 0) {
+      records[oldIndex] = {
+        ...records[oldIndex],
+        type: 'delay',
+        updatedTurn: currentTurn,
+        delayCount: Number(records[oldIndex].delayCount || 0) + 1,
+      }
+      continue
+    }
+
+    if (records.length >= 3) continue
+    records.push({
+      ...item,
+      type: 'plant',
+      status: 'active',
+      key: makeForeshadowKey(item.text),
+      createdTurn: currentTurn,
+      updatedTurn: currentTurn,
+      delayCount: 0,
+    })
   }
-  return records.slice(-12)
+
+  return records
+    .filter(item => {
+      const age = currentTurn && item.createdTurn ? currentTurn - item.createdTurn : 0
+      return age <= 8 && Number(item.delayCount || 0) <= 3
+    })
+    .slice(0, 3)
+}
+
+function normalizeForeshadowType(type) {
+  const value = String(type || '').trim().toLowerCase()
+  if (value === 'payoff' || value === '回收') return 'payoff'
+  if (value === 'drop' || value === 'delete' || value === 'remove' || value === '废弃' || value === '删除') return 'drop'
+  if (value === 'delay' || value === '延迟') return 'delay'
+  return 'plant'
+}
+
+function findForeshadowRecordIndex(records, item) {
+  const key = item.key || makeForeshadowKey(item.text)
+  const exactIndex = records.findIndex(record => record.key && record.key === key)
+  if (exactIndex >= 0) return exactIndex
+  return records.findIndex(record => isSimilarForeshadow(record.text, item.text))
+}
+
+function makeForeshadowKey(text) {
+  return String(text || '')
+    .replace(/^(plant|delay|payoff|drop|埋下|延迟|回收|废弃|删除)\s*[:：]/i, '')
+    .replace(/[（(].*?[)）]/g, '')
+    .replace(/[，。、“”‘’；：:,.!?！？\s\-_—|｜[\]【】]/g, '')
+    .slice(0, 48)
+}
+
+function isSimilarForeshadow(left, right) {
+  const a = makeForeshadowKey(left)
+  const b = makeForeshadowKey(right)
+  if (!a || !b) return false
+  if (a === b) return true
+  if ((a.length >= 8 && b.includes(a)) || (b.length >= 8 && a.includes(b))) return true
+  return characterJaccard(a, b) >= 0.72
+}
+
+function characterJaccard(left, right) {
+  const a = new Set(Array.from(left))
+  const b = new Set(Array.from(right))
+  if (!a.size || !b.size) return 0
+  let intersection = 0
+  for (const char of a) {
+    if (b.has(char)) intersection += 1
+  }
+  return intersection / (a.size + b.size - intersection)
+}
+
+function removeTrailingErrorMessages() {
+  while (state.messages[state.messages.length - 1]?.role === 'error') {
+    state.messages.pop()
+  }
 }
 
 function setBusy(isBusy) {
-  els.sendButton.disabled = isBusy
-  els.sendButton.textContent = isBusy ? (state.enableEditor ? '精修中' : '生成中') : '发送'
+  generationBusy = isBusy
+  const postprocessPending = Boolean(getPendingPostprocess())
+  els.sendButton.disabled = isBusy || postprocessPending
+  els.retryStageButton.disabled = isBusy || (!getPendingPostprocess() && !(state.debug?.status === 'error' && getRegenerationSnapshot()))
+  els.regenerateButton.disabled = isBusy || postprocessPending || !getRegenerationSnapshot()
+  els.sendButton.textContent = isBusy
+    ? (postprocessPending ? '状态更新中' : '生成中')
+    : postprocessPending ? '等待状态更新' : '发送'
+  els.retryStageButton.textContent = isBusy && postprocessPending ? '重试中' : '重试未完成阶段'
+  els.regenerateButton.textContent = isBusy
+    ? (postprocessPending ? '状态更新中' : '生成中')
+    : '重新生成本次对话'
+  renderTurnStatus()
 }
 
 async function importStoryFile(file) {
@@ -2095,6 +2931,22 @@ function slug(value) {
 function persistAndRender() {
   saveState()
   render()
+}
+
+function persistPostprocessResult() {
+  saveState()
+  renderPostprocessSideEffects()
+}
+
+function renderPostprocessSideEffects() {
+  renderStatusPanel()
+  renderStoryTracking()
+  renderOptions()
+  renderRetryStageButton()
+  renderRegenerateButton()
+  renderStats()
+  renderDebug()
+  renderTurnStatus()
 }
 
 function escapeHtml(value) {

@@ -4,5 +4,6 @@ dist/
 .env.local
 debug/
 save/current-state.json
+save/*-cache.json
 story/*
 !story/README.md

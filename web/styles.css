@@ -98,6 +98,11 @@ button:disabled {
   font-size: 12px;
 }
 
+.topbar .turn-status {
+  color: var(--blue);
+  font-weight: 700;
+}
+
 .control-stack {
   display: grid;
   gap: 8px;
@@ -151,34 +156,10 @@ button:disabled {
   width: 150px;
 }
 
-.model-strip .mode-toggle {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  background: rgba(255, 252, 244, 0.72);
-  color: var(--ink);
-}
-
-.mode-toggle input {
-  width: auto;
-  min-height: auto;
-  margin: 0;
-  accent-color: var(--black);
-}
-
-.mode-toggle span {
-  color: var(--ink);
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
 .workspace-grid {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(260px, 0.85fr) minmax(420px, 1.65fr) minmax(280px, 0.95fr);
+  grid-template-columns: minmax(300px, 0.95fr) minmax(420px, 1.65fr) minmax(280px, 0.95fr);
   gap: 14px;
   padding: 14px;
 }
@@ -192,7 +173,7 @@ button:disabled {
 }
 
 .right-rail {
-  grid-template-rows: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 0.7fr);
+  grid-template-rows: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(180px, 0.55fr);
 }
 
 .panel,
@@ -348,20 +329,26 @@ button:disabled {
 .composer textarea {
   width: 100%;
   resize: vertical;
-  min-height: 100px;
+  min-height: 52px;
+  max-height: 118px;
   border: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
   color: var(--ink);
-  padding: 14px;
-  line-height: 1.7;
+  padding: 9px 12px;
+  line-height: 1.45;
   outline: none;
 }
 
 .composer-actions {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
-  padding: 10px;
+  padding: 7px 10px;
+}
+
+#regenerateButton {
+  margin-right: auto;
 }
 
 .module-list,
@@ -409,19 +396,91 @@ button:disabled {
   font-size: 11px;
 }
 
+.status-body {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+}
+
+.status-section {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(48, 73, 92, 0.12);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.status-section h4,
+.status-line-heading {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.status-section.depth-1 {
+  background: rgba(242, 248, 247, 0.68);
+}
+
+.status-section.depth-2,
+.status-section.depth-3 {
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.status-field {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 6px 7px;
+  border: 1px solid rgba(48, 73, 92, 0.1);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.status-field span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.status-field strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.status-text {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.status-list {
+  display: grid;
+  gap: 5px;
+}
+
+.status-list-item {
+  min-width: 0;
+}
+
 .status-schema {
   margin-top: 8px;
 }
 
 .status-schema summary,
-.character-editor summary {
+.character-detail summary {
   cursor: pointer;
   color: var(--blue);
   font-size: 12px;
 }
 
 .status-panel-view pre,
-.character-editor pre {
+.character-detail pre {
   margin: 0;
   padding: 9px;
   background: rgba(17, 16, 14, 0.045);
@@ -437,11 +496,11 @@ button:disabled {
   border: 1px solid var(--line);
 }
 
-.character-editor {
+.character-detail {
   padding: 8px 10px 10px;
 }
 
-.character-editor > summary {
+.character-detail > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -449,29 +508,29 @@ button:disabled {
   list-style: none;
 }
 
-.character-editor > summary::-webkit-details-marker {
+.character-detail > summary::-webkit-details-marker {
   display: none;
 }
 
-.character-editor > summary::before {
+.character-detail > summary::before {
   content: "▸";
   color: var(--muted);
 }
 
-.character-editor[open] > summary::before {
+.character-detail[open] > summary::before {
   content: "▾";
 }
 
-.character-editor > summary span {
+.character-detail > summary span {
   flex: 1;
 }
 
-.character-editor > summary small {
+.character-detail > summary small {
   color: var(--muted);
   font-size: 11px;
 }
 
-.character-editor-body {
+.character-detail-body {
   margin-top: 6px;
 }
 
@@ -640,9 +699,9 @@ button:disabled {
 
 .character-item input,
 .character-item textarea,
-.editor-dialog input,
-.editor-dialog select,
-.editor-dialog textarea {
+.app-dialog input,
+.app-dialog select,
+.app-dialog textarea {
   width: 100%;
   border: 1px solid var(--line);
   background: rgba(255, 252, 244, 0.8);
@@ -652,7 +711,7 @@ button:disabled {
 }
 
 .character-item textarea,
-.editor-dialog textarea {
+.app-dialog textarea {
   resize: vertical;
   line-height: 1.55;
 }
@@ -669,8 +728,9 @@ button:disabled {
 }
 
 .stats-view {
+  min-height: 0;
+  overflow: auto;
   padding: 10px;
-  border-bottom: 1px solid var(--line);
 }
 
 .stat-grid {
@@ -725,15 +785,14 @@ button:disabled {
 }
 
 .debug-panel.collapsed {
-  grid-template-rows: auto 0 0;
+  grid-template-rows: auto 0;
 }
 
-.debug-panel.collapsed .debug-output,
-.debug-panel.collapsed .stats-view {
+.debug-panel.collapsed .debug-output {
   display: none;
 }
 
-.editor-dialog {
+.app-dialog {
   width: min(620px, calc(100vw - 28px));
   border: 1px solid var(--black);
   background: var(--paper);
@@ -746,17 +805,33 @@ button:disabled {
   width: min(860px, calc(100vw - 28px));
 }
 
-.editor-dialog::backdrop {
+.module-config-dialog {
+  width: min(920px, calc(100vw - 28px));
+}
+
+.app-dialog::backdrop {
   background: rgba(17, 16, 14, 0.32);
 }
 
-.editor-dialog form {
+.app-dialog form {
   display: grid;
   gap: 12px;
   padding: 18px;
 }
 
-.editor-dialog h3 {
+.module-config-dialog form {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  max-height: min(86vh, 900px);
+}
+
+.module-config-dialog .module-list {
+  min-height: 320px;
+  max-height: 66vh;
+  border: 1px solid var(--line);
+  background: rgba(255, 252, 244, 0.58);
+}
+
+.app-dialog h3 {
   margin: 0 0 4px;
   font-size: 22px;
 }
@@ -768,12 +843,12 @@ button:disabled {
   line-height: 1.45;
 }
 
-.editor-dialog label {
+.app-dialog label {
   display: grid;
   gap: 5px;
 }
 
-.editor-dialog label span {
+.app-dialog label span {
   font-family: var(--mono);
   color: var(--muted);
   font-size: 11px;

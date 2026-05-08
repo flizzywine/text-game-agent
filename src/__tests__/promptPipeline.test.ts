@@ -48,7 +48,7 @@ describe('extractRoleplaySkillsFromPreset', () => {
     expect(skills.some(skill => skill.id.startsWith('director.'))).toBe(false)
   })
 
-  it('does not export fixed editor or postprocess abilities as user config', () => {
+  it('does not export fixed postprocess abilities as user config', () => {
     const skills = extractRoleplaySkillsFromPreset({
       prompts: [
         {
@@ -79,7 +79,7 @@ describe('makeUserConfigFileName', () => {
 })
 
 describe('buildRoleplayPipeline', () => {
-  it('builds fixed director, narrator, and editor layers from selected skills', () => {
+  it('builds fixed director and narrator layers from selected skills', () => {
     const skills = extractRoleplaySkillsFromPreset(fixturePreset)
     const pipeline = buildRoleplayPipeline(skills, {
       worldState: '雨夜房间。NPC 隐瞒信件来源。',
@@ -89,13 +89,12 @@ describe('buildRoleplayPipeline', () => {
       recentTurns: '上一轮林晚回避玩家视线。',
       loadedMaterialModules: 'character.lin-wan：林晚谨慎。',
       moduleRegistry: 'character.lin-wan：林晚人设。',
-      directorPlan: '{"sceneBeats":[]}',
+      directorPlan: '{"beats":[]}',
       directorPrompt: '固定导演 prompt：规划剧情模块、描写发展链和玩家窗口。',
       narratorPrompt: '固定叙事 prompt：按导演计划写正文草稿。',
-      editorPrompt: '固定审核 prompt：修订草稿但不新增重大剧情。',
     })
 
-    expect(pipeline.map(layer => layer.layer)).toEqual(['director', 'narrator', 'editor'])
+    expect(pipeline.map(layer => layer.layer)).toEqual(['director', 'narrator'])
     expect(pipeline[0].selectedModuleIds).toEqual([])
     expect(pipeline[0].user).toContain('【固定 Director prompt】')
     expect(pipeline[0].user).toContain('固定导演 prompt')
@@ -105,17 +104,13 @@ describe('buildRoleplayPipeline', () => {
     expect(pipeline[0].user).not.toContain('可用导演 skills')
     expect(pipeline[1].user).toContain('【固定 Narrator prompt】')
     expect(pipeline[1].user).toContain('固定叙事 prompt')
-    expect(pipeline[1].user).toContain('{"sceneBeats":[]}')
+    expect(pipeline[1].user).toContain('{"beats":[]}')
     expect(pipeline[1].selectedModuleIds).toContain('🔒🖊️基础文风')
-    expect(pipeline[2].user).toContain('【固定 Editor prompt】')
-    expect(pipeline[2].user).toContain('固定审核 prompt')
-    expect(pipeline[2].user).toContain('【长期剧情总结】')
-    expect(pipeline[2].user).toContain('【最近正文】')
-    expect(pipeline[2].user).toContain('正文草稿')
-    expect(pipeline[0].expectedOutput).toContain('SceneBeat')
+    expect(pipeline[0].expectedOutput).toContain('"beats": "string[]"')
+    expect(pipeline[0].expectedOutput).toContain('"sceneLimits": "string[]"')
   })
 
-  it('injects enabled user modules directly into every fixed layer', () => {
+  it('keeps user modules out of director while injecting writing modules into narrator', () => {
     const skills = [
       {
         id: '🔒🖊️基础文风',
@@ -147,19 +142,14 @@ describe('buildRoleplayPipeline', () => {
       userInjectionModuleIds: ['🔒🖊️基础文风', '抗缺陷'],
     })
 
-    expect(pipeline[0].userInjectionModuleIds).toEqual(['🔒🖊️基础文风', '抗缺陷'])
-    expect(pipeline[0].user).toContain('【用户注入模块】')
-    expect(pipeline[0].user).toContain('正文采用清爽小说文风')
-    expect(pipeline[0].user).toContain('检查最终正文')
+    expect(pipeline[0].userInjectionModuleIds).toEqual([])
+    expect(pipeline[0].user).not.toContain('【用户注入模块】')
+    expect(pipeline[0].user).not.toContain('正文采用清爽小说文风')
+    expect(pipeline[0].user).not.toContain('检查最终正文')
     expect(pipeline[1].selectedModuleIds).toEqual([])
     expect(pipeline[1].userInjectionModuleIds).toEqual(['🔒🖊️基础文风', '抗缺陷'])
     expect(pipeline[1].user).toContain('【用户注入模块】')
     expect(pipeline[1].user).toContain('正文采用清爽小说文风')
     expect(pipeline[1].user.match(/## 🔒🖊️基础文风/g)).toHaveLength(1)
-    expect(pipeline[2].selectedModuleIds).toEqual([])
-    expect(pipeline[2].userInjectionModuleIds).toEqual(['🔒🖊️基础文风', '抗缺陷'])
-    expect(pipeline[2].user).toContain('【用户注入模块】')
-    expect(pipeline[2].user).toContain('检查最终正文')
-    expect(pipeline[2].user.match(/## 抗缺陷/g)).toHaveLength(1)
   })
 })

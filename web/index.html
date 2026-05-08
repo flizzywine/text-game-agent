@@ -11,7 +11,8 @@
       <header class="topbar">
         <div>
           <h1>Text Game Agent</h1>
-          <p id="connectionStatus">DeepSeek v4 pro</p>
+          <p id="connectionStatus">Fireworks V4 Pro Priority</p>
+          <p id="turnStatus" class="turn-status">当前第 0 轮</p>
         </div>
         <div class="control-stack">
           <div class="story-strip">
@@ -34,8 +35,8 @@
             <label>
               <span>Model</span>
               <select id="modelSelect">
-                <option value="deepseek-v4-pro">V4 Pro</option>
-                <option value="deepseek-v4-flash">V4 Flash</option>
+                <option value="accounts/fireworks/models/deepseek-v4-pro:priority">V4 Pro Fireworks Priority</option>
+                <option value="deepseek-v4-pro">V4 Pro Official</option>
               </select>
             </label>
             <label>
@@ -43,10 +44,8 @@
               <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0.8" />
             </label>
             <button id="apiKeyButton" class="ghost-button" type="button">API Key</button>
-            <label class="mode-toggle">
-              <input id="refineToggle" type="checkbox" />
-              <span>全文精修</span>
-            </label>
+            <button id="directorControlButton" class="ghost-button" type="button">导演控制台</button>
+            <button id="moduleConfigButton" class="ghost-button" type="button">注入配置</button>
             <button id="resetButton" class="ghost-button" type="button">清空当前故事</button>
           </div>
         </div>
@@ -54,21 +53,23 @@
 
       <main class="workspace-grid">
         <aside class="left-rail">
-          <section class="panel">
+          <section class="panel debug-panel">
             <div class="panel-head">
-              <h2>用户注入模块</h2>
+              <h2>全局流水线</h2>
+              <button id="toggleDebugButton" class="icon-button" type="button" title="显示流水线">⌁</button>
             </div>
-            <div id="moduleList" class="module-list"></div>
+            <pre id="debugOutput" class="debug-output"></pre>
           </section>
-
         </aside>
 
         <section class="main-stage">
           <div id="conversation" class="conversation"></div>
           <div id="optionTray" class="option-tray"></div>
           <form id="playForm" class="composer">
-            <textarea id="playerInput" rows="4" placeholder="输入你的行动、对话或想法"></textarea>
+            <textarea id="playerInput" rows="2" placeholder="输入你的行动、对话或想法"></textarea>
             <div class="composer-actions">
+              <button id="retryStageButton" class="ghost-button" type="button">重试未完成阶段</button>
+              <button id="regenerateButton" class="ghost-button" type="button">重新生成本次对话</button>
               <button id="sendButton" type="submit">发送</button>
             </div>
           </form>
@@ -93,19 +94,17 @@
             <div id="storyTrackingView" class="story-tracking-view"></div>
           </section>
 
-          <section class="panel debug-panel">
+          <section class="panel stats-panel">
             <div class="panel-head">
-              <h2>全局流水线</h2>
-              <button id="toggleDebugButton" class="icon-button" type="button" title="显示流水线">⌁</button>
+              <h2>AI 速度评估</h2>
             </div>
             <div id="statsView" class="stats-view"></div>
-            <pre id="debugOutput" class="debug-output"></pre>
           </section>
         </aside>
       </main>
     </div>
 
-    <dialog id="newGameDialog" class="editor-dialog wide-dialog">
+    <dialog id="newGameDialog" class="app-dialog wide-dialog">
       <form method="dialog" id="newGameForm">
         <h3>开始新游戏</h3>
         <p class="dialog-note">只能选择已初始化故事。导入和初始化请先进入“故事库”。</p>
@@ -122,7 +121,7 @@
       </form>
     </dialog>
 
-    <dialog id="storyLibraryDialog" class="editor-dialog wide-dialog">
+    <dialog id="storyLibraryDialog" class="app-dialog wide-dialog">
       <form method="dialog" id="storyLibraryForm">
         <h3>故事库</h3>
         <p class="dialog-note">先导入故事书 / 人物卡 / 世界书，再点击“初始化”。初始化完成后才能开始新游戏。</p>
@@ -141,18 +140,48 @@
       </form>
     </dialog>
 
-    <dialog id="apiKeyDialog" class="editor-dialog">
+    <dialog id="apiKeyDialog" class="app-dialog">
       <form method="dialog" id="apiKeyForm">
-        <h3>DeepSeek API Key</h3>
-        <p class="dialog-note">仅使用 deepseek-v4-pro。Key 保存在当前浏览器本地。</p>
+        <h3 id="apiKeyTitle">DeepSeek API Key</h3>
+        <p id="apiKeyHelp" class="dialog-note">Key 保存在当前浏览器本地。</p>
         <label>
-          <span>API Key</span>
+          <span id="apiKeyLabel">API Key</span>
           <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-..." />
         </label>
         <div class="dialog-actions">
           <button value="clear" type="button" id="clearApiKeyButton" class="ghost-button">清除</button>
           <button value="cancel" type="button" id="cancelApiKeyButton" class="ghost-button">取消</button>
           <button value="default" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="moduleConfigDialog" class="app-dialog module-config-dialog">
+      <form method="dialog" id="moduleConfigForm">
+        <h3>用户配置模块</h3>
+        <p class="dialog-note">导演风格注入 Director，叙事风格注入 Narrator；Postprocess 使用固定通用规则。展开模块可查看注入内容。</p>
+        <div id="moduleList" class="module-list"></div>
+        <div class="dialog-actions">
+          <button value="cancel" type="button" id="closeModuleConfigButton" class="ghost-button">关闭</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="directorControlDialog" class="app-dialog wide-dialog">
+      <form method="dialog" id="directorControlForm">
+        <h3>导演控制台</h3>
+        <p class="dialog-note">上帝模式。这里直接影响 Director，用来修正长期剧情方向，或写入不希望剧情滑向的内容。</p>
+        <label>
+          <span>当前长期剧情</span>
+          <textarea id="directorLongRangeInput" rows="8" placeholder="修改当前长期剧情目标、压力、方向。"></textarea>
+        </label>
+        <label>
+          <span>给导演的要求</span>
+          <textarea id="directorGuidanceInput" rows="7" placeholder="例如：不要让剧情滑向强制误会；增加日常经营线；NPC 不要过度顺从玩家。"></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button value="cancel" type="button" id="cancelDirectorControlButton" class="ghost-button">取消</button>
+          <button value="default" type="submit" id="saveDirectorControlButton">保存</button>
         </div>
       </form>
     </dialog>

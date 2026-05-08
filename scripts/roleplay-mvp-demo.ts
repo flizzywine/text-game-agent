@@ -7,7 +7,6 @@ const DEFAULT_OUT = path.resolve(process.cwd(), 'data/roleplay-mvp/roleplay-pipe
 const DEFAULT_CONFIG = path.resolve(process.cwd(), 'data/roleplay-mvp/player-config.json')
 const DEFAULT_DIRECTOR_PROMPT = path.resolve(process.cwd(), 'prompts/director/prompt.md')
 const DEFAULT_NARRATOR_PROMPT = path.resolve(process.cwd(), 'prompts/narrator/prompt.md')
-const DEFAULT_EDITOR_PROMPT = path.resolve(process.cwd(), 'prompts/editor/prompt.md')
 const DEFAULT_HARD_RULES = path.resolve(process.cwd(), 'prompts/system-hard-rules/hard-rules.md')
 
 const skillDir = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_SKILL_DIR
@@ -15,7 +14,6 @@ const outPath = process.argv[3] ? path.resolve(process.argv[3]) : DEFAULT_OUT
 const configPath = process.argv[4] ? path.resolve(process.argv[4]) : DEFAULT_CONFIG
 const directorPromptPath = process.argv[5] ? path.resolve(process.argv[5]) : DEFAULT_DIRECTOR_PROMPT
 const narratorPromptPath = process.argv[6] ? path.resolve(process.argv[6]) : DEFAULT_NARRATOR_PROMPT
-const editorPromptPath = process.argv[7] ? path.resolve(process.argv[7]) : DEFAULT_EDITOR_PROMPT
 
 interface PlayerConfig {
   userInjectionModuleIds: string[]
@@ -81,7 +79,6 @@ const skills = loadSkills(skillDir)
 const playerConfig = loadPlayerConfig(configPath)
 const directorPrompt = readPromptPath(directorPromptPath)
 const narratorPrompt = readPromptPath(narratorPromptPath)
-const editorPrompt = readPromptPath(editorPromptPath)
 const hardRules = readPromptPath(DEFAULT_HARD_RULES)
 const pipeline = buildRoleplayPipeline(skills, {
   hardRules,
@@ -110,17 +107,15 @@ const pipeline = buildRoleplayPipeline(skills, {
   userInjectionModuleIds: playerConfig.userInjectionModuleIds,
   directorPrompt,
   narratorPrompt,
-  editorPrompt,
 })
 
 const demo = {
   name: 'roleplay-mvp-demo',
   generatedAt: new Date().toISOString(),
-  note: 'MVP 不调用外部模型，只展示 Director / Narrator / Editor prompt envelope；运行时 Editor 为精修模式可选。',
+  note: 'MVP 不调用外部模型，只展示 Director / Narrator prompt envelope；运行时正文直接进入 Postprocess。',
   configPath,
   directorPromptPath,
   narratorPromptPath,
-  editorPromptPath,
   userInjectionModuleIds: playerConfig.userInjectionModuleIds,
   pipeline,
 }

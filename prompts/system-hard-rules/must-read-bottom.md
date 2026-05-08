@@ -2,7 +2,7 @@
 
 用途：包裹每次完整 prompt 的下边界，相当于酒馆预设的“必读下”。
 
-什么时候用：Director、Narrator、Editor、Postprocess 每次调用时，放在完整 prompt 最后面。
+什么时候用：Director、Narrator、Postprocess 每次调用时，放在完整 prompt 最后面。
 
 怎么用：程序读取本文件，将其作为外层 wrapper 的结尾；用于要求模型输出前再次检查完整 prompt。
 
