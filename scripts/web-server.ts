@@ -51,14 +51,14 @@ interface ConversationItem {
   content: string
 }
 
-interface SceneStateFields {
+interface PhysicalSceneStateFields {
   currentScene: string
   nextScene: string
   transitionRule: string
   currentSceneForbidden: string
 }
 
-type SceneStateInput = string | Partial<SceneStateFields> | null | undefined
+type PhysicalSceneStateInput = string | Partial<PhysicalSceneStateFields> | null | undefined
 
 interface GenerateRequest {
   playerInput: string
@@ -74,7 +74,8 @@ interface GenerateRequest {
   foreshadowRecords?: Array<Record<string, unknown>>
   statusPanelSchema?: string
   statusPanel?: string
-  sceneState?: SceneStateInput
+  physicalSceneState?: PhysicalSceneStateInput
+  sceneState?: PhysicalSceneStateInput
   bypassGenerationCache?: boolean
   model?: string
   apiKey?: string
@@ -96,7 +97,8 @@ interface PostprocessRequest {
   foreshadowRecords?: Array<Record<string, unknown>>
   statusPanelSchema?: string
   statusPanel?: string
-  sceneState?: SceneStateInput
+  physicalSceneState?: PhysicalSceneStateInput
+  sceneState?: PhysicalSceneStateInput
   longRangeOutline?: string
   directorGuidance?: string
   globalContext?: string
@@ -142,7 +144,8 @@ interface StoryProgramConfig {
   statusSubject?: string
   statusPanelSchema: string
   statusPanel: string
-  sceneState?: SceneStateInput
+  physicalSceneState?: PhysicalSceneStateInput
+  sceneState?: PhysicalSceneStateInput
   initialPlayerOptions: PlayerOption[]
   normalizedEntries: StorybookEntry[]
   globalContextSeed: string
@@ -782,7 +785,7 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
     '当前可互动入口：输入第一句行动、对话或想法',
     '固定设定：遵守人物介绍和世界观',
   ].join('\n'), statusSubject, cast)
-  const sceneState = normalizeSceneState({
+  const physicalSceneState = normalizePhysicalSceneState({
     currentScene: openingText ? `开场环境：${openingText.slice(0, 80)}` : '开场环境：等待玩家进入第一轮互动。',
     nextScene: '第一轮玩家输入后的当前互动场景。',
     transitionRule: '玩家输入明确行动、对话或观察目标后进入下一步；若玩家保持观望，场景只做轻微自然推进。',
@@ -816,7 +819,7 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
     statusSubject,
     statusPanelSchema,
     statusPanel,
-    sceneState,
+    physicalSceneState,
     initialPlayerOptions: [
       { id: 'A', label: '观察', description: '先观察当前局面。', inputText: '我先观察周围和对方的反应。' },
       { id: 'B', label: '开口', description: '用一句话打开互动。', inputText: '我开口问道：“现在是什么情况？”' },
@@ -827,7 +830,7 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
       `当前故事资料：${input.sourceName || '未命名故事'}`,
       worldview ? `世界观：${worldview.slice(0, 300)}` : '',
       statusSubject ? `状态追踪人物：${statusSubject}` : '',
-      sceneState.currentScene ? `环境状态：${renderSceneState(sceneState)}` : '',
+      physicalSceneState.currentScene ? `物理场景状态：${renderPhysicalSceneState(physicalSceneState)}` : '',
       openingText ? `开场白：${openingText.slice(0, 300)}` : '',
     ].filter(Boolean).join('\n'),
   }
@@ -863,7 +866,7 @@ function formatStatusPanelPayload(value: unknown): string {
   return formatStatusPanelObject(value).trim()
 }
 
-function emptySceneState(): SceneStateFields {
+function emptyPhysicalSceneState(): PhysicalSceneStateFields {
   return {
     currentScene: '',
     nextScene: '',
@@ -872,8 +875,8 @@ function emptySceneState(): SceneStateFields {
   }
 }
 
-function normalizeSceneState(value: unknown, fallback?: unknown): SceneStateFields {
-  const base = fallback ? normalizeSceneState(fallback) : emptySceneState()
+function normalizePhysicalSceneState(value: unknown, fallback?: unknown): PhysicalSceneStateFields {
+  const base = fallback ? normalizePhysicalSceneState(fallback) : emptyPhysicalSceneState()
   if (typeof value === 'string') {
     const currentScene = value.trim()
     return currentScene ? { ...base, currentScene } : base
@@ -888,8 +891,8 @@ function normalizeSceneState(value: unknown, fallback?: unknown): SceneStateFiel
   }
 }
 
-function renderSceneState(value: unknown, fallback = '（无）'): string {
-  const scene = normalizeSceneState(value)
+function renderPhysicalSceneState(value: unknown, fallback = '（无）'): string {
+  const scene = normalizePhysicalSceneState(value)
   const lines = [
     scene.currentScene ? `currentScene：${scene.currentScene}` : '',
     scene.nextScene ? `nextScene：${scene.nextScene}` : '',
@@ -897,6 +900,10 @@ function renderSceneState(value: unknown, fallback = '（无）'): string {
     scene.currentSceneForbidden ? `currentSceneForbidden：${scene.currentSceneForbidden}` : '',
   ].filter(Boolean)
   return lines.length ? lines.join('\n') : fallback
+}
+
+function pickPhysicalSceneStateInput(value: { physicalSceneState?: PhysicalSceneStateInput; sceneState?: PhysicalSceneStateInput }): PhysicalSceneStateInput {
+  return value.physicalSceneState ?? value.sceneState
 }
 
 function formatStatusPanelObject(value: unknown, depth = 2): string {
@@ -979,8 +986,8 @@ function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
     '## 初始人物状态',
     config.statusPanel || '（无）',
     '',
-    '## 初始环境状态',
-    renderSceneState(config.sceneState),
+    '## 初始物理场景状态',
+    renderPhysicalSceneState(config.physicalSceneState),
     '',
     '## 初始玩家选项',
     config.initialPlayerOptions.length
@@ -1023,7 +1030,7 @@ function normalizeProgramConfig(raw: Record<string, unknown>, fallback: StoryPro
     statusSubject: String(raw.statusSubject || fallback.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw.statusPanelSchema || fallback.statusPanelSchema || ''), String(raw.statusSubject || fallback.statusSubject || '人物'), cast as CharacterState[]),
     statusPanel: ensureSpatialStatusPanel(formatStatusPanelPayload(raw.statusPanel || fallback.statusPanel), String(raw.statusSubject || fallback.statusSubject || '人物'), cast as CharacterState[]),
-    sceneState: normalizeSceneState(raw.sceneState, fallback.sceneState),
+    physicalSceneState: normalizePhysicalSceneState(raw.physicalSceneState ?? raw.sceneState, fallback.physicalSceneState ?? fallback.sceneState),
     initialPlayerOptions: initialPlayerOptions as PlayerOption[],
     normalizedEntries: normalizedEntries as StorybookEntry[],
     globalContextSeed: String(raw.globalContextSeed || fallback.globalContextSeed || ''),
@@ -1461,7 +1468,7 @@ function buildHardRules(): string {
 function buildRuntimeBlocks(input: GenerateRequest): {
   worldState: string
   spatialState: string
-  sceneState: string
+  physicalSceneState: string
   recentTurns: string
   storybook: string
   storybookRegistry: string
@@ -1478,7 +1485,7 @@ function buildRuntimeBlocks(input: GenerateRequest): {
         input.statusPanel,
       ].join('\n')
       : '无明确空间状态；必须从最近正文保持姿势、朝向、接触关系和手部占用的连续性。',
-    sceneState: renderSceneState(input.sceneState),
+    physicalSceneState: renderPhysicalSceneState(pickPhysicalSceneStateInput(input)),
     recentTurns: renderConversation(input.recentTurns),
     storybook,
     storybookRegistry: renderStorybookRegistry(input.storybookEntries),
@@ -1821,7 +1828,7 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
     block('已加载动态注入模块', context.storybook),
     block('可请求动态注入模块 registry', context.storybookRegistry, '当前没有故事书条目。'),
     block('当前世界状态', context.worldState),
-    block('当前环境状态', context.sceneState, '（无）'),
+    block('当前物理场景状态', context.physicalSceneState, '（无）'),
     block('长期剧情总结', globalContext),
     block('长期写作负反馈', String(input.qualityFeedback || '').trim(), '（无）'),
     block('当前长期剧情', longRangeOutline, '（无。Director 只能规划本轮，不得生成长期剧情。）'),
@@ -1882,7 +1889,7 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
   globalContext: string
   qualityFeedback: string
   nextLongRangeOutline: string
-  sceneState: string
+  physicalSceneState: string
   playerInput: string
   modules: UserModule[]
   directorPlan: Record<string, unknown>
@@ -1898,7 +1905,7 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
     block('硬规则', options.hardRules),
     block('导演计划', JSON.stringify(options.directorPlan)),
     block('当前世界状态', options.context.worldState),
-    block('当前环境状态', options.sceneState, '（无）'),
+    block('当前物理场景状态', options.physicalSceneState, '（无）'),
     block('叙事空间输入', options.context.spatialState),
     block('长期剧情总结', options.globalContext),
     block('长期写作负反馈', options.qualityFeedback, '（无）'),
@@ -2065,7 +2072,7 @@ async function startNextTurnPrewarm(input: GenerateRequest): Promise<NextTurnPre
     globalContext: directorPayload.globalContext,
     qualityFeedback: directorPayload.qualityFeedback,
     nextLongRangeOutline,
-    sceneState: directorPayload.context.sceneState,
+    physicalSceneState: directorPayload.context.physicalSceneState,
     playerInput: directorPayload.playerInput,
     modules: directorPayload.modules,
     directorPlan,
@@ -2218,7 +2225,7 @@ async function generate(
     globalContext,
     qualityFeedback: directorPayload.qualityFeedback,
     nextLongRangeOutline,
-    sceneState: context.sceneState,
+    physicalSceneState: context.physicalSceneState,
     playerInput,
     modules,
     directorPlan,
@@ -2308,7 +2315,7 @@ async function generate(
     block('最近正文', context.recentTurns),
     block('人物状态 Schema', input.statusPanelSchema),
     block('当前人物状态', input.statusPanel),
-    block('当前环境状态', renderSceneState(input.sceneState)),
+    block('当前物理场景状态', renderPhysicalSceneState(pickPhysicalSceneStateInput(input))),
     block('当前长期剧情', longRangeOutline, '（无）'),
   ].join('\n'))
 
@@ -2374,7 +2381,7 @@ async function generate(
     longRangeOutline: nextLongRangeOutline,
     qualityFeedback: postprocess.json.qualityFeedback || '',
     statusPanel: nextStatusPanel,
-    sceneState: normalizeSceneState(postprocess.json.sceneState, input.sceneState),
+    physicalSceneState: normalizePhysicalSceneState(postprocess.json.physicalSceneState ?? postprocess.json.sceneState, pickPhysicalSceneStateInput(input)),
     metrics,
     model,
   }
@@ -2400,7 +2407,7 @@ async function runPostprocess(
     characters: input.characters,
     storybookEntries: input.storybookEntries,
     statusPanel: input.statusPanel,
-    sceneState: input.sceneState,
+    physicalSceneState: pickPhysicalSceneStateInput(input),
   } as GenerateRequest)
   const hardRules = buildHardRules()
   const currentLongRangeOutline = String(input.longRangeOutline || '').trim()
@@ -2414,7 +2421,7 @@ async function runPostprocess(
     block('最近正文', context.recentTurns),
     block('人物状态 Schema', input.statusPanelSchema),
     block('当前人物状态', input.statusPanel),
-    block('当前环境状态', renderSceneState(input.sceneState)),
+    block('当前物理场景状态', renderPhysicalSceneState(pickPhysicalSceneStateInput(input))),
     block('当前长期剧情', currentLongRangeOutline, '（无）'),
   ].join('\n'))
 
@@ -2477,7 +2484,7 @@ async function runPostprocess(
     longRangeOutline: nextLongRangeOutline,
     qualityFeedback: postprocess.json.qualityFeedback || '',
     statusPanel: nextStatusPanel,
-    sceneState: normalizeSceneState(postprocess.json.sceneState, input.sceneState),
+    physicalSceneState: normalizePhysicalSceneState(postprocess.json.physicalSceneState ?? postprocess.json.sceneState, pickPhysicalSceneStateInput(input)),
     metrics,
     model,
   }

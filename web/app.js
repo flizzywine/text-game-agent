@@ -139,7 +139,7 @@ function defaultStory(name = '未选择故事') {
     statusSubject: '',
     statusPanelSchema: '',
     statusPanel: '',
-    sceneState: defaultSceneState(),
+    physicalSceneState: defaultPhysicalSceneState(),
     globalContext: '',
     playerOptions: [],
     model: defaultModel,
@@ -228,7 +228,7 @@ function normalizeStory(raw, fallbackName = '故事') {
     statusSubject: String(raw?.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw?.statusPanelSchema || ''), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
     statusPanel: ensureSpatialStatusPanel(pickLatestStatusPanel(raw), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
-    sceneState: normalizeSceneState(raw?.sceneState, base.sceneState),
+    physicalSceneState: normalizePhysicalSceneState(raw?.physicalSceneState ?? raw?.sceneState, base.physicalSceneState),
     globalContext: String(raw?.globalContext || ''),
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     model: normalizeModel(raw?.model || base.model),
@@ -238,7 +238,7 @@ function normalizeStory(raw, fallbackName = '故事') {
   }
 }
 
-function defaultSceneState() {
+function defaultPhysicalSceneState() {
   return {
     currentScene: '',
     nextScene: '',
@@ -247,7 +247,7 @@ function defaultSceneState() {
   }
 }
 
-function normalizeSceneState(value, fallback = defaultSceneState()) {
+function normalizePhysicalSceneState(value, fallback = defaultPhysicalSceneState()) {
   const base = fallback && typeof fallback === 'object' && !Array.isArray(fallback)
     ? {
       currentScene: String(fallback.currentScene || ''),
@@ -255,7 +255,7 @@ function normalizeSceneState(value, fallback = defaultSceneState()) {
       transitionRule: String(fallback.transitionRule || ''),
       currentSceneForbidden: String(fallback.currentSceneForbidden || ''),
     }
-    : defaultSceneState()
+    : defaultPhysicalSceneState()
   if (typeof value === 'string') {
     const currentScene = value.trim()
     return currentScene ? { ...base, currentScene } : base
@@ -269,8 +269,8 @@ function normalizeSceneState(value, fallback = defaultSceneState()) {
   }
 }
 
-function renderSceneState(value) {
-  const scene = normalizeSceneState(value)
+function renderPhysicalSceneState(value) {
+  const scene = normalizePhysicalSceneState(value)
   return [
     scene.currentScene ? `当前场景：${scene.currentScene}` : '',
     scene.nextScene ? `下一步场景：${scene.nextScene}` : '',
@@ -1041,12 +1041,12 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.statusSubject = String(init.statusSubject || '')
   story.statusPanelSchema = ensureSpatialStatusPanelSchema(String(init.statusPanelSchema || buildFallbackStatusPanelSchema(asset, story.characters)), story.statusSubject || '人物', story.characters)
   story.statusPanel = ensureSpatialStatusPanel(String(init.statusPanel || buildFallbackStatusPanel(asset, story.characters)), story.statusSubject || '人物', story.characters)
-  story.sceneState = normalizeSceneState(init.sceneState || init.currentSituation)
+  story.physicalSceneState = normalizePhysicalSceneState(init.physicalSceneState || init.sceneState || init.currentSituation)
   story.globalContext = [
     `当前故事资料：${asset.sourceName || asset.id}`,
     story.worldview ? `世界观：${story.worldview}` : '',
     story.statusSubject ? `状态追踪人物：${story.statusSubject}` : '',
-    renderSceneState(story.sceneState) ? `环境状态：${renderSceneState(story.sceneState)}` : '',
+    renderPhysicalSceneState(story.physicalSceneState) ? `物理场景状态：${renderPhysicalSceneState(story.physicalSceneState)}` : '',
     asset.markdownFile ? `资料文件：${asset.markdownFile}` : '',
     story.programConfigFile ? `初始化配置：${story.programConfigFile}` : '',
     story.openingText ? `开场白：${story.openingText.slice(0, 300)}` : '',
@@ -1676,7 +1676,7 @@ function renderStoryTracking() {
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', summary || '暂无历史总结。')}
     ${renderTrackerSection('当前剧情', currentPlot || '暂无当前剧情。')}
-    ${renderTrackerSection('环境状态', renderSceneState(state.sceneState) || '暂无环境状态。')}
+    ${renderTrackerSection('物理场景状态', renderPhysicalSceneState(state.physicalSceneState) || '暂无物理场景状态。')}
     ${renderTrackerSection('当前长期剧情', longRangeOutline || '暂无当前长期剧情。')}
     ${renderTrackerSection('伏笔', foreshadowText || '暂无伏笔。')}
     ${state.qualityFeedback ? renderTrackerSection('写作负反馈', state.qualityFeedback) : ''}
@@ -1996,7 +1996,7 @@ function buildPendingPostprocessFromState() {
     foreshadowRecords: state.foreshadowRecords,
     statusPanelSchema: state.statusPanelSchema,
     statusPanel: state.statusPanel,
-    sceneState: state.sceneState,
+    physicalSceneState: state.physicalSceneState,
     longRangeOutline: state.longRangeOutline,
     turnIndex: completedAssistantTurnCount(),
     model: normalizeModel(state.model || config.model),
@@ -2147,7 +2147,7 @@ function buildGenerateRequestPayload(playerInput, options = {}) {
     foreshadowRecords: state.foreshadowRecords,
     statusPanelSchema: state.statusPanelSchema,
     statusPanel: state.statusPanel,
-    sceneState: state.sceneState,
+    physicalSceneState: state.physicalSceneState,
     bypassGenerationCache: Boolean(options.bypassGenerationCache),
     model: normalizeModel(state.model || config.model),
     apiKey: getLocalApiKey(),
@@ -2311,7 +2311,7 @@ function pickRegenerableStoryState(story) {
     'statusSubject',
     'statusPanelSchema',
     'statusPanel',
-    'sceneState',
+    'physicalSceneState',
     'globalContext',
     'playerOptions',
     'runtimeStats',
@@ -2468,7 +2468,7 @@ function applyPostprocess(payload) {
   if (statusPanel) {
     state.statusPanel = ensureSpatialStatusPanel(statusPanel, state.statusSubject || '人物', state.characters)
   }
-  state.sceneState = normalizeSceneState(payload.sceneState, state.sceneState)
+  state.physicalSceneState = normalizePhysicalSceneState(payload.physicalSceneState ?? payload.sceneState, state.physicalSceneState)
 }
 
 function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {

@@ -239,19 +239,19 @@ describe('frontend layout', () => {
     expect(appJs).not.toContain('characterUpdates: state.characterUpdates')
   })
 
-  it('tracks sceneState as a four-field scene clock', () => {
+  it('tracks physicalSceneState as a four-field scene clock', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
-    expect(appJs).toContain('function defaultSceneState')
-    expect(appJs).toContain('function normalizeSceneState')
-    expect(appJs).toContain('function renderSceneState')
+    expect(appJs).toContain('function defaultPhysicalSceneState')
+    expect(appJs).toContain('function normalizePhysicalSceneState')
+    expect(appJs).toContain('function renderPhysicalSceneState')
     expect(appJs).toContain('currentScene')
     expect(appJs).toContain('nextScene')
     expect(appJs).toContain('transitionRule')
     expect(appJs).toContain('currentSceneForbidden')
-    expect(appJs).toContain('sceneState: state.sceneState')
-    expect(appJs).toContain('state.sceneState = normalizeSceneState(payload.sceneState, state.sceneState)')
-    expect(appJs).toContain("renderTrackerSection('环境状态'")
+    expect(appJs).toContain('physicalSceneState: state.physicalSceneState')
+    expect(appJs).toContain('state.physicalSceneState = normalizePhysicalSceneState(payload.physicalSceneState ?? payload.sceneState, state.physicalSceneState)')
+    expect(appJs).toContain("renderTrackerSection('物理场景状态'")
     expect(appJs).not.toContain('allowedTransitions')
     expect(appJs).not.toContain('phaseTransition')
   })
