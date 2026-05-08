@@ -73,6 +73,8 @@ const els = {
   libraryPreview: document.querySelector('#libraryPreview'),
   closeStoryLibraryButton: document.querySelector('#closeStoryLibraryButton'),
   moduleList: document.querySelector('#moduleList'),
+  jumpTurnStartButton: document.querySelector('#jumpTurnStartButton'),
+  jumpLatestButton: document.querySelector('#jumpLatestButton'),
   conversation: document.querySelector('#conversation'),
   optionTray: document.querySelector('#optionTray'),
   playForm: document.querySelector('#playForm'),
@@ -137,7 +139,7 @@ function defaultStory(name = '未选择故事') {
     statusSubject: '',
     statusPanelSchema: '',
     statusPanel: '',
-    sceneState: '',
+    sceneState: defaultSceneState(),
     globalContext: '',
     playerOptions: [],
     model: defaultModel,
@@ -226,7 +228,7 @@ function normalizeStory(raw, fallbackName = '故事') {
     statusSubject: String(raw?.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw?.statusPanelSchema || ''), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
     statusPanel: ensureSpatialStatusPanel(pickLatestStatusPanel(raw), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
-    sceneState: String(raw?.sceneState || ''),
+    sceneState: normalizeSceneState(raw?.sceneState, base.sceneState),
     globalContext: String(raw?.globalContext || ''),
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     model: normalizeModel(raw?.model || base.model),
@@ -234,6 +236,47 @@ function normalizeStory(raw, fallbackName = '故事') {
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
     debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
   }
+}
+
+function defaultSceneState() {
+  return {
+    currentScene: '',
+    nextScene: '',
+    transitionRule: '',
+    currentSceneForbidden: '',
+  }
+}
+
+function normalizeSceneState(value, fallback = defaultSceneState()) {
+  const base = fallback && typeof fallback === 'object' && !Array.isArray(fallback)
+    ? {
+      currentScene: String(fallback.currentScene || ''),
+      nextScene: String(fallback.nextScene || ''),
+      transitionRule: String(fallback.transitionRule || ''),
+      currentSceneForbidden: String(fallback.currentSceneForbidden || ''),
+    }
+    : defaultSceneState()
+  if (typeof value === 'string') {
+    const currentScene = value.trim()
+    return currentScene ? { ...base, currentScene } : base
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return base
+  return {
+    currentScene: String(value.currentScene || base.currentScene || '').trim(),
+    nextScene: String(value.nextScene || base.nextScene || '').trim(),
+    transitionRule: String(value.transitionRule || base.transitionRule || '').trim(),
+    currentSceneForbidden: String(value.currentSceneForbidden || base.currentSceneForbidden || '').trim(),
+  }
+}
+
+function renderSceneState(value) {
+  const scene = normalizeSceneState(value)
+  return [
+    scene.currentScene ? `当前场景：${scene.currentScene}` : '',
+    scene.nextScene ? `下一步场景：${scene.nextScene}` : '',
+    scene.transitionRule ? `推进规则：${scene.transitionRule}` : '',
+    scene.currentSceneForbidden ? `当前场景禁止：${scene.currentSceneForbidden}` : '',
+  ].filter(Boolean).join('\n')
 }
 
 function applyLegacyMigrations() {
@@ -373,6 +416,14 @@ function bindEvents() {
 
   els.regenerateButton.addEventListener('click', () => {
     regenerateLastTurn()
+  })
+
+  els.jumpTurnStartButton.addEventListener('click', () => {
+    scrollToLatestAssistantStart()
+  })
+
+  els.jumpLatestButton.addEventListener('click', () => {
+    scrollToConversationBottom()
   })
 
   els.apiKeyButton.addEventListener('click', () => {
@@ -577,6 +628,7 @@ function render() {
   renderStoryTracking()
   renderConversation()
   renderOptions()
+  renderReadingJumpControls()
   renderRetryStageButton()
   renderRegenerateButton()
   els.modelSelect.value = normalizeModel(state.model || config.model)
@@ -989,12 +1041,12 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.statusSubject = String(init.statusSubject || '')
   story.statusPanelSchema = ensureSpatialStatusPanelSchema(String(init.statusPanelSchema || buildFallbackStatusPanelSchema(asset, story.characters)), story.statusSubject || '人物', story.characters)
   story.statusPanel = ensureSpatialStatusPanel(String(init.statusPanel || buildFallbackStatusPanel(asset, story.characters)), story.statusSubject || '人物', story.characters)
-  story.sceneState = String(init.sceneState || init.currentSituation || '').trim()
+  story.sceneState = normalizeSceneState(init.sceneState || init.currentSituation)
   story.globalContext = [
     `当前故事资料：${asset.sourceName || asset.id}`,
     story.worldview ? `世界观：${story.worldview}` : '',
     story.statusSubject ? `状态追踪人物：${story.statusSubject}` : '',
-    story.sceneState ? `环境状态：${story.sceneState}` : '',
+    renderSceneState(story.sceneState) ? `环境状态：${renderSceneState(story.sceneState)}` : '',
     asset.markdownFile ? `资料文件：${asset.markdownFile}` : '',
     story.programConfigFile ? `初始化配置：${story.programConfigFile}` : '',
     story.openingText ? `开场白：${story.openingText.slice(0, 300)}` : '',
@@ -1611,7 +1663,7 @@ function renderCharacters() {
 function renderStoryTracking() {
   const summary = state.chapterSummary || deriveGlobalContextBlock('summary')
   const currentPlot = state.outline || state.currentSituation || formatDirectorOutline(state.debug?.director)
-  const longRangeOutline = state.longRangeOutline || formatDirectorLongRange(state.debug?.director)
+  const longRangeOutline = state.longRangeOutline || ''
   const foreshadows = normalizeForeshadowRecords(state.foreshadowRecords)
     .filter(item => item.status === 'active')
     .slice(0, 3)
@@ -1624,7 +1676,7 @@ function renderStoryTracking() {
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', summary || '暂无历史总结。')}
     ${renderTrackerSection('当前剧情', currentPlot || '暂无当前剧情。')}
-    ${renderTrackerSection('环境状态', state.sceneState || '暂无环境状态。')}
+    ${renderTrackerSection('环境状态', renderSceneState(state.sceneState) || '暂无环境状态。')}
     ${renderTrackerSection('当前长期剧情', longRangeOutline || '暂无当前长期剧情。')}
     ${renderTrackerSection('伏笔', foreshadowText || '暂无伏笔。')}
     ${state.qualityFeedback ? renderTrackerSection('写作负反馈', state.qualityFeedback) : ''}
@@ -1730,38 +1782,6 @@ function formatDirectorForeshadows(director) {
     .join('\n')
 }
 
-function formatDirectorLongRange(director) {
-  const planning = director && typeof director === 'object'
-    ? (director.longRangeUpdate || director.future || director.longRangePlanning)
-    : null
-  if (!planning || typeof planning !== 'object') return ''
-  const longArc = planning.longArc || planning.arc
-  if (longArc && typeof longArc === 'object') {
-    const lines = []
-    if (longArc.goal) lines.push(`目标：${String(longArc.goal).trim()}`)
-    if (longArc.pressure) lines.push(`压力：${String(longArc.pressure).trim()}`)
-    const direction = Array.isArray(longArc.direction) ? longArc.direction : []
-    if (direction.length) lines.push(`方向：\n${direction.map(item => `- ${String(item).trim()}`).join('\n')}`)
-    const prototypes = Array.isArray(longArc.prototypes) ? longArc.prototypes : []
-    if (prototypes.length) lines.push(`可用原型：${prototypes.map(item => String(item).trim()).filter(Boolean).join(' / ')}`)
-    return lines.filter(Boolean).join('\n')
-  }
-  const blocks = Array.isArray(planning.blocks) ? planning.blocks : []
-  return blocks
-    .map((block, index) => {
-      if (!block || typeof block !== 'object') return ''
-      const range = String(block.range || `规划区间 ${index + 1}`).trim()
-      const events = Array.isArray(block.events) ? block.events : []
-      const lines = events
-        .map((event, eventIndex) => `${eventIndex + 1}. ${String(event || '').trim()}`)
-        .filter(line => !/^\d+\.\s*$/.test(line))
-      if (!range || lines.length === 0) return ''
-      return `- ${range}：\n${lines.join('\n')}`
-    })
-    .filter(Boolean)
-    .join('\n\n')
-}
-
 function storyEntryTypeLabel(type) {
   return {
     'character-card': '人物卡',
@@ -1781,17 +1801,61 @@ function characterInput(character, field, placeholder) {
   return `<input data-character-field="${field}" value="${escapeAttr(character[field] || '')}" placeholder="${placeholder}" />`
 }
 
-function renderConversation() {
+function renderConversation({ scrollTarget = 'bottom' } = {}) {
+  const previousScrollTop = els.conversation.scrollTop
+  const wasNearBottom = isConversationNearBottom()
   if (state.messages.length === 0) {
     els.conversation.innerHTML = renderEmptyConversation()
+    renderReadingJumpControls()
     return
   }
-  els.conversation.innerHTML = state.messages.map(message => `
-    <article class="message ${message.role}">
+  els.conversation.innerHTML = state.messages.map((message, index) => `
+    <article class="message ${message.role}" data-message-index="${index}" data-message-role="${escapeAttr(message.role)}">
       <small>${message.role === 'user' ? 'PLAYER' : message.role === 'error' ? 'ERROR' : 'AGENT'}</small>
       ${escapeHtml(message.content)}
     </article>
   `).join('')
+  applyConversationScroll(scrollTarget, previousScrollTop, wasNearBottom)
+  renderReadingJumpControls()
+}
+
+function renderReadingJumpControls() {
+  const hasMessages = Array.isArray(state.messages) && state.messages.length > 0
+  const hasAssistant = hasMessages && state.messages.some(message => message.role === 'assistant')
+  els.jumpTurnStartButton.disabled = !hasAssistant
+  els.jumpLatestButton.disabled = !hasMessages
+}
+
+function applyConversationScroll(scrollTarget, previousScrollTop, wasNearBottom) {
+  if (scrollTarget === 'latest-assistant-start') {
+    scrollToLatestAssistantStart()
+    return
+  }
+  if (scrollTarget === 'bottom' || (scrollTarget === 'preserve-if-reading' && wasNearBottom)) {
+    scrollToConversationBottom()
+    return
+  }
+  els.conversation.scrollTop = Math.min(previousScrollTop, Math.max(0, els.conversation.scrollHeight - els.conversation.clientHeight))
+}
+
+function isConversationNearBottom() {
+  const distance = els.conversation.scrollHeight - els.conversation.scrollTop - els.conversation.clientHeight
+  return distance <= 80
+}
+
+function scrollToLatestAssistantStart() {
+  const latestAssistant = Array.from(els.conversation.querySelectorAll('.message.assistant')).at(-1)
+  if (!latestAssistant) {
+    scrollToConversationBottom()
+    return
+  }
+  const conversationRect = els.conversation.getBoundingClientRect()
+  const assistantRect = latestAssistant.getBoundingClientRect()
+  const targetTop = els.conversation.scrollTop + assistantRect.top - conversationRect.top - 10
+  els.conversation.scrollTop = Math.max(0, targetTop)
+}
+
+function scrollToConversationBottom() {
   els.conversation.scrollTop = els.conversation.scrollHeight
 }
 
@@ -2368,8 +2432,9 @@ function applyVisibleTextEvent(event) {
   state.debug.note = '正文已显示；Postprocess 正在后台更新状态，完成前不能发送下一轮。'
 
   updateRuntimeStatsFromPipeline()
-  renderConversation()
+  renderConversation({ scrollTarget: 'latest-assistant-start' })
   renderOptions()
+  renderReadingJumpControls()
   renderDebug()
   renderRetryStageButton()
   renderRegenerateButton()
@@ -2403,7 +2468,7 @@ function applyPostprocess(payload) {
   if (statusPanel) {
     state.statusPanel = ensureSpatialStatusPanel(statusPanel, state.statusSubject || '人物', state.characters)
   }
-  state.sceneState = String(payload.sceneState || state.sceneState || '').trim()
+  state.sceneState = normalizeSceneState(payload.sceneState, state.sceneState)
 }
 
 function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {
