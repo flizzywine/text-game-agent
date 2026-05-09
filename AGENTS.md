@@ -1,90 +1,132 @@
-# text-game-agent 交接说明
+# text-game-agent
 
-本项目当前目标是先稳定运行，不做提前优化。后续 agent 必须以当前代码、测试和本文件为准，不要继承旧对话里的废弃方案。
+文字游戏 agent。本文件是唯一项目说明；README 和设计文档已删除。遇到旧聊天记录、旧文档、旧字段冲突时，以当前代码、测试和本文件为准。
 
-## 当前架构真相
+## 目标
 
-主流程只保留：
+把故事资料、人物状态、玩家输入转成可连续游玩的文字游戏闭环。优先保持系统短、小、可检查，避免为想象中的复杂问题提前加机制。
+
+## 当前流水线
 
 ```text
-Director -> Narrator -> Postprocess
+Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Director -> Narrator -> Postprocess
+                                                               ^                         |
+                                                               |                         v
+                          LongRangeDirector -> 剧情目标 --------+---- feedbackMemory <----+
+                                                               \
+                                                                -> Evaluator（人工触发，不进主链路）
 ```
 
-- Director：规划本轮剧情结构、节奏、伏笔动作、玩家窗口，输出压缩 JSON。
-- Narrator：根据 Director 计划写玩家可见正文，只输出正文草稿，不更新人物状态。
-- Postprocess：在正文已显示后更新状态、历史总结、候选项、写作负反馈和长期剧情判定，不修改正文。
-- LongRangeDirector：只在 Postprocess 判定 `longRangeStatus` 为 `missing` 或 `completed` 时调用，用来生成或修订当前长期剧情。
-- Evaluator：只做人工辅助评估，不自动改 prompt，不自动改正文。
+- Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
+- 用户输入：每轮玩家自由输入，是 Director 和 Narrator 的当前触发点。
+- 闭环反馈：Postprocess 产生三类负反馈，程序保存为 `feedbackMemory`，后续 5 轮注入 Director 和 Narrator。
+- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。
+- Narrator：按导演计划写玩家可见正文；不更新状态。
+- Postprocess：正文显示后运行，只更新事实总结、人物状态补丁、三类负反馈、剧情目标状态和玩家候选项；不改正文。
+- LongRangeDirector：只生成或修订当前剧情目标；剧情目标是 Director 的上层方向输入，用来控制多轮推进，不直接写正文。
+- Evaluator：人工评估上一轮，不自动改 prompt、代码或正文。
 
-## 明确不要恢复的方案
+## 当前状态设计
 
-以下方案已经废弃，不要重新引入，除非用户明确重新要求：
+人物状态只保留三块：
 
-- 不使用 Director / Narrator / Postprocess 缓存。
-- 不使用下一轮预热。
-- 不使用 `director-prewarm`、`prewarm-cancel` 接口。
-- 不使用 `bypassGenerationCache`、`prewarmEpoch`、`preferEmergencyDirectorFallback` 一类状态字段。
-- 不使用 Editor 独立精修层。
-- 不使用“应急导演计划”绕过 Director。
-- 不做复杂状态机式物理模拟。
+```json
+{
+  "statusSchema": ["位置", "姿势", "外显状态"],
+  "statusRoster": ["玩家", "NPC名"],
+  "statusState": {
+    "玩家": {"位置": "车内"}
+  }
+}
+```
 
-当前测试已经保护这些删除项，见 `src/__tests__/frontendLayout.test.ts`。
+- `statusRoster` 只保存名字，不保存 `id/name/active` 对象。
+- 默认 roster 内人物都 active。
+- Postprocess 只输出 `statusSchemaPatch`、`statusRosterPatch`、`statusStatePatch`。
+- 前端人物状态栏直接显示 JSON，不格式化成卡片。
+- 不恢复 `statusPanel`、`statusPanelSchema`、`statusSubject`。
 
-## 目录职责
+## 负反馈设计
 
-- `scripts/web-server.ts`：本地 HTTP 服务、模型调用、三层流水线、故事导入初始化、存档接口。
+Postprocess 只输出三类独立负反馈：
+
+- `planExecutionFeedback`
+- `narrativeConstraintFeedback`
+- `directorProgressFeedback`
+
+程序保存为 `feedbackMemory`，TTL 5 轮，下一轮注入 Director 和 Narrator。不要恢复合并版 `qualityFeedback` 状态字段。
+
+## Prompt 规则
+
+Prompt 文件直接在 `prompts/` 上层：
+
+- `initializer.md`
+- `director.md`
+- `narrator.md`
+- `postprocess.md`
+- `high-level-director.md`
+- `evaluator.md`
+
+用户配置只保留：
+
+- `prompts/导演风格/*.md`
+- `prompts/叙事风格/*.md`
+
+输入变量用 `{{变量名}}`。变量顺序按稳定性排序：越稳定、越容易缓存命中的内容越靠前；当前玩家输入和最终正文靠后。Postprocess 必须接收世界观，因为合理性判断依赖世界观。
+
+## 不要恢复
+
+- Director / Narrator / Postprocess 缓存。
+- 下一轮预热。
+- `director-prewarm`、`prewarm-cancel` 接口。
+- Editor 独立精修层。
+- 应急 Director fallback。
+- 动态加载 prompt 机制。
+- `system-hard-rules`、`story-curator`、`user-config-templates` 旧目录。
+- 独立伏笔队列。
+- `currentPhysicalEnvironment`、`normalizedEntries`、`statusPanel*`、`qualityFeedback` 等已删状态字段。
+- 复杂物理状态机。
+
+## 目录
+
+- `scripts/web-server.ts`：本地 HTTP 服务、模型调用、流水线、故事导入初始化、存档接口。
 - `web/`：前端页面、状态展示、故事库、配置、生成交互。
-- `prompts/director/prompt.md`：固定 Director prompt。
-- `prompts/narrator/prompt.md`：固定 Narrator prompt。
-- `prompts/postprocess/prompt.md`：固定 Postprocess prompt。
-- `prompts/long-range-director/prompt.md`：长期剧情生成/修订 prompt。
-- `prompts/evaluator/prompt.md`：人工评估 prompt。
-- `prompts/user-config-templates/`：用户可选注入模块。当前只分导演风格和叙事风格，Postprocess 不接收用户风格。
-- `story/`：故事书、导入原文、初始化后的故事配置。
-- `save/`：本地存档。不要再放生成缓存。
-- `debug/`：LLM 原始返回、评估材料和评估报告。
-- `docs/design.md`：历史设计记录，可能含旧方案；遇到冲突时以本文件和当前代码为准。
+- `prompts/`：固定 prompt 和用户风格模块。
+- `story/`：故事资料和初始化后的 `program-config`。
+- `save/`：本地存档。
+- `debug/`：LLM 原始请求、返回和评估材料。
+- `src/__tests__/`：当前架构保护测试。
 
-## 当前数据流
-
-1. 玩家输入。
-2. 前端构造请求：故事状态、人物状态、当前物理环境、历史总结、长期剧情、伏笔、用户启用模块、最近正文。
-3. 服务端调用 Director。
-4. 服务端调用 Narrator。
-5. Narrator 正文通过 `visible_text` 事件先显示给玩家。
-6. 服务端继续调用 Postprocess。
-7. Postprocess 完成后，前端更新人物状态、历史总结、当前剧情、伏笔、候选项、写作负反馈。
-8. 若 Postprocess 失败，玩家不能进入下一轮；点击“继续未完成”只补跑 Postprocess。
-
-## 存档与故事
-
-- 新游戏必须先选择故事书。
-- 故事导入后要初始化，初始化只生成程序需要的结构化故事配置，不提前锁死长期剧情。
-- 当前长期剧情应在第一轮正式玩家输入后由 Director / Postprocess / LongRangeDirector 机制产生。
-- 保存游戏直接写本地 `save/current-state.json`，不走下载。
-
-## 工程纪律
-
-- 修 bug 先读当前代码、当前状态、当前错误，不靠聊天历史猜。
-- 一次只改一个问题，不顺手优化。
-- 优先恢复可运行，再谈体验和性能。
-- 删除功能必须删干净：代码、测试、状态字段、UI 文案、本地残留文件一起处理。
-- 多次更新功能后，必须回头清理冗余代码、旧测试、旧文档和本地残留，保持当前架构干净。
-- 新增复杂机制前必须先确认已有简单方案已经跑通并暴露真实瓶颈。
-- 如果用户说“越来越复杂”，优先减法，不加抽象。
-
-## 验证命令
-
-每次改完至少跑：
+## 运行
 
 ```bash
-npx tsc --noEmit
+npm install
+npm run web
+```
+
+默认地址：
+
+```text
+http://127.0.0.1:4173
+```
+
+默认模型是官方 `deepseek-v4-flash`。网页右上角可配置 API Key，保存在当前浏览器本地；也可用环境变量。
+
+## 验证
+
+改完至少跑：
+
+```bash
 npm test
+npx tsc --noEmit
 curl --max-time 5 -s -o /tmp/text-game-agent-index.html -w '%{http_code} %{size_download}\n' http://127.0.0.1:4173/
 ```
 
-预期：
+## 工程纪律
 
-- 类型检查通过。
-- 测试通过。
-- 本地页面返回 `200`。
+- 先读当前代码和测试，不靠旧对话猜。
+- 一次只解决一个问题。
+- 优先减法，少加抽象。
+- 删除功能必须删干净：prompt、代码、测试、状态字段、UI 文案、本地残留、文档一起处理。
+- 多次更新功能后，回头清理冗余代码和旧测试。
+- 如果用户说“越来越复杂”，先删，不先设计新机制。

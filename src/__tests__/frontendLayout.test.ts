@@ -11,10 +11,18 @@ function extractAside(html: string, className: string): string {
   return match?.[1] || ''
 }
 
+function extractFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}`)
+  if (start < 0) return ''
+  const next = source.indexOf('\nfunction ', start + 1)
+  return source.slice(start, next < 0 ? undefined : next)
+}
+
 describe('frontend layout', () => {
   it('keeps user modules in a config dialog and reserves the left rail for pipeline', () => {
     const html = readIndexHtml()
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
+    const css = fs.readFileSync(path.join(process.cwd(), 'web/styles.css'), 'utf-8')
     const leftRail = extractAside(html, 'left-rail')
     const rightRail = extractAside(html, 'right-rail')
     const moduleDialog = html.match(/<dialog id="moduleConfigDialog"[\s\S]*?<\/dialog>/)?.[0] || ''
@@ -27,9 +35,12 @@ describe('frontend layout', () => {
     expect(leftRail).toContain('全局流水线')
     expect(leftRail).toContain('id="debugOutput"')
     expect(leftRail).not.toContain('id="moduleList"')
+    expect(css).toContain('.left-rail {\n  grid-template-rows: minmax(0, 1fr);')
 
-    expect(rightRail).toContain('AI 速度评估')
-    expect(rightRail).toContain('id="statsView"')
+    expect(rightRail).not.toContain('AI 速度评估')
+    expect(rightRail).not.toContain('id="statsView"')
+    expect(rightRail).not.toContain('stats-panel')
+    expect(css).toContain('.right-rail {\n  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);')
     expect(rightRail).not.toContain('id="debugOutput"')
 
     expect(appJs).toContain('function moduleLayerGroupName')
@@ -69,14 +80,11 @@ describe('frontend layout', () => {
     expect(html).toContain('id="directorControlButton"')
     expect(html).toContain('id="directorControlDialog"')
     expect(html).toContain('id="directorLongRangeInput"')
-    expect(html).toContain('id="directorGuidanceInput"')
+    expect(html).not.toContain('id="directorGuidanceInput"')
     expect(html).toContain('导演控制台')
-    expect(appJs).toContain("directorGuidance: ''")
-    expect(appJs).toContain('directorGuidance: String(raw?.directorGuidance || \'\')')
     expect(appJs).toContain('function openDirectorControl')
     expect(appJs).toContain('function saveDirectorControl')
-    expect(appJs).toContain('state.directorGuidance = els.directorGuidanceInput.value.trim()')
-    expect(appJs).toContain('directorGuidance: state.directorGuidance')
+    expect(appJs).not.toContain('directorGuidance')
   })
 
   it('exposes editable story settings and story-specific director/narrator styles', () => {
@@ -106,8 +114,8 @@ describe('frontend layout', () => {
 
     expect(serverTs).toContain('directorStyle?: string')
     expect(serverTs).toContain('narratorStyle?: string')
-    expect(serverTs).toContain("block('故事导演风格'")
-    expect(serverTs).toContain("block('故事叙事风格'")
+    expect(serverTs).toContain('directorStyle,')
+    expect(serverTs).toContain('narratorStyle,')
     expect(serverTs).toContain("url.pathname.match(/^\\/api\\/story-assets\\/([^/]+)\\/program-config$/)")
     expect(serverTs).toContain('function updateStoryAssetProgramConfig')
     expect(serverTs).toContain('## 导演风格')
@@ -233,13 +241,16 @@ describe('frontend layout', () => {
     expect(serverTs).toContain("pipelineMode: 'narrator+postprocess'")
   })
 
-  it('keeps AI speed stats visible even before final server metrics arrive', () => {
+  it('keeps AI speed stats code available while the panel is removed', () => {
+    const html = readIndexHtml()
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
+    expect(html).not.toContain('id="statsView"')
     expect(appJs).toContain('function updateRuntimeStatsFromPipeline')
     expect(appJs).toContain('function buildClientRuntimeStats')
     expect(appJs).toContain('state.debug.startedAt')
     expect(appJs).toContain('payload.metrics || buildClientRuntimeStats')
+    expect(appJs).toContain('if (!els.statsView) return')
   })
 
   it('can continue a failed postprocess before the next player turn', () => {
@@ -258,35 +269,69 @@ describe('frontend layout', () => {
     expect(appJs).not.toContain('await regenerateLastTurn()')
   })
 
-  it('renders character status as collapsed per-person cards', () => {
+  it('renders character status as raw JSON', () => {
+    const html = readIndexHtml()
     const css = fs.readFileSync(path.join(process.cwd(), 'web/styles.css'), 'utf-8')
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
-    expect(appJs).toContain('function parseStatusPanelPersons')
-    expect(appJs).toContain('function renderStatusPersonCard')
-    expect(appJs).toContain('<details class="status-person-card"')
-    expect(appJs).not.toContain('<details class="status-person-card" open')
+    expect(html).toContain('id="statusPanelView"')
+    expect(html).not.toContain('id="characterList"')
+    expect(html).not.toContain('id="addCharacterButton"')
+    expect(appJs).toContain('<pre class="status-json">${escapeHtml(JSON.stringify(state.statusState || {}, null, 2))}</pre>')
+    expect(appJs).not.toContain('function renderCharacters')
+    expect(appJs).not.toContain('function characterInput')
+    expect(appJs).not.toContain('function parseStatusPanelPersons')
+    expect(appJs).not.toContain('function renderStatusPersonCard')
+    expect(appJs).not.toContain('<details class="status-person-card"')
     expect(appJs).not.toContain('追踪：${state.statusSubject}')
     expect(appJs).not.toContain('每轮后处理更新')
-    expect(css).toContain('.status-people')
-    expect(css).toContain('.status-person-card')
-    expect(css).toContain('.status-person-card:nth-child(2n)')
-    expect(css).toContain('border-left: 4px solid var(--blue);')
+    expect(css).toContain('.status-json')
+    expect(css).not.toContain('.status-people')
+    expect(css).not.toContain('.status-person-card')
+    expect(css).not.toContain('.character-item')
+    expect(css).not.toContain('.character-detail')
   })
 
-  it('exposes a manual evaluator panel with visible model input', () => {
+  it('adds status patch names to the tracked roster even when rosterPatch is empty', () => {
+    const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
+    const mergeRoster = extractFunction(appJs, 'mergeStatusRoster')
+
+    expect(mergeRoster).toContain('Object.keys(statePatch)')
+    expect(mergeRoster).toContain('...patchNames')
+    expect(appJs).toContain('state.statusRoster = mergeStatusRoster(state.statusRoster, statusPatch.statusRosterPatch, state.characters, statusPatch.statusStatePatch)')
+  })
+
+  it('applies full status state returned by postprocess final payload', () => {
+    const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
+    const applyPostprocess = extractFunction(appJs, 'applyPostprocess')
+
+    expect(applyPostprocess).toContain('const statusPatch = payload.postprocess')
+    expect(applyPostprocess).toContain('if (Array.isArray(payload.statusRoster))')
+    expect(applyPostprocess).toContain('state.statusRoster = normalizeStatusRoster(payload.statusRoster, state.characters)')
+    expect(applyPostprocess).toContain('if (payload.statusState && typeof payload.statusState === \'object\')')
+    expect(applyPostprocess).toContain('state.statusState = normalizeStatusState(payload.statusState, state.statusRoster, state.characters)')
+    expect(applyPostprocess).toContain('state.statusState = mergeStatusState(state.statusState, statusPatch.statusStatePatch, state.statusRoster, state.characters)')
+  })
+
+  it('keeps story characters in the status roster even when saved roster only has player', () => {
+    const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
+    const normalizeRoster = extractFunction(appJs, 'normalizeStatusRoster')
+
+    expect(normalizeRoster).toContain('const characterNames = characters.map')
+    expect(normalizeRoster).toContain("return [...new Set(['玩家', ...names, ...characterNames])]")
+  })
+
+  it('keeps evaluator code available while the panel is removed', () => {
     const html = readIndexHtml()
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
     const serverTs = fs.readFileSync(path.join(process.cwd(), 'scripts/web-server.ts'), 'utf-8')
 
-    expect(html).toContain('评估模块')
-    expect(html).toContain('id="evaluationTargetSelect"')
-    expect(html).toContain('value="codex"')
-    expect(html).toContain('id="refreshEvaluationButton"')
-    expect(html).toContain('id="evaluateTurnButton"')
-    expect(html).toContain('id="evaluationReport"')
-    expect(html).toContain('id="evaluationInput"')
-    expect(html).toContain('查看评估材料')
+    expect(html).not.toContain('评估模块')
+    expect(html).not.toContain('id="evaluationTargetSelect"')
+    expect(html).not.toContain('id="refreshEvaluationButton"')
+    expect(html).not.toContain('id="evaluateTurnButton"')
+    expect(html).not.toContain('id="evaluationReport"')
+    expect(html).not.toContain('id="evaluationInput"')
     expect(appJs).toContain('function evaluateLatestTurn')
     expect(appJs).toContain('function prepareEvaluationMaterialFromState')
     expect(appJs).toContain("fetch('/api/evaluation-material'")
@@ -297,12 +342,14 @@ describe('frontend layout', () => {
     expect(appJs).toContain('evaluationTarget: normalizeEvaluationTarget(state.evaluationTarget)')
     expect(appJs).toContain("fetch('/api/evaluate-stream'")
     expect(appJs).toContain('function renderEvaluation')
+    expect(appJs).toContain('els.evaluationTargetSelect?.addEventListener')
+    expect(appJs).toContain('if (!els.evaluationTargetSelect')
     expect(serverTs).toContain("const evaluationMaterialDir = path.join(debugDir, 'evaluation-materials')")
     expect(serverTs).toContain('function writeEvaluationMaterialFile')
     expect(serverTs).toContain("url.pathname === '/api/evaluation-material'")
     expect(serverTs).toContain("url.pathname === '/api/evaluation-latest'")
     expect(serverTs).toContain("url.pathname === '/api/evaluate-stream'")
-    expect(serverTs).toContain("readPrompt('evaluator/prompt.md')")
+    expect(serverTs).toContain("renderPromptTemplate('evaluator.md'")
     expect(serverTs).toContain("stage: 'evaluator'")
     expect(serverTs).toContain('debug/evaluations/latest.json')
     expect(serverTs).toContain('function writeEvaluationDebugFile')
@@ -333,19 +380,20 @@ describe('frontend layout', () => {
     expect(serverTs).not.toContain('等待命中的后台 Narrator 预热结果。')
     expect(serverTs).not.toContain('等待命中的后台 Postprocess 预热结果。')
     expect(serverTs).not.toContain('function awaitPrewarmJob')
-    expect(serverTs).not.toContain('story-curator-needed')
     expect(appJs).not.toContain('function triggerDirectorPrewarm')
     expect(appJs).not.toContain('let prewarmController')
     expect(appJs).not.toContain('let prewarmEpoch')
     expect(appJs).not.toContain('function nextPrewarmEpoch')
     expect(appJs).not.toContain('function cancelClientPrewarm')
     expect(appJs).not.toContain("fetch('/api/prewarm-cancel'")
-    expect(appJs).toContain('function ensureMultiPersonStatusPanelSchema')
-    expect(appJs).toContain('function ensurePlayerStatusPanelForPrompt')
+    expect(appJs).toContain('function normalizeStatusSchema')
+    expect(appJs).toContain('function normalizeStatusRoster')
     expect(appJs).toContain('multiCharacterStatusMigration')
-    expect(appJs).toContain('state.statusPanelSchema = ensureSpatialStatusPanelSchema(statusPanelSchema')
+    expect(appJs).toContain('state.statusSchema = normalizeStatusSchema(payload.statusSchema)')
+    expect(appJs).toContain('state.statusRoster = normalizeStatusRoster(payload.statusRoster, state.characters)')
+    expect(appJs).toContain('state.statusState = normalizeStatusState(payload.statusState, state.statusRoster, state.characters)')
     expect(appJs).toContain('function buildRecentTurnsForRequest')
-    expect(appJs).toContain('withoutPendingUser.slice(-12)')
+    expect(appJs).toContain('withoutPendingUser.slice(-6)')
     expect(appJs).not.toContain('Next Turn Prewarm')
     expect(appJs).not.toContain("fetch('/api/director-prewarm'")
     expect(appJs).toContain('Narrator')
@@ -354,7 +402,7 @@ describe('frontend layout', () => {
 
   it('keeps current plot as the latest turn instead of accumulating history', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
-    const postprocessPrompt = fs.readFileSync(path.join(process.cwd(), 'prompts/postprocess/prompt.md'), 'utf-8')
+    const postprocessPrompt = fs.readFileSync(path.join(process.cwd(), 'prompts/postprocess.md'), 'utf-8')
     const serverTs = fs.readFileSync(path.join(process.cwd(), 'scripts/web-server.ts'), 'utf-8')
 
     expect(appJs).toContain('const currentPlot = state.outline || state.currentSituation')
@@ -366,9 +414,10 @@ describe('frontend layout', () => {
     expect(appJs).toContain('globalContext: cleanHistoricalGlobalContext(String(raw?.globalContext || \'\'))')
     expect(appJs).toContain('state.globalContext = cleanHistoricalGlobalContext(state.globalContext)')
     expect(appJs).toContain('return text && !isStoryMetadataLine(text)')
-    expect(appJs).toContain('故事导演风格|故事叙事风格|当前物理环境|当前物理环境禁止')
+    expect(appJs).toContain('故事导演风格|故事叙事风格')
     expect(postprocessPrompt).toContain('"turnSummary"')
-    expect(postprocessPrompt).toContain('它会被程序追加进历史总结')
+    expect(postprocessPrompt).toContain('10-35 字')
+    expect(postprocessPrompt).toContain('只记本轮一个最关键已发生事实')
     expect(serverTs).toContain('normalizeTurnSummary(postprocess.json.turnSummary, finalText)')
     expect(serverTs).not.toContain('deriveTurnSummaryFromDirectorPlan')
     expect(appJs).not.toContain('payload.outlinePatch')
@@ -376,76 +425,67 @@ describe('frontend layout', () => {
     expect(appJs).not.toContain('appendBulletText(state.outline, payload.outlinePatch')
   })
 
-  it('persists writing quality feedback as a disposable next-turn constraint', () => {
+  it('keeps writing quality feedback as a five-turn control memory', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
-    expect(appJs).toContain("qualityFeedback: ''")
-    expect(appJs).toContain('qualityFeedback: state.qualityFeedback')
-    expect(appJs).toContain('state.qualityFeedback = String(payload.qualityFeedback || \'\').trim()')
+    expect(appJs).toContain('feedbackMemory: []')
+    expect(appJs).toContain('function mergeFeedbackMemory')
+    expect(appJs).toContain('ttl: 5')
+    expect(appJs).toContain('item.ttl - 1')
+    expect(appJs).toContain('feedbackText: renderFeedbackMemory()')
+    expect(appJs).toContain('state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)')
+    expect(appJs).not.toContain('state.feedbackMemory = renderFeedbackMemory(state.feedbackMemory)')
     expect(appJs).toContain("renderTrackerSection('写作负反馈'")
     expect(appJs).not.toContain('logicGuidance')
     expect(appJs).not.toContain("renderTrackerSection('逻辑提醒'")
     expect(appJs).not.toContain('characterUpdates: state.characterUpdates')
   })
 
-  it('tracks only current physical environment constraints', () => {
+  it('does not keep a separate physical environment state lane', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
-    expect(appJs).toContain('function renderPhysicalEnvironment')
-    expect(appJs).toContain('currentPhysicalEnvironment')
-    expect(appJs).toContain('currentPhysicalEnvironmentForbidden')
-    expect(appJs).not.toContain('jumptonextphysicalscene')
-    expect(appJs).not.toContain('physicalTransitionRule:')
-    expect(appJs).not.toContain('physicalTransitionText:')
-    expect(appJs).not.toContain('physicalSceneSkip:')
-    expect(appJs).not.toContain('jumpToNextPhysicalScene')
-    expect(appJs).toContain('currentPhysicalEnvironment: state.currentPhysicalEnvironment')
-    expect(appJs).toContain('state.currentPhysicalEnvironment = String(payload.currentPhysicalEnvironment')
-    expect(appJs).toContain("renderTrackerSection('当前物理环境'")
+    expect(appJs).not.toContain('function renderPhysicalEnvironment')
+    expect(appJs).not.toContain('currentPhysicalEnvironment')
+    expect(appJs).not.toContain('currentPhysicalEnvironmentForbidden')
+    expect(appJs).not.toContain("renderTrackerSection('当前物理环境'")
     expect(appJs).not.toContain('plotState')
     expect(appJs).not.toContain('function defaultPlotState')
     expect(appJs).not.toContain('function normalizePlotState')
     expect(appJs).not.toContain('function renderPlotState')
-    expect(appJs).not.toContain('nextPlot')
-    expect(appJs).not.toContain('currentPlotForbidden')
-    expect(appJs).not.toContain('allowedTransitions')
-    expect(appJs).not.toContain('phaseTransition')
+    expect(appJs).not.toContain('jumpToNextPhysicalScene')
   })
 
   it('shows long arc instead of round-based future outline', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
-    expect(appJs).toContain("renderTrackerSection('当前长期剧情'")
-    expect(appJs).toContain('暂无当前长期剧情')
-    expect(appJs).toContain("story.longRangeOutline = ''")
+    expect(appJs).toContain("renderTrackerSection('当前剧情目标'")
+    expect(appJs).toContain('暂无当前剧情目标')
+    expect(appJs).toContain("story.longRangeOutline = String(init.longRangeOutline || '')")
     expect(appJs).not.toContain("missing.push('longRangeOutline')")
     expect(appJs).not.toContain('formatDirectorLongRange')
     expect(appJs).not.toContain('longRangeUpdate')
     expect(appJs).toContain('state.longRangeOutline = payload.longRangeOutline.trim()')
   })
 
-  it('tracks foreshadow payoff status instead of keeping every clue active', () => {
+  it('does not keep a separate foreshadow queue', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
     const serverTs = fs.readFileSync(path.join(process.cwd(), 'scripts/web-server.ts'), 'utf-8')
 
-    expect(appJs).toContain('foreshadowStatusLabel')
-    expect(appJs).toContain('function mergeForeshadowRecords')
-    expect(appJs).toContain("if (type === 'payoff' || type === 'drop')")
-    expect(appJs).toContain('function isSimilarForeshadow')
-    expect(appJs).toContain('age <= 8')
-    expect(appJs).toContain('foreshadowRecords: state.foreshadowRecords')
-    expect(serverTs).toContain('renderForeshadowContext')
-    expect(serverTs).toContain('到期：优先payoff/drop')
-    expect(serverTs).toContain("block('当前伏笔'")
+    expect(appJs).not.toContain('foreshadowRecords')
+    expect(appJs).not.toContain('function mergeForeshadowRecords')
+    expect(appJs).not.toContain('function isSimilarForeshadow')
+    expect(serverTs).not.toContain('renderForeshadowContext')
+    expect(serverTs).not.toContain('foreshadowRecords')
+    expect(serverTs).not.toContain('foreshadows:')
   })
 
-  it('renders status panel as fields instead of raw JSON code', () => {
+  it('renders status panel as raw JSON', () => {
     const appJs = fs.readFileSync(path.join(process.cwd(), 'web/app.js'), 'utf-8')
 
-    expect(appJs).toContain('function renderStatusPanelBody')
-    expect(appJs).toContain('function tryParseJsonStatusPanel')
-    expect(appJs).toContain('status-field')
-    expect(appJs).not.toContain('<pre>${escapeHtml(body)}</pre>')
+    expect(appJs).toContain('<pre class="status-json">${escapeHtml(JSON.stringify(state.statusState || {}, null, 2))}</pre>')
+    expect(appJs).not.toContain('function renderStatusPanelBody')
+    expect(appJs).not.toContain('function tryParseJsonStatusPanel')
+    expect(appJs).not.toContain('function renderStatusField')
   })
 
   it('exposes official V4 Pro, official V4 Flash, and Fireworks Priority models', () => {
@@ -461,9 +501,10 @@ describe('frontend layout', () => {
     expect(html).not.toContain('value="accounts/fireworks/models/deepseek-v4-pro"')
     expect(appJs).toContain('fireworksApiKeyStorageKey')
     expect(appJs).toContain('fireworksDeepSeekV4ProPriorityModel')
+    expect(appJs).not.toContain("const fireworksDeepSeekV4ProModel")
     expect(appJs).toContain('officialDeepSeekV4FlashModel')
     expect(appJs).toContain('V4 Flash Official')
-    expect(appJs).toContain('const defaultModel = fireworksDeepSeekV4ProPriorityModel')
+    expect(appJs).toContain('const defaultModel = officialDeepSeekV4FlashModel')
     expect(appJs).toContain('Fireworks')
     expect(appJs).toContain('api.fireworks.ai/inference/v1')
     expect(appJs).not.toContain('googleApiKeyStorageKey')

@@ -10,7 +10,7 @@ describe('provider routing', () => {
   it('allows official DeepSeek V4 Pro, official V4 Flash, and Fireworks Priority by default', () => {
     const source = readServerSource()
 
-    expect(source).toContain("const defaultModel = fireworksDeepSeekV4ProPriorityModel")
+    expect(source).toContain("const defaultModel = officialDeepSeekV4FlashModel")
     expect(source).toContain("officialDeepSeekV4ProModel")
     expect(source).toContain("officialDeepSeekV4FlashModel")
     expect(source).toContain("fireworksDeepSeekV4ProPriorityModel")
@@ -39,6 +39,10 @@ describe('provider routing', () => {
     expect(source).toContain('choices?: Array<{ message?: { content?: string } }>')
     expect(source).toContain('const raw = payload.choices?.[0]?.message?.content?.trim()')
     expect(source).toContain('service_tier')
+    expect(source).toContain("service_tier: 'priority'")
+    expect(source).toContain('fireworksDeepSeekV4ProRequestModel')
+    expect(source).not.toContain('function fireworksRequestModel')
+    expect(source).not.toContain('function fireworksServiceTier')
     expect(source).toContain('x-session-affinity')
     expect(source).not.toContain('const streamed = await readFireworksStream')
     expect(source).not.toContain('FIREWORKS_STREAM_IDLE_TIMEOUT_MS')
@@ -80,6 +84,15 @@ describe('provider routing', () => {
     expect(source).toContain('requestModelContent(apiKey')
     expect(source).toContain('ProviderTest')
     expect(source).toContain('12_000')
+  })
+
+  it('keeps request types compact through a shared pipeline context', () => {
+    const source = readServerSource()
+
+    expect(source).toContain('interface PipelineContext')
+    expect(source).toContain('interface GenerateRequest extends PipelineContext')
+    expect(source).toContain('interface PostprocessRequest extends PipelineContext')
+    expect(source).toContain('interface EvaluationRequest extends PostprocessRequest')
   })
 
   it('bounds director calls so regeneration cannot hang forever', () => {

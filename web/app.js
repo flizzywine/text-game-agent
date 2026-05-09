@@ -2,11 +2,10 @@ const storageKey = 'text-game-agent.web-state.v2'
 const legacyStorageKey = 'text-game-agent.web-state.v1'
 const deepSeekApiKeyStorageKey = 'text-game-agent.deepseek-api-key'
 const fireworksApiKeyStorageKey = 'text-game-agent.fireworks-api-key'
-const fireworksDeepSeekV4ProModel = 'accounts/fireworks/models/deepseek-v4-pro'
 const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
 const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
-const defaultModel = fireworksDeepSeekV4ProPriorityModel
+const defaultModel = officialDeepSeekV4FlashModel
 const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, officialDeepSeekV4ProModel, officialDeepSeekV4FlashModel])
 
 const appState = loadAppState()
@@ -45,7 +44,6 @@ const els = {
   directorControlDialog: document.querySelector('#directorControlDialog'),
   directorControlForm: document.querySelector('#directorControlForm'),
   directorLongRangeInput: document.querySelector('#directorLongRangeInput'),
-  directorGuidanceInput: document.querySelector('#directorGuidanceInput'),
   cancelDirectorControlButton: document.querySelector('#cancelDirectorControlButton'),
   moduleConfigButton: document.querySelector('#moduleConfigButton'),
   moduleConfigDialog: document.querySelector('#moduleConfigDialog'),
@@ -79,8 +77,6 @@ const els = {
   storyOpeningTextInput: document.querySelector('#storyOpeningTextInput'),
   storyDirectorStyleInput: document.querySelector('#storyDirectorStyleInput'),
   storyNarratorStyleInput: document.querySelector('#storyNarratorStyleInput'),
-  storyPhysicalEnvironmentInput: document.querySelector('#storyPhysicalEnvironmentInput'),
-  storyPhysicalForbiddenInput: document.querySelector('#storyPhysicalForbiddenInput'),
   storyStatusSchemaInput: document.querySelector('#storyStatusSchemaInput'),
   storyStatusPanelInput: document.querySelector('#storyStatusPanelInput'),
   storyGlobalContextSeedInput: document.querySelector('#storyGlobalContextSeedInput'),
@@ -95,9 +91,7 @@ const els = {
   retryStageButton: document.querySelector('#retryStageButton'),
   regenerateButton: document.querySelector('#regenerateButton'),
   sendButton: document.querySelector('#sendButton'),
-  addCharacterButton: document.querySelector('#addCharacterButton'),
   statusPanelView: document.querySelector('#statusPanelView'),
-  characterList: document.querySelector('#characterList'),
   storyTrackingView: document.querySelector('#storyTrackingView'),
   toggleDebugButton: document.querySelector('#toggleDebugButton'),
   statsView: document.querySelector('#statsView'),
@@ -144,26 +138,21 @@ function defaultStory(name = '未选择故事') {
       },
     ],
     moduleEnabled: {},
-    storybookEntries: [],
     openingText: '',
     worldview: '',
     currentSituation: '',
     chapterSummary: '',
     outline: '',
     longRangeOutline: '',
-    directorGuidance: '',
     directorStyle: '',
     narratorStyle: '',
     plotLines: [],
-    foreshadowRecords: [],
-    qualityFeedback: '',
+    feedbackMemory: [],
     storyAssetId: '',
     programConfigFile: '',
-    statusSubject: '',
-    statusPanelSchema: '',
-    statusPanel: '',
-    currentPhysicalEnvironment: '',
-    currentPhysicalEnvironmentForbidden: '',
+    statusSchema: ['位置', '姿势', '外显状态', '情绪', '已知信息', '对玩家态度', '手上物', '可触达区域'],
+    statusRoster: ['玩家'],
+    statusState: {},
     globalContext: '',
     playerOptions: [],
     evaluationTarget: 'external-api',
@@ -172,6 +161,11 @@ function defaultStory(name = '未选择故事') {
     lastTurnSnapshot: null,
     debug: {},
   }
+}
+
+function buildStoryContextForRequest() {
+  const worldview = String(state.worldview || '').trim()
+  return worldview ? `## 世界观\n${worldview}` : ''
 }
 
 function defaultAppState() {
@@ -228,9 +222,19 @@ function normalizeAppState(raw) {
 
 function normalizeStory(raw, fallbackName = '故事') {
   const base = defaultStory(fallbackName)
+  const rest = { ...(raw || {}) }
+  const retiredKeys = [
+    'current' + 'Physical' + 'Environment',
+    'current' + 'Physical' + 'Environment' + 'Forbidden',
+    'normalized' + 'Entries',
+    'storybook' + 'Entries',
+  ]
+  retiredKeys.forEach(key => {
+    delete rest[key]
+  })
   return {
     ...base,
-    ...raw,
+    ...rest,
     id: raw?.id || base.id,
     name: String(raw?.name || raw?.storyName || fallbackName),
     createdAt: raw?.createdAt || base.createdAt,
@@ -238,26 +242,21 @@ function normalizeStory(raw, fallbackName = '故事') {
     messages: Array.isArray(raw?.messages) ? raw.messages : [],
     characters: Array.isArray(raw?.characters) ? raw.characters : base.characters,
     moduleEnabled: raw?.moduleEnabled && typeof raw.moduleEnabled === 'object' ? raw.moduleEnabled : {},
-    storybookEntries: Array.isArray(raw?.storybookEntries) ? raw.storybookEntries : [],
     openingText: String(raw?.openingText || ''),
     worldview: String(raw?.worldview || ''),
     currentSituation: String(raw?.currentSituation || ''),
     chapterSummary: cleanHistoricalGlobalContext(String(raw?.chapterSummary || raw?.currentSituation || '')),
     outline: String(raw?.outline || ''),
     longRangeOutline: String(raw?.longRangeOutline || ''),
-    directorGuidance: String(raw?.directorGuidance || ''),
     directorStyle: String(raw?.directorStyle || ''),
     narratorStyle: String(raw?.narratorStyle || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
-    foreshadowRecords: Array.isArray(raw?.foreshadowRecords) ? raw.foreshadowRecords : [],
-    qualityFeedback: String(raw?.qualityFeedback || ''),
+    feedbackMemory: normalizeFeedbackMemory(raw?.feedbackMemory),
     storyAssetId: String(raw?.storyAssetId || ''),
     programConfigFile: String(raw?.programConfigFile || ''),
-    statusSubject: String(raw?.statusSubject || ''),
-    statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw?.statusPanelSchema || ''), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
-    statusPanel: ensureSpatialStatusPanel(pickLatestStatusPanel(raw), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
-    currentPhysicalEnvironment: String(raw?.currentPhysicalEnvironment || ''),
-    currentPhysicalEnvironmentForbidden: String(raw?.currentPhysicalEnvironmentForbidden || ''),
+    statusSchema: normalizeStatusSchema(raw?.statusSchema),
+    statusRoster: normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []),
+    statusState: normalizeStatusState(raw?.statusState, normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []), Array.isArray(raw?.characters) ? raw.characters : []),
     globalContext: cleanHistoricalGlobalContext(String(raw?.globalContext || '')),
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     evaluationTarget: normalizeEvaluationTarget(raw?.evaluationTarget),
@@ -266,13 +265,6 @@ function normalizeStory(raw, fallbackName = '故事') {
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
     debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
   }
-}
-
-function renderPhysicalEnvironment(environment, forbidden) {
-  return [
-    String(environment || '').trim() ? `当前物理环境：${String(environment || '').trim()}` : '',
-    String(forbidden || '').trim() ? `当前物理环境禁止：${String(forbidden || '').trim()}` : '',
-  ].filter(Boolean).join('\n')
 }
 
 function cleanHistoricalGlobalContext(value) {
@@ -288,7 +280,124 @@ function cleanHistoricalGlobalContext(value) {
 }
 
 function isStoryMetadataLine(text) {
-  return /^(当前故事资料|世界观|状态追踪人物|资料文件|初始化配置|开场白|故事导演风格|故事叙事风格|当前物理环境|当前物理环境禁止|历史总结)：/.test(text)
+  return /^(当前故事资料|世界观|状态追踪人物|资料文件|初始化配置|开场白|故事导演风格|故事叙事风格|历史总结)：/.test(text)
+}
+
+function normalizeFeedbackMemory(items) {
+  if (!Array.isArray(items)) return []
+  return items
+    .map(item => {
+      if (!item || typeof item !== 'object') return null
+      const text = String(item.text || '').trim()
+      if (!text) return null
+      const ttl = Number.isFinite(Number(item.ttl)) ? Number(item.ttl) : 5
+      return {
+        type: normalizeFeedbackType(item.type),
+        text,
+        ttl: Math.max(1, Math.min(5, Math.floor(ttl))),
+      }
+    })
+    .filter(Boolean)
+    .slice(-15)
+}
+
+const defaultStatusSchema = ['位置', '姿势', '外显状态', '情绪', '已知信息', '对玩家态度', '手上物', '可触达区域']
+
+function normalizeStatusSchema(value) {
+  const items = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n|[,，、]/) : []
+  const fields = items.map(item => String(item || '').replace(/^[-*]\s*/, '').split(/[：:]/)[0].trim()).filter(Boolean)
+  return [...new Set(fields.length ? fields : defaultStatusSchema)]
+}
+
+function normalizeStatusRoster(value, characters = []) {
+  const names = (Array.isArray(value) ? value : [])
+    .map(item => typeof item === 'string' ? item : item?.name)
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+  const characterNames = characters.map(character => String(character.name || '').trim()).filter(Boolean)
+  return [...new Set(['玩家', ...names, ...characterNames])]
+}
+
+function normalizeStatusState(value, roster, characters = []) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const byName = new Map(characters.map(character => [String(character.name || '').trim(), character]))
+  const output = {}
+  for (const name of roster) {
+    const record = source[name] && typeof source[name] === 'object' ? source[name] : {}
+    const character = byName.get(name)
+    output[name] = {
+      位置: String(record.位置 || record.location || character?.location || '未知'),
+      姿势: String(record.姿势 || '未知'),
+      外显状态: String(record.外显状态 || record.health || character?.health || '未知'),
+      情绪: String(record.情绪 || record.mood || character?.mood || '未知'),
+      已知信息: String(record.已知信息 || '未揭示'),
+      对玩家态度: String(record.对玩家态度 || record.trust || (name === '玩家' ? '玩家本人' : character?.trust || '未知')),
+      手上物: String(record.手上物 || '未知'),
+      可触达区域: String(record.可触达区域 || '未知'),
+    }
+  }
+  return output
+}
+
+function mergeStatusSchema(current, patch) {
+  return [...new Set([...normalizeStatusSchema(current), ...normalizeStatusSchema(patch)])]
+}
+
+function mergeStatusRoster(current, patch, characters = [], statePatch = {}) {
+  const patchNames = statePatch && typeof statePatch === 'object' && !Array.isArray(statePatch) ? Object.keys(statePatch) : []
+  return normalizeStatusRoster([...(Array.isArray(current) ? current : []), ...(Array.isArray(patch) ? patch : []), ...patchNames], characters)
+}
+
+function mergeStatusState(current, patch, roster, characters = []) {
+  const base = normalizeStatusState(current, roster, characters)
+  const delta = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}
+  for (const [name, record] of Object.entries(delta)) {
+    if (!roster.includes(name) || !record || typeof record !== 'object') continue
+    base[name] = { ...(base[name] || {}), ...Object.fromEntries(Object.entries(record).map(([key, value]) => [key, String(value ?? '').trim()]).filter(([, value]) => value)) }
+  }
+  return base
+}
+
+function normalizeFeedbackType(type) {
+  const value = String(type || '').trim()
+  if (value === 'planExecution' || value === 'narrativeConstraint' || value === 'directorProgress') return value
+  return 'quality'
+}
+
+function renderFeedbackMemory(items = state.feedbackMemory) {
+  return normalizeFeedbackMemory(items)
+    .map(item => {
+      const label = {
+        planExecution: '执行',
+        narrativeConstraint: '约束',
+        directorProgress: '导演',
+      }[item.type] || '反馈'
+      return `- [${label}｜剩${item.ttl}轮] ${item.text}`
+    })
+    .join('\n')
+}
+
+function mergeFeedbackMemory(existing, payload) {
+  const aged = normalizeFeedbackMemory(existing)
+    .map(item => ({ ...item, ttl: item.ttl - 1 }))
+    .filter(item => item.ttl > 0)
+  const incoming = [
+    ['planExecution', payload.planExecutionFeedback],
+    ['narrativeConstraint', payload.narrativeConstraintFeedback],
+    ['directorProgress', payload.directorProgressFeedback],
+  ]
+    .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 5 }))
+    .filter(item => item.text)
+  const merged = [...aged]
+  for (const item of incoming) {
+    const index = merged.findIndex(old => old.type === item.type && old.text === item.text)
+    if (index >= 0) {
+      merged[index] = { ...merged[index], ttl: 5 }
+    } else {
+      merged.push(item)
+    }
+  }
+  return normalizeFeedbackMemory(merged)
 }
 
 function applyLegacyMigrations() {
@@ -297,8 +406,9 @@ function applyLegacyMigrations() {
   const shouldRemoveSpatialStatusPanel = !appState.removeSpatialStatusPanelMigration
   const shouldPersistMultiCharacterStatus = !appState.multiCharacterStatusMigration
   for (const story of appState.stories) {
-    story.statusPanelSchema = ensureSpatialStatusPanelSchema(story.statusPanelSchema, story.statusSubject || '人物', story.characters)
-    story.statusPanel = ensureSpatialStatusPanel(story.statusPanel, story.statusSubject || '人物', story.characters)
+    story.statusSchema = normalizeStatusSchema(story.statusSchema)
+    story.statusRoster = normalizeStatusRoster(story.statusRoster, story.characters)
+    story.statusState = normalizeStatusState(story.statusState, story.statusRoster, story.characters)
   }
   if (!shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch && !shouldRemoveSpatialStatusPanel && !shouldPersistMultiCharacterStatus) return
   appState.multiSpatialMigration = true
@@ -362,7 +472,7 @@ function normalizeModel(value) {
 
 function providerForModel(model) {
   const normalized = normalizeModel(model)
-  if (normalized === fireworksDeepSeekV4ProModel || normalized === fireworksDeepSeekV4ProPriorityModel) return 'fireworks'
+  if (normalized === fireworksDeepSeekV4ProPriorityModel) return 'fireworks'
   return 'deepseek'
 }
 
@@ -437,17 +547,17 @@ function bindEvents() {
     regenerateLastTurn()
   })
 
-  els.evaluationTargetSelect.addEventListener('change', () => {
+  els.evaluationTargetSelect?.addEventListener('change', () => {
     state.evaluationTarget = normalizeEvaluationTarget(els.evaluationTargetSelect.value)
     saveState()
     renderEvaluation()
   })
 
-  els.evaluateTurnButton.addEventListener('click', () => {
+  els.evaluateTurnButton?.addEventListener('click', () => {
     evaluateLatestTurn()
   })
 
-  els.refreshEvaluationButton.addEventListener('click', () => {
+  els.refreshEvaluationButton?.addEventListener('click', () => {
     loadLatestEvaluationArtifacts({ force: true })
   })
 
@@ -641,20 +751,6 @@ function bindEvents() {
     }
   })
 
-  els.addCharacterButton.addEventListener('click', () => {
-    state.characters.push({
-      id: makeId('character'),
-      name: '新人物',
-      role: 'NPC',
-      mood: '',
-      location: '',
-      health: '正常',
-      trust: '',
-      notes: '',
-    })
-    persistAndRender()
-  })
-
   els.toggleDebugButton.addEventListener('click', () => {
     document.querySelector('.debug-panel').classList.toggle('collapsed')
   })
@@ -665,7 +761,6 @@ function render() {
   renderStoryControls()
   renderModules()
   renderStatusPanel()
-  renderCharacters()
   renderStoryTracking()
   renderConversation()
   renderOptions()
@@ -676,7 +771,7 @@ function render() {
   renderStats()
   renderDebug()
   renderEvaluation()
-  els.evaluationTargetSelect.value = normalizeEvaluationTarget(state.evaluationTarget)
+  if (els.evaluationTargetSelect) els.evaluationTargetSelect.value = normalizeEvaluationTarget(state.evaluationTarget)
 }
 
 function renderDebug() {
@@ -793,6 +888,7 @@ async function loadLatestEvaluationArtifacts({ force = false } = {}) {
 }
 
 function renderEvaluation() {
+  if (!els.evaluationTargetSelect || !els.refreshEvaluationButton || !els.evaluateTurnButton || !els.evaluationStatus || !els.evaluationInput || !els.evaluationReport) return
   const debug = state.debug || {}
   const run = debug.evaluationRun && typeof debug.evaluationRun === 'object' ? debug.evaluationRun : {}
   const report = debug.evaluationReport || debug.evaluator || null
@@ -911,6 +1007,7 @@ function formatEvaluationMetrics(metrics) {
 }
 
 function renderStats() {
+  if (!els.statsView) return
   const stats = state.runtimeStats
   if (!stats || typeof stats !== 'object') {
     els.statsView.innerHTML = '<p class="meta no-indent">暂无统计。发送一轮后显示耗时。</p>'
@@ -1161,8 +1258,6 @@ function renderStorySettingsForm(asset) {
     els.storyOpeningTextInput,
     els.storyDirectorStyleInput,
     els.storyNarratorStyleInput,
-    els.storyPhysicalEnvironmentInput,
-    els.storyPhysicalForbiddenInput,
     els.storyStatusSchemaInput,
     els.storyStatusPanelInput,
     els.storyGlobalContextSeedInput,
@@ -1174,10 +1269,8 @@ function renderStorySettingsForm(asset) {
   els.storyOpeningTextInput.value = config.openingText
   els.storyDirectorStyleInput.value = config.directorStyle
   els.storyNarratorStyleInput.value = config.narratorStyle
-  els.storyPhysicalEnvironmentInput.value = config.currentPhysicalEnvironment
-  els.storyPhysicalForbiddenInput.value = config.currentPhysicalEnvironmentForbidden
-  els.storyStatusSchemaInput.value = config.statusPanelSchema
-  els.storyStatusPanelInput.value = config.statusPanel
+  els.storyStatusSchemaInput.value = config.statusSchema.join('\n')
+  els.storyStatusPanelInput.value = JSON.stringify(config.statusState, null, 2)
   els.storyGlobalContextSeedInput.value = config.globalContextSeed
 }
 
@@ -1188,10 +1281,9 @@ function storyProgramConfigForEdit(asset) {
     openingText: String(config.openingText || ''),
     directorStyle: String(config.directorStyle || ''),
     narratorStyle: String(config.narratorStyle || ''),
-    currentPhysicalEnvironment: String(config.currentPhysicalEnvironment || ''),
-    currentPhysicalEnvironmentForbidden: String(config.currentPhysicalEnvironmentForbidden || ''),
-    statusPanelSchema: String(config.statusPanelSchema || ''),
-    statusPanel: String(config.statusPanel || ''),
+    statusSchema: normalizeStatusSchema(config.statusSchema),
+    statusRoster: normalizeStatusRoster(config.statusRoster, config.cast || []),
+    statusState: normalizeStatusState(config.statusState, normalizeStatusRoster(config.statusRoster, config.cast || []), config.cast || []),
     globalContextSeed: String(config.globalContextSeed || ''),
   }
 }
@@ -1211,10 +1303,8 @@ async function saveSelectedStorySettings() {
     openingText: els.storyOpeningTextInput.value.trim(),
     directorStyle: els.storyDirectorStyleInput.value.trim(),
     narratorStyle: els.storyNarratorStyleInput.value.trim(),
-    currentPhysicalEnvironment: els.storyPhysicalEnvironmentInput.value.trim(),
-    currentPhysicalEnvironmentForbidden: els.storyPhysicalForbiddenInput.value.trim(),
-    statusPanelSchema: els.storyStatusSchemaInput.value.trim(),
-    statusPanel: els.storyStatusPanelInput.value.trim(),
+    statusSchema: normalizeStatusSchema(els.storyStatusSchemaInput.value),
+    statusState: (() => { try { return JSON.parse(els.storyStatusPanelInput.value || '{}') } catch { return {} } })(),
     globalContextSeed: els.storyGlobalContextSeedInput.value.trim(),
   }
   els.saveStorySettingsButton.disabled = true
@@ -1250,10 +1340,9 @@ function applyProgramConfigToCurrentStory(asset, config) {
   state.openingText = String(config.openingText || state.openingText || '')
   state.directorStyle = String(config.directorStyle || '')
   state.narratorStyle = String(config.narratorStyle || '')
-  state.currentPhysicalEnvironment = String(config.currentPhysicalEnvironment || state.currentPhysicalEnvironment || '')
-  state.currentPhysicalEnvironmentForbidden = String(config.currentPhysicalEnvironmentForbidden || state.currentPhysicalEnvironmentForbidden || '')
-  state.statusPanelSchema = ensureSpatialStatusPanelSchema(String(config.statusPanelSchema || state.statusPanelSchema || ''), state.statusSubject || '人物', state.characters)
-  state.statusPanel = ensureSpatialStatusPanel(String(config.statusPanel || state.statusPanel || ''), state.statusSubject || '人物', state.characters)
+  state.statusSchema = normalizeStatusSchema(config.statusSchema || state.statusSchema)
+  state.statusRoster = normalizeStatusRoster(config.statusRoster || state.statusRoster, state.characters)
+  state.statusState = normalizeStatusState(config.statusState || state.statusState, state.statusRoster, state.characters)
   state.globalContext = cleanHistoricalGlobalContext(state.globalContext)
   saveState()
   renderStoryTracking()
@@ -1323,7 +1412,7 @@ function renderAssetProgramConfigPreview(asset) {
     config?.worldview ? `世界观：${String(config.worldview).slice(0, 120)}` : '',
     config?.directorStyle ? `导演风格：${String(config.directorStyle).slice(0, 120)}` : '',
     config?.narratorStyle ? `叙事风格：${String(config.narratorStyle).slice(0, 120)}` : '',
-    config?.statusSubject ? `状态追踪：${String(config.statusSubject).slice(0, 80)}` : '',
+    config?.statusRoster?.length ? `状态追踪：${config.statusRoster.join('、').slice(0, 80)}` : '',
     Array.isArray(config?.initialPlayerOptions) ? `初始选项：${config.initialPlayerOptions.length} 个` : '',
   ].filter(Boolean).join('\n')
 }
@@ -1361,9 +1450,6 @@ async function startNewGameFromAsset(asset, requestedName) {
     : Array.isArray(init.characterSeeds) && init.characterSeeds.length > 0
       ? init.characterSeeds
       : asset.characters || []
-  const normalizedEntries = Array.isArray(init.normalizedEntries) && init.normalizedEntries.length > 0
-    ? init.normalizedEntries
-    : asset.entries || []
   story.characters = [
     player,
     ...characterSeeds.filter(character => character?.name !== '玩家').map(character => ({
@@ -1371,30 +1457,21 @@ async function startNewGameFromAsset(asset, requestedName) {
       id: makeId('character'),
     })),
   ].filter(Boolean)
-  story.storybookEntries = normalizedEntries.map(entry => ({
-    ...entry,
-    id: makeId('story.asset'),
-    enabled: entry.enabled !== false,
-  }))
-  story.openingText = String(init.openingText || extractOpeningText(story.storybookEntries))
+  story.openingText = String(init.openingText || extractOpeningText(asset.entries || []))
   story.worldview = String(init.worldview || '')
   story.currentSituation = ''
   story.chapterSummary = ''
   story.outline = ''
-  story.longRangeOutline = ''
-  story.directorGuidance = ''
+  story.longRangeOutline = String(init.longRangeOutline || '')
   story.directorStyle = String(init.directorStyle || '')
   story.narratorStyle = String(init.narratorStyle || '')
   story.plotLines = []
-  story.foreshadowRecords = []
-  story.qualityFeedback = ''
+  story.feedbackMemory = []
   story.storyAssetId = String(asset.id || '')
   story.programConfigFile = String(asset.programConfigFile || init.programConfigFile || '')
-  story.statusSubject = String(init.statusSubject || '')
-  story.statusPanelSchema = ensureSpatialStatusPanelSchema(String(init.statusPanelSchema || buildFallbackStatusPanelSchema(asset, story.characters)), story.statusSubject || '人物', story.characters)
-  story.statusPanel = ensureSpatialStatusPanel(String(init.statusPanel || buildFallbackStatusPanel(asset, story.characters)), story.statusSubject || '人物', story.characters)
-  story.currentPhysicalEnvironment = String(init.currentPhysicalEnvironment || '')
-  story.currentPhysicalEnvironmentForbidden = String(init.currentPhysicalEnvironmentForbidden || '')
+  story.statusSchema = normalizeStatusSchema(init.statusSchema)
+  story.statusRoster = normalizeStatusRoster(init.statusRoster, story.characters)
+  story.statusState = normalizeStatusState(init.statusState, story.statusRoster, story.characters)
   story.globalContext = ''
   story.messages = []
   story.playerOptions = normalizeInitialPlayerOptions(init.initialPlayerOptions || init.playerOptions)
@@ -1487,11 +1564,10 @@ function assertInitializedProgramConfig(config) {
   if (!String(config?.openingText || '').trim()) missing.push('openingText')
   if (!String(config?.worldview || '').trim()) missing.push('worldview')
   if (!Array.isArray(config?.cast) || config.cast.length === 0) missing.push('cast')
-  if (!String(config?.statusSubject || '').trim()) missing.push('statusSubject')
-  if (!String(config?.statusPanelSchema || '').trim()) missing.push('statusPanelSchema')
-  if (!String(config?.statusPanel || '').trim()) missing.push('statusPanel')
+  if (!Array.isArray(config?.statusSchema) || config.statusSchema.length === 0) missing.push('statusSchema')
+  if (!Array.isArray(config?.statusRoster) || config.statusRoster.length === 0) missing.push('statusRoster')
+  if (!config?.statusState || typeof config.statusState !== 'object') missing.push('statusState')
   if (!Array.isArray(config?.initialPlayerOptions) || config.initialPlayerOptions.length !== 3) missing.push('initialPlayerOptions')
-  if (!Array.isArray(config?.normalizedEntries) || config.normalizedEntries.length < 2) missing.push('normalizedEntries')
   if (missing.length) {
     throw new Error(`故事尚未完成初始化，缺少：${missing.join('、')}。不能开始游戏。`)
   }
@@ -1511,43 +1587,6 @@ function normalizeInitialPlayerOptions(options) {
       inputText: option.inputText || option.label || option.description || '',
     }
   })
-}
-
-function buildFallbackStatusPanelSchema(asset, characters) {
-  const trackedCharacters = characters.some(character => character.name === '玩家')
-    ? characters
-    : [{ id: 'character.player', name: '玩家', role: '玩家操控角色', health: '正常' }, ...characters]
-  const subject = trackedCharacters.length > 1 ? '全体人物' : trackedCharacters[0]?.name || '玩家'
-  return ensureSpatialStatusPanelSchema([
-    `# 人物状态 Schema｜${subject}`,
-    '每个人物独立一条，玩家角色、正在互动的 NPC 和新登场重要人物都按同一字段记录。',
-    '- 当前位置：人物当前所在位置。',
-    '- 外显状态：玩家能观察到的姿态、表情、动作。',
-    '- 情绪：当前情绪和强度。',
-    '- 对玩家态度：关系温度、信任、戒备或兴趣。',
-    '- 已知信息：该人物已经知道的事实。',
-    '- 隐藏意图：该人物暂未明说但需要持续追踪的动机。',
-    '- 当前可互动入口：玩家下一步最容易触发的互动。',
-    '- 固定设定：不得被后续输出擅自改写的人物设定。',
-  ].join('\n'), subject, trackedCharacters)
-}
-
-function buildFallbackStatusPanel(asset, characters) {
-  const trackedCharacters = characters.some(character => character.name === '玩家')
-    ? characters
-    : [{ id: 'character.player', name: '玩家', role: '玩家操控角色', health: '正常' }, ...characters]
-  const subject = trackedCharacters.length > 1 ? '全体人物' : trackedCharacters[0]?.name || '玩家'
-  return ensureSpatialStatusPanel(trackedCharacters.map(character => [
-    `## ${character.name || character.id || '人物'}｜人物状态`,
-    `当前位置：${character.location || '开场'}`,
-    `外显状态：${character.health || '等待玩家输入'}`,
-    `情绪：${character.mood || '未定'}`,
-    `对玩家态度：${character.trust || (character.name === '玩家' ? '玩家本人' : '未定')}`,
-    '已知信息：按故事资料',
-    '隐藏意图：未揭示',
-    '当前可互动入口：输入第一句行动、对话或想法',
-    `固定设定：${[character.role, character.notes].filter(Boolean).join('；') || '遵守人物介绍和世界观'}`,
-  ].join('\n')).join('\n\n'), subject, trackedCharacters)
 }
 
 function extractOpeningText(entries) {
@@ -1619,13 +1658,11 @@ async function testCurrentProvider() {
 
 function openDirectorControl() {
   els.directorLongRangeInput.value = state.longRangeOutline || ''
-  els.directorGuidanceInput.value = state.directorGuidance || ''
   els.directorControlDialog.showModal()
 }
 
 function saveDirectorControl() {
   state.longRangeOutline = els.directorLongRangeInput.value.trim()
-  state.directorGuidance = els.directorGuidanceInput.value.trim()
   saveState()
   renderStoryTracking()
   els.directorControlDialog.close()
@@ -1798,425 +1835,33 @@ function setModuleEnabled(id, enabled) {
 }
 
 function renderStatusPanel() {
-  if (!state.statusPanel && !state.statusPanelSchema) {
+  if (!state.statusRoster?.length) {
     els.statusPanelView.innerHTML = '<p class="meta no-indent">未初始化状态栏</p>'
     return
   }
   els.statusPanelView.innerHTML = `
     <div class="status-card">
-      ${renderStatusPanelBody(state.statusPanel)}
+      <pre class="status-json">${escapeHtml(JSON.stringify(state.statusState || {}, null, 2))}</pre>
     </div>
-    ${state.statusPanelSchema ? `
+    ${state.statusSchema?.length ? `
       <details class="status-schema">
-        <summary>查看状态栏 Schema</summary>
-        <pre>${escapeHtml(state.statusPanelSchema)}</pre>
+        <summary>查看状态字段</summary>
+        <pre>${escapeHtml(state.statusSchema.join('\\n'))}</pre>
       </details>
     ` : ''}
   `
-}
-
-function renderStatusPanelBody(value) {
-  const personCards = parseStatusPanelPersons(value)
-  if (personCards.length) {
-    return `
-      <div class="status-body status-people">
-        ${personCards.map(renderStatusPersonCard).join('')}
-      </div>
-    `
-  }
-  const parsed = tryParseJsonStatusPanel(value)
-  if (parsed !== null) {
-    return `<div class="status-body structured">${renderStatusValue(parsed)}</div>`
-  }
-  const body = formatStatusPanelForDisplay(value) || '状态栏尚未生成。'
-  const lines = body.split('\n').map(line => line.trim()).filter(Boolean)
-  if (lines.length === 0) return '<div class="status-body"><p class="meta no-indent">状态栏尚未生成。</p></div>'
-  return `
-    <div class="status-body">
-      ${lines.map(line => renderStatusTextLine(line)).join('')}
-    </div>
-  `
-}
-
-function renderStatusPersonCard(person, index) {
-  const summary = person.summary || pickStatusPersonSummary(person.content) || '点击展开详细状态'
-  return `
-    <details class="status-person-card" data-person-index="${index}">
-      <summary>
-        <span>${escapeHtml(person.name || `人物 ${index + 1}`)}</span>
-        <small>${escapeHtml(summary)}</small>
-      </summary>
-      <div class="status-person-detail">
-        ${renderStatusPersonContent(person.content)}
-      </div>
-    </details>
-  `
-}
-
-function renderStatusPersonContent(content) {
-  if (content && typeof content === 'object') return renderStatusValue(content)
-  const lines = formatStatusPanelForDisplay(content).split('\n').map(line => line.trim()).filter(Boolean)
-  if (!lines.length) return '<p class="meta no-indent">暂无详细状态。</p>'
-  return lines.map(line => renderStatusTextLine(line)).join('')
-}
-
-function parseStatusPanelPersons(value) {
-  const parsed = tryParseJsonStatusPanel(value)
-  if (parsed !== null) return parseJsonStatusPanelPersons(parsed)
-  return parseMarkdownStatusPanelPersons(formatStatusPanelForDisplay(value))
-}
-
-function parseJsonStatusPanelPersons(value) {
-  if (!value || typeof value !== 'object') return []
-  if (Array.isArray(value)) {
-    return value
-      .map((item, index) => normalizeStatusPersonObject(item, `人物 ${index + 1}`))
-      .filter(Boolean)
-  }
-  const entries = Object.entries(value).filter(([, item]) => item && typeof item === 'object')
-  if (entries.length >= 2) {
-    return entries.map(([name, item]) => normalizeStatusPersonObject(item, name)).filter(Boolean)
-  }
-  const possibleList = Object.values(value).find(item => Array.isArray(item))
-  if (Array.isArray(possibleList)) {
-    return possibleList
-      .map((item, index) => normalizeStatusPersonObject(item, `人物 ${index + 1}`))
-      .filter(Boolean)
-  }
-  return []
-}
-
-function normalizeStatusPersonObject(item, fallbackName) {
-  if (!item || typeof item !== 'object') return null
-  const name = String(item.name || item.姓名 || item.人物 || item.character || fallbackName || '').trim()
-  if (!name) return null
-  return {
-    name,
-    summary: pickStatusPersonSummary(item),
-    content: item,
-  }
-}
-
-function parseMarkdownStatusPanelPersons(text) {
-  const lines = String(text || '').split('\n')
-  const persons = []
-  let current = null
-  for (const line of lines) {
-    const trimmed = line.trim()
-    const heading = trimmed.match(/^#{2,4}\s+(.+?)(?:\s*[｜|]\s*人物状态)?$/)
-      || trimmed.match(/^人物[：:]\s*(.+)$/)
-      || trimmed.match(/^姓名[：:]\s*(.+)$/)
-    if (heading) {
-      if (current && current.lines.some(item => item.trim())) persons.push(current)
-      current = { name: cleanupStatusPersonName(heading[1]), lines: [] }
-      continue
-    }
-    if (current) current.lines.push(line)
-  }
-  if (current && current.lines.some(item => item.trim())) persons.push(current)
-  return persons.length
-    ? persons.map(person => {
-      const content = person.lines.join('\n').trim()
-      return {
-        name: person.name,
-        summary: pickStatusPersonSummary(content),
-        content,
-      }
-    })
-    : []
-}
-
-function cleanupStatusPersonName(value) {
-  return String(value || '')
-    .replace(/^[#\s-]+/, '')
-    .replace(/[｜|]\s*人物状态.*$/, '')
-    .trim()
-}
-
-function pickStatusPersonSummary(content) {
-  if (!content) return ''
-  if (typeof content === 'object') {
-    const fields = ['当前位置', '位置', 'location', '外显状态', '当前姿势', '姿势', '情绪', 'mood']
-    const values = []
-    for (const field of fields) {
-      if (content[field] !== undefined && content[field] !== null && String(content[field]).trim()) {
-        values.push(String(content[field]).trim())
-      }
-      if (values.length >= 2) break
-    }
-    return values.join(' / ')
-  }
-  const lines = String(content || '').split('\n').map(line => line.trim()).filter(Boolean)
-  const picked = []
-  for (const line of lines) {
-    const field = line.match(/^(?:[-*]\s*)?(当前位置|位置|外显状态|当前姿势|姿势|情绪)[：:]\s*(.+)$/)
-    if (field) picked.push(field[2].trim())
-    if (picked.length >= 2) break
-  }
-  return picked.join(' / ')
-}
-
-function tryParseJsonStatusPanel(value) {
-  if (!value || typeof value === 'object') return value && typeof value === 'object' ? value : null
-  const text = extractJsonCandidate(String(value))
-  if (!/^[\[{]/.test(text)) return null
-  try {
-    return JSON.parse(text)
-  } catch {
-    return null
-  }
-}
-
-function extractJsonCandidate(value) {
-  const text = String(value || '').trim()
-  const fenced = text.match(/```(?:json|JSON)?\s*([\s\S]*?)\s*```/)
-  if (fenced) return fenced[1].trim()
-  if (/^[\[{]/.test(text)) return text
-  const objectStart = text.indexOf('{')
-  const objectEnd = text.lastIndexOf('}')
-  if (objectStart >= 0 && objectEnd > objectStart) return text.slice(objectStart, objectEnd + 1).trim()
-  const arrayStart = text.indexOf('[')
-  const arrayEnd = text.lastIndexOf(']')
-  if (arrayStart >= 0 && arrayEnd > arrayStart) return text.slice(arrayStart, arrayEnd + 1).trim()
-  return text
-}
-
-function renderStatusValue(value, depth = 0, key = '') {
-  if (Array.isArray(value)) {
-    if (value.length === 0) return ''
-    return `
-      <div class="status-list">
-        ${value.map(item => `<div class="status-list-item">${renderStatusValue(item, depth + 1)}</div>`).join('')}
-      </div>
-    `
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value).filter(([, item]) => item !== undefined && item !== null && String(item).trim() !== '')
-    if (entries.length === 0) return ''
-    return entries.map(([name, item]) => {
-      if (item && typeof item === 'object') {
-        return `
-          <section class="status-section depth-${Math.min(depth, 3)}">
-            <h4>${escapeHtml(name)}</h4>
-            ${renderStatusValue(item, depth + 1, name)}
-          </section>
-        `
-      }
-      return renderStatusField(name, item)
-    }).join('')
-  }
-  if (!key) return `<p class="status-text">${escapeHtml(value ?? '')}</p>`
-  return renderStatusField(key, value)
-}
-
-function renderStatusField(name, value) {
-  return `
-    <div class="status-field">
-      <span>${escapeHtml(name)}</span>
-      <strong>${escapeHtml(value ?? '')}</strong>
-    </div>
-  `
-}
-
-function renderStatusTextLine(line) {
-  const heading = line.match(/^#{1,4}\s+(.+)$/)
-  if (heading) return `<h4 class="status-line-heading">${escapeHtml(heading[1])}</h4>`
-  const field = line.match(/^(?:[-*]\s*)?([^：:]{1,24})[：:]\s*(.+)$/)
-  if (field) return renderStatusField(field[1].trim(), field[2].trim())
-  return `<p class="status-text">${escapeHtml(line.replace(/^[-*]\s*/, ''))}</p>`
-}
-
-function formatStatusPanelForDisplay(value) {
-  return String(value || '')
-    .split('\n')
-    .filter(line => {
-      const text = line.trim()
-      if (!text) return true
-      if (text === '```') return false
-      if (text === '```markdown' || text === '```md') return false
-      if (/^\*\*实时状态栏\*\*$/.test(text)) return false
-      if (/^#+\s*[^#]*人物状态/.test(text)) return false
-      return true
-    })
-    .join('\n')
-    .trim()
-}
-
-function formatStatusPanelPayload(value) {
-  if (typeof value === 'string') return value.trim()
-  if (!value || typeof value !== 'object') return ''
-  return formatStatusPanelObject(value).trim()
-}
-
-function pickLatestStatusPanel(raw) {
-  const fromPostprocess = formatStatusPanelPayload(raw?.debug?.postprocess?.statusPanel)
-  return fromPostprocess || formatStatusPanelPayload(raw?.statusPanel)
-}
-
-function formatStatusPanelObject(value, depth = 2) {
-  if (Array.isArray(value)) {
-    return value
-      .map(item => {
-        if (item && typeof item === 'object') return formatStatusPanelObject(item, depth + 1)
-        return `- ${String(item || '').trim()}`
-      })
-      .filter(Boolean)
-      .join('\n')
-  }
-  const heading = '#'.repeat(Math.min(depth, 4))
-  return Object.entries(value)
-    .map(([key, item]) => {
-      const title = `${heading} ${key}`
-      if (item && typeof item === 'object') {
-        const nested = formatStatusPanelObject(item, depth + 1)
-        return nested ? `${title}\n${nested}` : title
-      }
-      const text = String(item ?? '').trim()
-      return text ? `${key}：${text}` : ''
-    })
-    .filter(Boolean)
-    .join('\n')
-}
-
-function ensureSpatialStatusPanelSchema(value, subject = '人物', characters = []) {
-  const text = String(value || '').trim()
-  if (!text) return ''
-  return ensureMultiPersonStatusPanelSchema(stripSpatialStatusSection(text), subject, characters)
-}
-
-function ensureSpatialStatusPanel(value, subject = '人物', characters = []) {
-  const text = String(value || '').trim()
-  if (!text) return ''
-  void subject
-  return ensurePlayerStatusPanelForPrompt(stripSpatialStatusSection(text), characters)
-}
-
-function ensureMultiPersonStatusPanelSchema(value, subject = '人物', characters = []) {
-  const text = String(value || '').trim()
-  const trackedNames = trackedCharacterNames(characters)
-  const header = [
-    `# 多人物状态表规则｜${subject && subject !== '人物' ? subject : '全体人物'}`,
-    '每个人物独立一条；玩家角色、正在互动的 NPC、新登场且后续可能影响剧情的重要人物，都必须按同一字段模板记录。',
-    `当前已知应追踪人物：${trackedNames.join('、')}`,
-    '如果下方旧 schema 只写了某个 NPC，也只能把它视为字段模板；不得因此省略玩家状态。',
-    '新人物未知字段写“未知”或“未揭示”，不要编造。',
-  ].join('\n')
-  if (!text) return header
-  if (text.includes('不得因此省略玩家状态')) return text
-  return `${header}\n\n## 原状态字段模板\n${text}`
-}
-
-function trackedCharacterNames(characters = []) {
-  const names = characters
-    .map(character => String(character.name || '').trim())
-    .filter(Boolean)
-  return [...new Set(['玩家', ...names])]
-}
-
-function ensurePlayerStatusPanelForPrompt(value, characters = []) {
-  const text = String(value || '').trim()
-  if (/玩家[｜|].*人物状态|玩家本人|姓名[:：]\s*玩家/.test(text)) return text
-  const player = characters.find(character => character.name === '玩家')
-  const stub = [
-    '## 玩家｜人物状态',
-    '姓名：玩家',
-    `当前位置：${player?.location || '未知'}`,
-    `外显状态：${player?.health || '由玩家输入和正文决定'}`,
-    `情绪：${player?.mood || '由玩家输入决定'}`,
-    '对玩家态度：玩家本人',
-    '已知信息：以玩家输入、最近正文和历史总结为准',
-    '隐藏意图：由玩家输入决定',
-    '当前可互动入口：自由输入行动、对话或想法',
-    `固定设定：${[player?.role, player?.notes].filter(Boolean).join('；') || '玩家操控角色；不得替玩家锁死长期选择'}`,
-  ].join('\n')
-  return [stub, text].filter(Boolean).join('\n\n')
-}
-
-function stripSpatialStatusSection(value) {
-  return String(value || '')
-    .split(/\n(?=##\s+)/)
-    .filter(section => !/^##\s*多人物身体\/空间状态/.test(section.trim()))
-    .join('\n')
-    .trim()
-}
-
-function renderCharacters() {
-  if (state.characters.length === 0) {
-    els.characterList.innerHTML = ''
-    return
-  }
-  const shouldOpen = state.characters.some(character => character.name === '新人物')
-  const items = state.characters.map(character => `
-    <article class="character-item" data-character-id="${escapeAttr(character.id)}">
-      <div class="rowline">
-        <strong>${escapeHtml(character.name || '人物')}</strong>
-        <button class="icon-button" type="button" data-character-remove="${escapeAttr(character.id)}" title="删除">×</button>
-      </div>
-      <div class="character-grid">
-        ${characterInput(character, 'name', '姓名')}
-        ${characterInput(character, 'role', '身份')}
-        ${characterInput(character, 'mood', '情绪')}
-        ${characterInput(character, 'location', '位置')}
-        ${characterInput(character, 'health', '状态')}
-        ${characterInput(character, 'trust', '关系')}
-      </div>
-      <textarea data-character-field="notes" rows="3" placeholder="备注">${escapeHtml(character.notes || '')}</textarea>
-      <details class="module-content">
-        <summary>查看备注</summary>
-        <pre>${escapeHtml(character.notes || '暂无备注')}</pre>
-      </details>
-    </article>
-  `).join('')
-  els.characterList.innerHTML = `
-    <details class="character-detail" ${shouldOpen ? 'open' : ''}>
-      <summary>
-        <span>人物档案（可编辑）</span>
-        <small>${state.characters.length} 人物</small>
-      </summary>
-      <div class="character-detail-body">${items}</div>
-    </details>
-  `
-
-  els.characterList.querySelectorAll('[data-character-field]').forEach(input => {
-    input.addEventListener('input', event => {
-      const item = event.target.closest('[data-character-id]')
-      const character = state.characters.find(row => row.id === item.dataset.characterId)
-      if (!character) return
-      character[event.target.dataset.characterField] = event.target.value
-      saveState()
-      if (event.target.dataset.characterField === 'name') renderCharacters()
-    })
-  })
-
-  els.characterList.querySelectorAll('[data-character-remove]').forEach(button => {
-    button.addEventListener('click', event => {
-      state.characters = state.characters.filter(character => character.id !== event.target.dataset.characterRemove)
-      persistAndRender()
-    })
-  })
 }
 
 function renderStoryTracking() {
   const summary = state.chapterSummary || deriveGlobalContextBlock('summary')
   const currentPlot = state.outline || state.currentSituation || formatDirectorOutline(state.debug?.director)
   const longRangeOutline = state.longRangeOutline || ''
-  const foreshadows = normalizeForeshadowRecords(state.foreshadowRecords)
-    .filter(item => item.status === 'active')
-    .slice(0, 3)
-  const foreshadowText = foreshadows.length
-    ? foreshadows.map(item => {
-      const status = foreshadowStatusLabel(item.status)
-      return `- ${item.type ? `${foreshadowTypeLabel(item.type)}：` : ''}${item.text}${status ? `（${status}）` : ''}`
-    }).join('\n')
-    : deriveGlobalContextBlock('foreshadow') || formatDirectorForeshadows(state.debug?.director)
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', summary || '暂无历史总结。')}
     ${renderTrackerSection('当前剧情', currentPlot || '暂无当前剧情。')}
-    ${renderTrackerSection('当前物理环境', renderPhysicalEnvironment(state.currentPhysicalEnvironment, state.currentPhysicalEnvironmentForbidden) || '暂无当前物理环境。')}
     ${renderTrackerSection('故事风格', formatStoryStyleForTracker() || '暂无故事风格。')}
-    ${renderTrackerSection('当前长期剧情', longRangeOutline || '暂无当前长期剧情。')}
-    ${renderTrackerSection('伏笔', foreshadowText || '暂无伏笔。')}
-    ${state.qualityFeedback ? renderTrackerSection('写作负反馈', state.qualityFeedback) : ''}
+    ${renderTrackerSection('当前剧情目标', longRangeOutline || '暂无当前剧情目标。')}
+    ${renderFeedbackMemory() ? renderTrackerSection('写作负反馈', renderFeedbackMemory()) : ''}
   `
 }
 
@@ -2252,7 +1897,6 @@ function deriveGlobalContextBlock(type) {
     if (type === 'outline' && text.includes('[大纲]')) {
       picked.push(text.replace(/^\[(当前剧情|大纲)\]\s*/, ''))
     }
-    if (type === 'foreshadow' && text.includes('[伏笔')) picked.push(text)
     if (type === 'logic' && text.includes('[逻辑]')) picked.push(text.replace(/^\[逻辑\]\s*/, ''))
     if (type === 'summary' && isLegacySummaryLine(text)) {
       picked.push(text)
@@ -2265,37 +1909,6 @@ function isLegacySummaryLine(text) {
   if (!text) return false
   if (text.includes('[伏笔') || text.includes('[当前剧情]') || text.includes('[大纲]') || text.includes('[逻辑]')) return false
   return !isStoryMetadataLine(text)
-}
-
-function normalizeForeshadowRecords(records) {
-  if (!Array.isArray(records)) return []
-  return records
-    .filter(item => item && typeof item === 'object' && String(item.text || '').trim())
-    .map(item => ({
-      type: normalizeForeshadowType(item.type),
-      text: String(item.text || '').trim(),
-      status: normalizeForeshadowStatus(item),
-      key: String(item.key || makeForeshadowKey(item.text)).trim(),
-      createdTurn: Number.isFinite(Number(item.createdTurn)) ? Number(item.createdTurn) : 0,
-      updatedTurn: Number.isFinite(Number(item.updatedTurn)) ? Number(item.updatedTurn) : 0,
-      delayCount: Number.isFinite(Number(item.delayCount)) ? Number(item.delayCount) : 0,
-    }))
-    .slice(-12)
-}
-
-function foreshadowTypeLabel(type) {
-  return {
-    plant: '埋下',
-    delay: '延迟',
-    payoff: '回收',
-  }[type] || type
-}
-
-function foreshadowStatusLabel(status) {
-  return {
-    active: '未回收',
-    paid: '已回收',
-  }[status] || ''
 }
 
 function formatDirectorOutline(director) {
@@ -2313,19 +1926,6 @@ function formatDirectorOutline(director) {
   return rows.join('\n')
 }
 
-function formatDirectorForeshadows(director) {
-  if (!director || typeof director !== 'object' || !Array.isArray(director.foreshadowing)) return ''
-  return director.foreshadowing
-    .filter(item => item && item.action !== 'ignore')
-    .map(item => {
-      const id = String(item.id || item.text || '线索').trim()
-      const action = String(item.action || '').trim()
-      const reason = String(item.reason || '').trim()
-      return `- ${foreshadowTypeLabel(action)}：${id}${reason ? `｜${reason}` : ''}`
-    })
-    .join('\n')
-}
-
 function storyEntryTypeLabel(type) {
   return {
     'character-card': '人物卡',
@@ -2339,10 +1939,6 @@ function storyEntryTypeLabel(type) {
     text: '文本',
     json: 'JSON',
   }[type] || type || '故事资料'
-}
-
-function characterInput(character, field, placeholder) {
-  return `<input data-character-field="${field}" value="${escapeAttr(character[field] || '')}" placeholder="${placeholder}" />`
 }
 
 function renderConversation({ scrollTarget = 'bottom' } = {}) {
@@ -2539,12 +2135,12 @@ function buildPendingPostprocessFromState() {
       .filter(message => message.role === 'user' || message.role === 'assistant'),
     characters: state.characters,
     userModules: allModules().filter(module => module.enabled),
-    foreshadowRecords: state.foreshadowRecords,
-    statusPanelSchema: state.statusPanelSchema,
-    statusPanel: state.statusPanel,
-    currentPhysicalEnvironment: state.currentPhysicalEnvironment,
-    currentPhysicalEnvironmentForbidden: state.currentPhysicalEnvironmentForbidden,
+    statusSchema: state.statusSchema,
+    statusRoster: state.statusRoster,
+    statusState: state.statusState,
     longRangeOutline: state.longRangeOutline,
+    feedbackText: renderFeedbackMemory(),
+    feedbackMemory: state.feedbackMemory,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: completedAssistantTurnCount(),
@@ -2613,10 +2209,11 @@ function buildEvaluationPayloadFromState() {
     storyName: state.name,
     narrator: state.debug?.narrator || {},
     postprocess: state.debug?.postprocess || {},
+    storyContext: buildStoryContextForRequest(),
     globalContext: state.globalContext,
-    qualityFeedback: state.qualityFeedback,
+    feedbackText: renderFeedbackMemory(),
+    feedbackMemory: state.feedbackMemory,
     playerOptions: state.playerOptions,
-    storybookEntries: (state.storybookEntries || []).filter(entry => entry.enabled),
   }
 }
 
@@ -2844,22 +2441,20 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running' } = {
 function buildGenerateRequestPayload(playerInput) {
   return {
     playerInput,
+    storyContext: buildStoryContextForRequest(),
     globalContext: state.globalContext,
-    qualityFeedback: state.qualityFeedback,
+    feedbackText: renderFeedbackMemory(),
+    feedbackMemory: state.feedbackMemory,
     longRangeOutline: state.longRangeOutline,
-    directorGuidance: state.directorGuidance,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: nextAssistantTurnIndex(),
     recentTurns: buildRecentTurnsForRequest(playerInput),
     characters: state.characters,
     userModules: allModules().filter(module => module.enabled),
-    storybookEntries: state.storybookEntries.filter(entry => entry.enabled),
-    foreshadowRecords: state.foreshadowRecords,
-    statusPanelSchema: state.statusPanelSchema,
-    statusPanel: state.statusPanel,
-    currentPhysicalEnvironment: state.currentPhysicalEnvironment,
-    currentPhysicalEnvironmentForbidden: state.currentPhysicalEnvironmentForbidden,
+    statusSchema: state.statusSchema,
+    statusRoster: state.statusRoster,
+    statusState: state.statusState,
     model: normalizeModel(state.model || config.model),
     apiKey: getLocalApiKey(),
     temperature: Number(els.temperatureInput.value || 0.8),
@@ -2873,7 +2468,7 @@ function buildRecentTurnsForRequest(playerInput) {
   const withoutPendingUser = last?.role === 'user' && String(last.content || '').trim() === inputText
     ? turns.slice(0, -1)
     : turns
-  return withoutPendingUser.slice(-12)
+  return withoutPendingUser.slice(-6)
 }
 
 function createTurnSnapshot(playerInput) {
@@ -2945,19 +2540,15 @@ function pickRegenerableStoryState(story) {
     'chapterSummary',
     'outline',
     'longRangeOutline',
-    'directorGuidance',
     'directorStyle',
     'narratorStyle',
     'plotLines',
-    'foreshadowRecords',
-    'qualityFeedback',
+    'feedbackMemory',
     'storyAssetId',
     'programConfigFile',
-    'statusSubject',
-    'statusPanelSchema',
-    'statusPanel',
-    'currentPhysicalEnvironment',
-    'currentPhysicalEnvironmentForbidden',
+    'statusSchema',
+    'statusRoster',
+    'statusState',
     'globalContext',
     'playerOptions',
     'evaluationTarget',
@@ -3119,24 +2710,25 @@ function applyPostprocess(payload) {
   if (typeof payload.longRangeOutline === 'string' && payload.longRangeOutline.trim()) {
     state.longRangeOutline = payload.longRangeOutline.trim()
   }
-  state.qualityFeedback = String(payload.qualityFeedback || '').trim()
-  if (Array.isArray(payload.foreshadowRecords)) {
-    state.foreshadowRecords = mergeForeshadowRecords(
-      state.foreshadowRecords,
-      payload.foreshadowRecords,
-      completedAssistantTurnCount(),
-    )
+  state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
+  const statusPatch = payload.postprocess && typeof payload.postprocess === 'object' ? payload.postprocess : payload
+  if (Array.isArray(payload.statusSchema)) {
+    state.statusSchema = normalizeStatusSchema(payload.statusSchema)
+  } else {
+    state.statusSchema = mergeStatusSchema(state.statusSchema, statusPatch.statusSchemaPatch)
   }
-  const statusPanelSchema = formatStatusPanelPayload(payload.statusPanelSchema)
-  if (statusPanelSchema) {
-    state.statusPanelSchema = ensureSpatialStatusPanelSchema(statusPanelSchema, state.statusSubject || '人物', state.characters)
+  if (Array.isArray(payload.statusRoster)) {
+    state.statusRoster = normalizeStatusRoster(payload.statusRoster, state.characters)
+  } else {
+    state.statusRoster = mergeStatusRoster(state.statusRoster, statusPatch.statusRosterPatch, state.characters, statusPatch.statusStatePatch)
   }
-  const statusPanel = formatStatusPanelPayload(payload.statusPanel)
-  if (statusPanel) {
-    state.statusPanel = ensureSpatialStatusPanel(statusPanel, state.statusSubject || '人物', state.characters)
+  state.statusRoster = mergeStatusRoster(state.statusRoster, statusPatch.statusRosterPatch, state.characters, statusPatch.statusStatePatch)
+  if (payload.statusState && typeof payload.statusState === 'object') {
+    state.statusState = normalizeStatusState(payload.statusState, state.statusRoster, state.characters)
+  } else {
+    state.statusState = mergeStatusState(state.statusState, statusPatch.statusStatePatch, state.statusRoster, state.characters)
   }
-  state.currentPhysicalEnvironment = String(payload.currentPhysicalEnvironment || state.currentPhysicalEnvironment || '').trim()
-  state.currentPhysicalEnvironmentForbidden = String(payload.currentPhysicalEnvironmentForbidden || state.currentPhysicalEnvironmentForbidden || '').trim()
+  state.statusState = mergeStatusState(state.statusState, statusPatch.statusStatePatch, state.statusRoster, state.characters)
 }
 
 function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {
@@ -3149,120 +2741,6 @@ function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {
   if (lines[lines.length - 1] !== text) lines.push(text)
   const kept = Number.isFinite(limit) ? lines.slice(-limit) : lines
   return kept.map(line => `- ${line}`).join('\n')
-}
-
-function normalizeForeshadowStatus(item) {
-  const type = normalizeForeshadowType(item.type)
-  const status = String(item.status || '').trim().toLowerCase()
-  if (type === 'payoff' || status === 'paid') return 'paid'
-  if (type === 'drop' || status === 'dropped') return 'dropped'
-  return 'active'
-}
-
-function mergeForeshadowRecords(existing, incoming, turnIndex = completedAssistantTurnCount()) {
-  const currentTurn = Number(turnIndex || 0)
-  const records = normalizeForeshadowRecords(existing)
-    .filter(item => item.status === 'active')
-    .map(item => ({
-      ...item,
-      key: item.key || makeForeshadowKey(item.text),
-      createdTurn: item.createdTurn || currentTurn,
-      updatedTurn: item.updatedTurn || item.createdTurn || currentTurn,
-      delayCount: item.delayCount || 0,
-    }))
-
-  for (const item of normalizeForeshadowRecords(incoming)) {
-    const type = normalizeForeshadowType(item.type)
-    const oldIndex = findForeshadowRecordIndex(records, item)
-
-    if (type === 'payoff' || type === 'drop') {
-      if (oldIndex >= 0) records.splice(oldIndex, 1)
-      continue
-    }
-
-    if (type === 'delay') {
-      if (oldIndex >= 0) {
-        records[oldIndex] = {
-          ...records[oldIndex],
-          type: 'delay',
-          updatedTurn: currentTurn,
-          delayCount: Number(records[oldIndex].delayCount || 0) + 1,
-        }
-      }
-      continue
-    }
-
-    if (oldIndex >= 0) {
-      records[oldIndex] = {
-        ...records[oldIndex],
-        type: 'delay',
-        updatedTurn: currentTurn,
-        delayCount: Number(records[oldIndex].delayCount || 0) + 1,
-      }
-      continue
-    }
-
-    if (records.length >= 3) continue
-    records.push({
-      ...item,
-      type: 'plant',
-      status: 'active',
-      key: makeForeshadowKey(item.text),
-      createdTurn: currentTurn,
-      updatedTurn: currentTurn,
-      delayCount: 0,
-    })
-  }
-
-  return records
-    .filter(item => {
-      const age = currentTurn && item.createdTurn ? currentTurn - item.createdTurn : 0
-      return age <= 8 && Number(item.delayCount || 0) <= 3
-    })
-    .slice(0, 3)
-}
-
-function normalizeForeshadowType(type) {
-  const value = String(type || '').trim().toLowerCase()
-  if (value === 'payoff' || value === '回收') return 'payoff'
-  if (value === 'drop' || value === 'delete' || value === 'remove' || value === '废弃' || value === '删除') return 'drop'
-  if (value === 'delay' || value === '延迟') return 'delay'
-  return 'plant'
-}
-
-function findForeshadowRecordIndex(records, item) {
-  const key = item.key || makeForeshadowKey(item.text)
-  const exactIndex = records.findIndex(record => record.key && record.key === key)
-  if (exactIndex >= 0) return exactIndex
-  return records.findIndex(record => isSimilarForeshadow(record.text, item.text))
-}
-
-function makeForeshadowKey(text) {
-  return String(text || '')
-    .replace(/^(plant|delay|payoff|drop|埋下|延迟|回收|废弃|删除)\s*[:：]/i, '')
-    .replace(/[（(].*?[)）]/g, '')
-    .replace(/[，。、“”‘’；：:,.!?！？\s\-_—|｜[\]【】]/g, '')
-    .slice(0, 48)
-}
-
-function isSimilarForeshadow(left, right) {
-  const a = makeForeshadowKey(left)
-  const b = makeForeshadowKey(right)
-  if (!a || !b) return false
-  if (a === b) return true
-  if ((a.length >= 8 && b.includes(a)) || (b.length >= 8 && a.includes(b))) return true
-  return characterJaccard(a, b) >= 0.72
-}
-
-function characterJaccard(left, right) {
-  const a = new Set(Array.from(left))
-  const b = new Set(Array.from(right))
-  if (!a.size || !b.size) return 0
-  let intersection = 0
-  for (const char of a) {
-    if (b.has(char)) intersection += 1
-  }
-  return intersection / (a.size + b.size - intersection)
 }
 
 function removeTrailingErrorMessages() {

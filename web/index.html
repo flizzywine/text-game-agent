@@ -62,31 +62,6 @@
             </div>
             <pre id="debugOutput" class="debug-output"></pre>
           </section>
-
-          <section class="panel evaluator-panel">
-            <div class="panel-head">
-              <h2>评估模块</h2>
-              <div class="head-actions">
-                <label class="evaluation-target-control">
-                  <span>给</span>
-                  <select id="evaluationTargetSelect">
-                    <option value="external-api">外部 API</option>
-                    <option value="codex">Codex</option>
-                  </select>
-                </label>
-                <button id="refreshEvaluationButton" class="icon-button" type="button" title="刷新评估文件">↻</button>
-                <button id="evaluateTurnButton" class="ghost-button" type="button">评估上一轮</button>
-              </div>
-            </div>
-            <div class="evaluation-view">
-              <p id="evaluationStatus" class="evaluation-status">未评估。</p>
-              <div id="evaluationReport" class="evaluation-report"></div>
-              <details class="evaluation-input-box">
-                <summary>查看评估材料</summary>
-                <pre id="evaluationInput" class="evaluation-input">点击评估后显示完整输入。</pre>
-              </details>
-            </div>
-          </section>
         </aside>
 
         <section class="main-stage">
@@ -110,11 +85,9 @@
           <section class="panel">
             <div class="panel-head">
               <h2>人物状态</h2>
-              <button id="addCharacterButton" class="icon-button" type="button" title="新增人物">+</button>
             </div>
             <div class="character-panel-body">
               <div id="statusPanelView" class="status-panel-view"></div>
-              <div id="characterList" class="character-list"></div>
             </div>
           </section>
 
@@ -123,13 +96,6 @@
               <h2>剧情追踪</h2>
             </div>
             <div id="storyTrackingView" class="story-tracking-view"></div>
-          </section>
-
-          <section class="panel stats-panel">
-            <div class="panel-head">
-              <h2>AI 速度评估</h2>
-            </div>
-            <div id="statsView" class="stats-view"></div>
           </section>
         </aside>
       </main>
@@ -189,21 +155,13 @@
               </label>
             </div>
             <div class="story-settings-two">
-              <label>
-                <span>初始物理环境</span>
-                <textarea id="storyPhysicalEnvironmentInput" rows="3"></textarea>
-              </label>
-              <label>
-                <span>物理环境禁止</span>
-                <textarea id="storyPhysicalForbiddenInput" rows="3"></textarea>
-              </label>
             </div>
             <label>
-              <span>人物状态 Schema</span>
+              <span>状态字段</span>
               <textarea id="storyStatusSchemaInput" rows="5"></textarea>
             </label>
             <label>
-              <span>初始人物状态</span>
+              <span>初始人物状态 JSON</span>
               <textarea id="storyStatusPanelInput" rows="5"></textarea>
             </label>
             <label>
@@ -249,14 +207,10 @@
     <dialog id="directorControlDialog" class="app-dialog wide-dialog">
       <form method="dialog" id="directorControlForm">
         <h3>导演控制台</h3>
-        <p class="dialog-note">上帝模式。这里直接影响 Director，用来修正长期剧情方向，或写入不希望剧情滑向的内容。</p>
+        <p class="dialog-note">只修改当前剧情目标方向。</p>
         <label>
-          <span>当前长期剧情</span>
-          <textarea id="directorLongRangeInput" rows="8" placeholder="修改当前长期剧情目标、压力、方向。"></textarea>
-        </label>
-        <label>
-          <span>给导演的要求</span>
-          <textarea id="directorGuidanceInput" rows="7" placeholder="例如：不要让剧情滑向强制误会；增加日常经营线；NPC 不要过度顺从玩家。"></textarea>
+          <span>当前剧情目标</span>
+          <textarea id="directorLongRangeInput" rows="8" placeholder="修改当前剧情目标、压力、方向。"></textarea>
         </label>
         <div class="dialog-actions">
           <button value="cancel" type="button" id="cancelDirectorControlButton" class="ghost-button">取消</button>
