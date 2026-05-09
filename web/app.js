@@ -5,8 +5,9 @@ const fireworksApiKeyStorageKey = 'text-game-agent.fireworks-api-key'
 const fireworksDeepSeekV4ProModel = 'accounts/fireworks/models/deepseek-v4-pro'
 const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
+const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
 const defaultModel = fireworksDeepSeekV4ProPriorityModel
-const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, officialDeepSeekV4ProModel])
+const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, officialDeepSeekV4ProModel, officialDeepSeekV4FlashModel])
 
 const appState = loadAppState()
 let state = getCurrentStory()
@@ -14,7 +15,7 @@ let builtinModules = []
 let storyLibraryAssets = []
 let selectedNewGameAssetId = ''
 let generationBusy = false
-let prewarmController = null
+let evaluationBusy = false
 let config = {
   model: defaultModel,
   baseUrl: 'https://api.deepseek.com',
@@ -31,6 +32,7 @@ const els = {
   modelSelect: document.querySelector('#modelSelect'),
   temperatureInput: document.querySelector('#temperatureInput'),
   apiKeyButton: document.querySelector('#apiKeyButton'),
+  providerTestButton: document.querySelector('#providerTestButton'),
   apiKeyDialog: document.querySelector('#apiKeyDialog'),
   apiKeyForm: document.querySelector('#apiKeyForm'),
   apiKeyTitle: document.querySelector('#apiKeyTitle'),
@@ -71,6 +73,17 @@ const els = {
   storyLibraryStatus: document.querySelector('#storyLibraryStatus'),
   libraryAssetList: document.querySelector('#libraryAssetList'),
   libraryPreview: document.querySelector('#libraryPreview'),
+  storySettingsForm: document.querySelector('#storySettingsForm'),
+  saveStorySettingsButton: document.querySelector('#saveStorySettingsButton'),
+  storyWorldviewInput: document.querySelector('#storyWorldviewInput'),
+  storyOpeningTextInput: document.querySelector('#storyOpeningTextInput'),
+  storyDirectorStyleInput: document.querySelector('#storyDirectorStyleInput'),
+  storyNarratorStyleInput: document.querySelector('#storyNarratorStyleInput'),
+  storyPhysicalEnvironmentInput: document.querySelector('#storyPhysicalEnvironmentInput'),
+  storyPhysicalForbiddenInput: document.querySelector('#storyPhysicalForbiddenInput'),
+  storyStatusSchemaInput: document.querySelector('#storyStatusSchemaInput'),
+  storyStatusPanelInput: document.querySelector('#storyStatusPanelInput'),
+  storyGlobalContextSeedInput: document.querySelector('#storyGlobalContextSeedInput'),
   closeStoryLibraryButton: document.querySelector('#closeStoryLibraryButton'),
   moduleList: document.querySelector('#moduleList'),
   jumpTurnStartButton: document.querySelector('#jumpTurnStartButton'),
@@ -89,6 +102,12 @@ const els = {
   toggleDebugButton: document.querySelector('#toggleDebugButton'),
   statsView: document.querySelector('#statsView'),
   debugOutput: document.querySelector('#debugOutput'),
+  evaluationTargetSelect: document.querySelector('#evaluationTargetSelect'),
+  refreshEvaluationButton: document.querySelector('#refreshEvaluationButton'),
+  evaluateTurnButton: document.querySelector('#evaluateTurnButton'),
+  evaluationStatus: document.querySelector('#evaluationStatus'),
+  evaluationReport: document.querySelector('#evaluationReport'),
+  evaluationInput: document.querySelector('#evaluationInput'),
   emptyConversationTemplate: document.querySelector('#emptyConversationTemplate'),
 }
 
@@ -101,6 +120,7 @@ async function init() {
   await loadServerState()
   applyLegacyMigrations()
   render()
+  loadLatestEvaluationArtifacts()
 }
 
 function defaultStory(name = '未选择故事') {
@@ -132,16 +152,21 @@ function defaultStory(name = '未选择故事') {
     outline: '',
     longRangeOutline: '',
     directorGuidance: '',
+    directorStyle: '',
+    narratorStyle: '',
     plotLines: [],
     foreshadowRecords: [],
     qualityFeedback: '',
+    storyAssetId: '',
     programConfigFile: '',
     statusSubject: '',
     statusPanelSchema: '',
     statusPanel: '',
-    physicalSceneState: defaultPhysicalSceneState(),
+    currentPhysicalEnvironment: '',
+    currentPhysicalEnvironmentForbidden: '',
     globalContext: '',
     playerOptions: [],
+    evaluationTarget: 'external-api',
     model: defaultModel,
     runtimeStats: null,
     lastTurnSnapshot: null,
@@ -217,20 +242,25 @@ function normalizeStory(raw, fallbackName = '故事') {
     openingText: String(raw?.openingText || ''),
     worldview: String(raw?.worldview || ''),
     currentSituation: String(raw?.currentSituation || ''),
-    chapterSummary: String(raw?.chapterSummary || raw?.currentSituation || ''),
+    chapterSummary: cleanHistoricalGlobalContext(String(raw?.chapterSummary || raw?.currentSituation || '')),
     outline: String(raw?.outline || ''),
     longRangeOutline: String(raw?.longRangeOutline || ''),
     directorGuidance: String(raw?.directorGuidance || ''),
+    directorStyle: String(raw?.directorStyle || ''),
+    narratorStyle: String(raw?.narratorStyle || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
     foreshadowRecords: Array.isArray(raw?.foreshadowRecords) ? raw.foreshadowRecords : [],
     qualityFeedback: String(raw?.qualityFeedback || ''),
+    storyAssetId: String(raw?.storyAssetId || ''),
     programConfigFile: String(raw?.programConfigFile || ''),
     statusSubject: String(raw?.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw?.statusPanelSchema || ''), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
     statusPanel: ensureSpatialStatusPanel(pickLatestStatusPanel(raw), String(raw?.statusSubject || '人物'), Array.isArray(raw?.characters) ? raw.characters : []),
-    physicalSceneState: normalizePhysicalSceneState(pickStoredPhysicalSceneState(raw), base.physicalSceneState),
-    globalContext: String(raw?.globalContext || ''),
+    currentPhysicalEnvironment: String(raw?.currentPhysicalEnvironment || ''),
+    currentPhysicalEnvironmentForbidden: String(raw?.currentPhysicalEnvironmentForbidden || ''),
+    globalContext: cleanHistoricalGlobalContext(String(raw?.globalContext || '')),
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
+    evaluationTarget: normalizeEvaluationTarget(raw?.evaluationTarget),
     model: normalizeModel(raw?.model || base.model),
     runtimeStats: raw?.runtimeStats && typeof raw.runtimeStats === 'object' ? raw.runtimeStats : null,
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
@@ -238,84 +268,43 @@ function normalizeStory(raw, fallbackName = '故事') {
   }
 }
 
-function defaultPhysicalSceneState() {
-  return {
-    currentScene: '',
-    nextScene: '',
-    transitionRule: '',
-    currentSceneForbidden: '',
-  }
-}
-
-function pickStoredPhysicalSceneState(raw) {
-  const candidates = [
-    raw?.physicalSceneState,
-    raw?.sceneState,
-    raw?.debug?.postprocess?.physicalSceneState,
-    raw?.debug?.postprocess?.sceneState,
-  ]
-  return candidates.find(hasPhysicalSceneStateContent)
-}
-
-function hasPhysicalSceneStateContent(value) {
-  if (typeof value === 'string') return Boolean(value.trim())
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  return ['currentScene', 'nextScene', 'transitionRule', 'currentSceneForbidden']
-    .some(key => String(value[key] || '').trim())
-}
-
-function normalizePhysicalSceneState(value, fallback = defaultPhysicalSceneState()) {
-  const base = fallback && typeof fallback === 'object' && !Array.isArray(fallback)
-    ? {
-      currentScene: String(fallback.currentScene || ''),
-      nextScene: String(fallback.nextScene || ''),
-      transitionRule: String(fallback.transitionRule || ''),
-      currentSceneForbidden: String(fallback.currentSceneForbidden || ''),
-    }
-    : defaultPhysicalSceneState()
-  if (typeof value === 'string') {
-    const currentScene = value.trim()
-    return currentScene ? { ...base, currentScene } : base
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return base
-  return {
-    currentScene: String(value.currentScene || base.currentScene || '').trim(),
-    nextScene: String(value.nextScene || base.nextScene || '').trim(),
-    transitionRule: String(value.transitionRule || base.transitionRule || '').trim(),
-    currentSceneForbidden: String(value.currentSceneForbidden || base.currentSceneForbidden || '').trim(),
-  }
-}
-
-function renderPhysicalSceneState(value) {
-  const scene = normalizePhysicalSceneState(value)
+function renderPhysicalEnvironment(environment, forbidden) {
   return [
-    scene.currentScene ? `当前场景：${scene.currentScene}` : '',
-    scene.nextScene ? `下一步场景：${scene.nextScene}` : '',
-    scene.transitionRule ? `推进规则：${scene.transitionRule}` : '',
-    scene.currentSceneForbidden ? `当前场景禁止：${scene.currentSceneForbidden}` : '',
+    String(environment || '').trim() ? `当前物理环境：${String(environment || '').trim()}` : '',
+    String(forbidden || '').trim() ? `当前物理环境禁止：${String(forbidden || '').trim()}` : '',
   ].filter(Boolean).join('\n')
+}
+
+function cleanHistoricalGlobalContext(value) {
+  return String(value || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => {
+      const text = line.replace(/^-\s*/, '').trim()
+      if (/^历史总结[:：]?$/.test(text)) return false
+      return text && !isStoryMetadataLine(text)
+    })
+    .join('\n')
+}
+
+function isStoryMetadataLine(text) {
+  return /^(当前故事资料|世界观|状态追踪人物|资料文件|初始化配置|开场白|故事导演风格|故事叙事风格|当前物理环境|当前物理环境禁止|历史总结)：/.test(text)
 }
 
 function applyLegacyMigrations() {
   const shouldPersistMultiSpatial = !appState.multiSpatialMigration
   const shouldSwitchToReviewerPatch = !appState.reviewerPatchMigration
   const shouldRemoveSpatialStatusPanel = !appState.removeSpatialStatusPanelMigration
-  let shouldPersistPhysicalSceneState = false
+  const shouldPersistMultiCharacterStatus = !appState.multiCharacterStatusMigration
   for (const story of appState.stories) {
     story.statusPanelSchema = ensureSpatialStatusPanelSchema(story.statusPanelSchema, story.statusSubject || '人物', story.characters)
     story.statusPanel = ensureSpatialStatusPanel(story.statusPanel, story.statusSubject || '人物', story.characters)
-    if (!hasPhysicalSceneStateContent(story.physicalSceneState)) {
-      const migrated = normalizePhysicalSceneState(pickStoredPhysicalSceneState(story))
-      if (hasPhysicalSceneStateContent(migrated)) {
-        story.physicalSceneState = migrated
-        shouldPersistPhysicalSceneState = true
-      }
-    }
   }
-  if (!shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch && !shouldRemoveSpatialStatusPanel && !shouldPersistPhysicalSceneState) return
+  if (!shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch && !shouldRemoveSpatialStatusPanel && !shouldPersistMultiCharacterStatus) return
   appState.multiSpatialMigration = true
   appState.reviewerPatchMigration = true
   appState.removeSpatialStatusPanelMigration = true
+  appState.multiCharacterStatusMigration = true
   saveState()
 }
 
@@ -377,6 +366,10 @@ function providerForModel(model) {
   return 'deepseek'
 }
 
+function normalizeEvaluationTarget(value) {
+  return String(value || '') === 'codex' ? 'codex' : 'external-api'
+}
+
 function providerLabel(provider) {
   if (provider === 'fireworks') return 'Fireworks'
   return 'DeepSeek'
@@ -385,6 +378,7 @@ function providerLabel(provider) {
 function modelLabel(model) {
   return {
     [officialDeepSeekV4ProModel]: 'V4 Pro Official',
+    [officialDeepSeekV4FlashModel]: 'V4 Flash Official',
     [fireworksDeepSeekV4ProPriorityModel]: 'V4 Pro Fireworks Priority',
   }[model] || model
 }
@@ -436,11 +430,25 @@ function bindEvents() {
   })
 
   els.retryStageButton.addEventListener('click', () => {
-    retryUnfinishedStage()
+    continueUnfinishedTurn()
   })
 
   els.regenerateButton.addEventListener('click', () => {
     regenerateLastTurn()
+  })
+
+  els.evaluationTargetSelect.addEventListener('change', () => {
+    state.evaluationTarget = normalizeEvaluationTarget(els.evaluationTargetSelect.value)
+    saveState()
+    renderEvaluation()
+  })
+
+  els.evaluateTurnButton.addEventListener('click', () => {
+    evaluateLatestTurn()
+  })
+
+  els.refreshEvaluationButton.addEventListener('click', () => {
+    loadLatestEvaluationArtifacts({ force: true })
   })
 
   els.jumpTurnStartButton.addEventListener('click', () => {
@@ -454,6 +462,10 @@ function bindEvents() {
   els.apiKeyButton.addEventListener('click', () => {
     renderApiKeyDialog()
     els.apiKeyDialog.showModal()
+  })
+
+  els.providerTestButton.addEventListener('click', () => {
+    testCurrentProvider()
   })
 
   els.cancelApiKeyButton.addEventListener('click', () => {
@@ -602,6 +614,10 @@ function bindEvents() {
     renderStoryLibraryAssets()
   })
 
+  els.saveStorySettingsButton.addEventListener('click', () => {
+    saveSelectedStorySettings()
+  })
+
   els.closeStoryLibraryButton.addEventListener('click', () => {
     els.storyLibraryDialog.close()
   })
@@ -659,6 +675,8 @@ function render() {
   els.modelSelect.value = normalizeModel(state.model || config.model)
   renderStats()
   renderDebug()
+  renderEvaluation()
+  els.evaluationTargetSelect.value = normalizeEvaluationTarget(state.evaluationTarget)
 }
 
 function renderDebug() {
@@ -689,11 +707,207 @@ function renderDebug() {
     director: debug.director,
     narrator: debug.narrator,
     postprocess: debug.postprocess,
+    evaluator: debug.evaluator,
   }
   if (Object.values(payload).some(Boolean)) {
     lines.push('', 'stages:', JSON.stringify(payload, null, 2))
   }
   els.debugOutput.textContent = lines.join('\n')
+}
+
+function evaluationArtifactMatchesCurrentStory(artifact) {
+  if (!artifact || typeof artifact !== 'object') return false
+  const storyId = String(artifact.storyId || '').trim()
+  const storyName = String(artifact.storyName || artifact.story || '').trim()
+  if (storyId) return storyId === state.id
+  if (storyName) return storyName === state.name
+  return false
+}
+
+function extractEvaluationReportPayload(value) {
+  if (!value || typeof value !== 'object') return null
+  if (value.evaluation && typeof value.evaluation === 'object') return value.evaluation
+  if ('score' in value || Array.isArray(value.issues)) return value
+  return null
+}
+
+async function loadLatestEvaluationArtifacts({ force = false } = {}) {
+  try {
+    const response = await fetch('/api/evaluation-latest')
+    if (!response.ok) throw new Error('读取评估文件失败')
+    const payload = await response.json()
+    const material = payload.material && typeof payload.material === 'object' ? payload.material : null
+    const reportContainer = payload.report && typeof payload.report === 'object' ? payload.report : null
+    const report = extractEvaluationReportPayload(reportContainer)
+    let changed = false
+
+    state.debug = state.debug || {}
+    if (material && evaluationArtifactMatchesCurrentStory(material)) {
+      state.debug.evaluatorPrompt = String(material.evaluatorPrompt || state.debug.evaluatorPrompt || '')
+      state.debug.evaluationMaterialFile = String(material.file || payload.materialFile || '')
+      state.debug.latestEvaluationMaterialFile = String(payload.latestEvaluationMaterialFile || '')
+      state.debug.evaluationRun = state.debug.evaluationRun && typeof state.debug.evaluationRun === 'object'
+        ? state.debug.evaluationRun
+        : {}
+      if (!state.debug.evaluationRun.status || state.debug.evaluationRun.status === 'idle') {
+        state.debug.evaluationRun.status = 'material-ready'
+      }
+      changed = true
+    }
+
+    if (reportContainer && report && evaluationArtifactMatchesCurrentStory(reportContainer)) {
+      state.debug.evaluationReport = report
+      state.debug.evaluator = report
+      state.debug.evaluationFile = String(reportContainer.file || payload.reportFile || '')
+      state.debug.latestEvaluationFile = String(payload.latestEvaluationFile || '')
+      state.debug.evaluationRun = state.debug.evaluationRun && typeof state.debug.evaluationRun === 'object'
+        ? state.debug.evaluationRun
+        : {}
+      state.debug.evaluationRun.status = 'done'
+      changed = true
+    }
+
+    if (changed || force) {
+      if (force && !changed) {
+        state.debug.evaluationRun = {
+          ...(state.debug.evaluationRun || {}),
+          status: 'error',
+          error: '没有找到当前故事的评估文件。',
+        }
+      }
+      saveState()
+      renderEvaluation()
+      renderDebug()
+    }
+  } catch (error) {
+    if (!force) return
+    state.debug = state.debug || {}
+    state.debug.evaluationRun = {
+      ...(state.debug.evaluationRun || {}),
+      status: 'error',
+      error: error.message,
+    }
+    saveState()
+    renderEvaluation()
+  }
+}
+
+function renderEvaluation() {
+  const debug = state.debug || {}
+  const run = debug.evaluationRun && typeof debug.evaluationRun === 'object' ? debug.evaluationRun : {}
+  const report = debug.evaluationReport || debug.evaluator || null
+  const prompt = String(debug.evaluatorPrompt || '').trim()
+  const progress = Array.isArray(run.progress) ? run.progress : []
+  const pendingPostprocess = Boolean(getPendingPostprocess())
+  const canEvaluate = Boolean(buildEvaluationPayloadFromState()) && !generationBusy && !pendingPostprocess
+  const evaluationFile = String(debug.evaluationFile || debug.latestEvaluationFile || '').trim()
+  const materialFile = String(debug.evaluationMaterialFile || debug.latestEvaluationMaterialFile || '').trim()
+  const evaluationTarget = normalizeEvaluationTarget(state.evaluationTarget)
+
+  els.evaluationTargetSelect.value = evaluationTarget
+  els.refreshEvaluationButton.disabled = evaluationBusy
+  els.evaluateTurnButton.disabled = evaluationBusy || !canEvaluate
+  els.evaluateTurnButton.textContent = evaluationBusy ? '评估中' : '评估上一轮'
+  els.evaluateTurnButton.title = pendingPostprocess
+    ? '上一轮 Postprocess 完成后才能评估。'
+    : canEvaluate
+      ? (evaluationTarget === 'codex' ? '把评估材料写给 Codex。' : '调用外部 API 评估最近一轮正文。')
+      : '暂无可评估正文。'
+
+  const statusParts = []
+  if (evaluationBusy) statusParts.push('评估中')
+  else if (run.status === 'material-ready') statusParts.push('评估材料已准备')
+  else if (run.status === 'prepared') statusParts.push('已写入 Codex 待评估材料')
+  else if (run.status === 'done') statusParts.push('评估完成')
+  else if (run.status === 'error') statusParts.push('评估失败')
+  else statusParts.push('未评估')
+  statusParts.push(`执行者：${evaluationTarget === 'codex' ? 'Codex' : '外部 API'}`)
+  if (run.error) statusParts.push(run.error)
+  if (materialFile) statusParts.push(`材料：${materialFile}`)
+  if (evaluationFile) statusParts.push(`文件：${evaluationFile}`)
+  if (progress.length) {
+    const last = progress[progress.length - 1]
+    statusParts.push(`${last.label || last.stage}: ${last.status}${last.message ? `｜${last.message}` : ''}`)
+  }
+  els.evaluationStatus.textContent = `${statusParts.join('。')}。`
+  els.evaluationInput.textContent = prompt || '点击评估后显示完整输入。'
+  els.evaluationReport.innerHTML = run.status === 'prepared'
+    ? renderCodexEvaluationNotice(evaluationFile)
+    : renderEvaluationReport(report, debug.evaluationMetrics)
+}
+
+function renderCodexEvaluationNotice(file) {
+  return `
+    <p class="evaluation-summary">评估材料已经写入本地文件，未调用外部 API。接下来在对话里说“看最新评估”，Codex 会读取这份材料并给出评估。</p>
+    ${file ? `<p class="meta no-indent">文件：${escapeHtml(file)}</p>` : ''}
+  `
+}
+
+function renderEvaluationReport(report, metrics) {
+  if (!report || typeof report !== 'object') {
+    return '<p class="meta no-indent">暂无评估报告。</p>'
+  }
+  const issues = Array.isArray(report.issues) ? report.issues : []
+  const strengths = Array.isArray(report.strengths) ? report.strengths : []
+  const nextActions = Array.isArray(report.nextActions) ? report.nextActions : []
+  return `
+    <div class="evaluation-score">
+      <span>score</span>
+      <strong>${escapeHtml(report.score ?? '-')}</strong>
+    </div>
+    <p class="evaluation-summary">${escapeHtml(report.summary || '无总评。')}</p>
+    ${issues.length ? issues.map(renderEvaluationIssue).join('') : '<p class="meta no-indent">未发现明确问题。</p>'}
+    ${renderEvaluationList('保留项', strengths)}
+    ${renderEvaluationList('下一步', nextActions)}
+    ${metrics ? `
+      <details class="stats-detail">
+        <summary>评估耗时</summary>
+        <pre>${escapeHtml(formatEvaluationMetrics(metrics))}</pre>
+      </details>
+    ` : ''}
+  `
+}
+
+function renderEvaluationIssue(issue) {
+  if (!issue || typeof issue !== 'object') return ''
+  const title = `${issue.severity || 'P?'} · ${issue.type || 'issue'}`
+  return `
+    <article class="evaluation-issue">
+      <header>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(issue.rootCause || 'unclear')}</span>
+      </header>
+      <p><strong>证据：</strong>${escapeHtml(issue.evidence || '未提供')}</p>
+      <p><strong>建议：</strong>${escapeHtml(issue.recommendation || '未提供')}</p>
+    </article>
+  `
+}
+
+function renderEvaluationList(title, items) {
+  if (!items.length) return ''
+  return `
+    <div>
+      <p class="meta no-indent">${escapeHtml(title)}</p>
+      <ul class="evaluation-list">
+        ${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+      </ul>
+    </div>
+  `
+}
+
+function formatEvaluationMetrics(metrics) {
+  const lines = [
+    `模型：${modelLabel(metrics.model || state.model)}`,
+    `首次应答：${formatMs(metrics.firstResponseMs)}`,
+    `总耗时：${formatMs(metrics.totalMs)}`,
+    `TPS：${formatTps(metrics.tps)}`,
+    `输出 tokens：${formatNumber(metrics.outputTokens)}`,
+    `总 tokens：${formatNumber(metrics.totalTokens)}`,
+  ]
+  if (Array.isArray(metrics.stages)) {
+    lines.push('', ...metrics.stages.map(formatStageStatsLine))
+  }
+  return lines.join('\n')
 }
 
 function renderStats() {
@@ -728,7 +942,6 @@ function renderStatItem(label, value) {
 function formatStageStatsLine(row) {
   const label = row.label || row.stage
   const parts = [
-    row.cacheHit ? 'cache hit' : '',
     `TTFT ${formatMs(row.ttftMs)}`,
     `总 ${formatMs(row.durationMs)}`,
     `out ${formatNumber(row.outputTokens)}`,
@@ -913,6 +1126,7 @@ function renderStoryLibraryAssets() {
   if (storyLibraryAssets.length === 0) {
     els.libraryAssetList.innerHTML = '<p class="meta no-indent">还没有故事资料。先导入人物卡、故事书或世界书。</p>'
     els.libraryPreview.innerHTML = ''
+    renderStorySettingsForm(null)
     return
   }
 
@@ -934,7 +1148,115 @@ function renderStoryLibraryAssets() {
   })
 
   const selected = storyLibraryAssets.find(asset => asset.id === selectedNewGameAssetId)
+  renderStorySettingsForm(selected)
   renderAssetPreview(els.libraryPreview, selected)
+}
+
+function renderStorySettingsForm(asset) {
+  const config = storyProgramConfigForEdit(asset)
+  const disabled = !asset?.programConfig
+  els.saveStorySettingsButton.disabled = disabled
+  const fields = [
+    els.storyWorldviewInput,
+    els.storyOpeningTextInput,
+    els.storyDirectorStyleInput,
+    els.storyNarratorStyleInput,
+    els.storyPhysicalEnvironmentInput,
+    els.storyPhysicalForbiddenInput,
+    els.storyStatusSchemaInput,
+    els.storyStatusPanelInput,
+    els.storyGlobalContextSeedInput,
+  ]
+  fields.forEach(field => {
+    field.disabled = disabled
+  })
+  els.storyWorldviewInput.value = config.worldview
+  els.storyOpeningTextInput.value = config.openingText
+  els.storyDirectorStyleInput.value = config.directorStyle
+  els.storyNarratorStyleInput.value = config.narratorStyle
+  els.storyPhysicalEnvironmentInput.value = config.currentPhysicalEnvironment
+  els.storyPhysicalForbiddenInput.value = config.currentPhysicalEnvironmentForbidden
+  els.storyStatusSchemaInput.value = config.statusPanelSchema
+  els.storyStatusPanelInput.value = config.statusPanel
+  els.storyGlobalContextSeedInput.value = config.globalContextSeed
+}
+
+function storyProgramConfigForEdit(asset) {
+  const config = asset?.programConfig || {}
+  return {
+    worldview: String(config.worldview || ''),
+    openingText: String(config.openingText || ''),
+    directorStyle: String(config.directorStyle || ''),
+    narratorStyle: String(config.narratorStyle || ''),
+    currentPhysicalEnvironment: String(config.currentPhysicalEnvironment || ''),
+    currentPhysicalEnvironmentForbidden: String(config.currentPhysicalEnvironmentForbidden || ''),
+    statusPanelSchema: String(config.statusPanelSchema || ''),
+    statusPanel: String(config.statusPanel || ''),
+    globalContextSeed: String(config.globalContextSeed || ''),
+  }
+}
+
+async function saveSelectedStorySettings() {
+  const asset = storyLibraryAssets.find(item => item.id === selectedNewGameAssetId)
+  if (!asset) {
+    alert('请先选择一个故事资料。')
+    return
+  }
+  if (!asset.programConfig) {
+    alert('这个故事还没有初始化，不能保存程序设定。')
+    return
+  }
+  const patch = {
+    worldview: els.storyWorldviewInput.value.trim(),
+    openingText: els.storyOpeningTextInput.value.trim(),
+    directorStyle: els.storyDirectorStyleInput.value.trim(),
+    narratorStyle: els.storyNarratorStyleInput.value.trim(),
+    currentPhysicalEnvironment: els.storyPhysicalEnvironmentInput.value.trim(),
+    currentPhysicalEnvironmentForbidden: els.storyPhysicalForbiddenInput.value.trim(),
+    statusPanelSchema: els.storyStatusSchemaInput.value.trim(),
+    statusPanel: els.storyStatusPanelInput.value.trim(),
+    globalContextSeed: els.storyGlobalContextSeedInput.value.trim(),
+  }
+  els.saveStorySettingsButton.disabled = true
+  setStoryLibraryStatus('正在保存故事设定。', 'running')
+  try {
+    const response = await fetch(`/api/story-assets/${encodeURIComponent(selectedNewGameAssetId)}/program-config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || '保存故事设定失败')
+    asset.programConfig = payload.config
+    if (!asset.programConfigFile && asset.id) asset.programConfigFile = `story/${asset.id}/program-config.json`
+    applyProgramConfigToCurrentStory(asset, payload.config)
+    await loadStoryLibrary()
+    renderStoryLibraryAssets()
+    renderNewGameAssets()
+    setStoryLibraryStatus(`已保存故事设定：${assetDefaultStoryName(asset)}。`, 'done')
+  } catch (error) {
+    setStoryLibraryStatus(error.message, 'error')
+    alert(error.message)
+  } finally {
+    const selected = storyLibraryAssets.find(item => item.id === selectedNewGameAssetId)
+    els.saveStorySettingsButton.disabled = !selected?.programConfig
+  }
+}
+
+function applyProgramConfigToCurrentStory(asset, config) {
+  if (!asset || !config) return
+  if (state.storyAssetId !== asset.id && state.programConfigFile !== asset.programConfigFile) return
+  state.worldview = String(config.worldview || state.worldview || '')
+  state.openingText = String(config.openingText || state.openingText || '')
+  state.directorStyle = String(config.directorStyle || '')
+  state.narratorStyle = String(config.narratorStyle || '')
+  state.currentPhysicalEnvironment = String(config.currentPhysicalEnvironment || state.currentPhysicalEnvironment || '')
+  state.currentPhysicalEnvironmentForbidden = String(config.currentPhysicalEnvironmentForbidden || state.currentPhysicalEnvironmentForbidden || '')
+  state.statusPanelSchema = ensureSpatialStatusPanelSchema(String(config.statusPanelSchema || state.statusPanelSchema || ''), state.statusSubject || '人物', state.characters)
+  state.statusPanel = ensureSpatialStatusPanel(String(config.statusPanel || state.statusPanel || ''), state.statusSubject || '人物', state.characters)
+  state.globalContext = cleanHistoricalGlobalContext(state.globalContext)
+  saveState()
+  renderStoryTracking()
 }
 
 function setStoryLibraryStatus(message, tone = '') {
@@ -999,6 +1321,8 @@ function renderAssetProgramConfigPreview(asset) {
   return [
     asset.programConfigFile ? `文件：${asset.programConfigFile}` : '文件：未初始化，请在故事库点击初始化',
     config?.worldview ? `世界观：${String(config.worldview).slice(0, 120)}` : '',
+    config?.directorStyle ? `导演风格：${String(config.directorStyle).slice(0, 120)}` : '',
+    config?.narratorStyle ? `叙事风格：${String(config.narratorStyle).slice(0, 120)}` : '',
     config?.statusSubject ? `状态追踪：${String(config.statusSubject).slice(0, 80)}` : '',
     Array.isArray(config?.initialPlayerOptions) ? `初始选项：${config.initialPlayerOptions.length} 个` : '',
   ].filter(Boolean).join('\n')
@@ -1059,24 +1383,19 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.outline = ''
   story.longRangeOutline = ''
   story.directorGuidance = ''
+  story.directorStyle = String(init.directorStyle || '')
+  story.narratorStyle = String(init.narratorStyle || '')
   story.plotLines = []
   story.foreshadowRecords = []
   story.qualityFeedback = ''
+  story.storyAssetId = String(asset.id || '')
   story.programConfigFile = String(asset.programConfigFile || init.programConfigFile || '')
   story.statusSubject = String(init.statusSubject || '')
   story.statusPanelSchema = ensureSpatialStatusPanelSchema(String(init.statusPanelSchema || buildFallbackStatusPanelSchema(asset, story.characters)), story.statusSubject || '人物', story.characters)
   story.statusPanel = ensureSpatialStatusPanel(String(init.statusPanel || buildFallbackStatusPanel(asset, story.characters)), story.statusSubject || '人物', story.characters)
-  story.physicalSceneState = normalizePhysicalSceneState(init.physicalSceneState || init.sceneState || init.currentSituation)
-  story.globalContext = [
-    `当前故事资料：${asset.sourceName || asset.id}`,
-    story.worldview ? `世界观：${story.worldview}` : '',
-    story.statusSubject ? `状态追踪人物：${story.statusSubject}` : '',
-    renderPhysicalSceneState(story.physicalSceneState) ? `物理场景状态：${renderPhysicalSceneState(story.physicalSceneState)}` : '',
-    asset.markdownFile ? `资料文件：${asset.markdownFile}` : '',
-    story.programConfigFile ? `初始化配置：${story.programConfigFile}` : '',
-    story.openingText ? `开场白：${story.openingText.slice(0, 300)}` : '',
-    init.globalContextSeed ? String(init.globalContextSeed) : '',
-  ].filter(Boolean).join('\n')
+  story.currentPhysicalEnvironment = String(init.currentPhysicalEnvironment || '')
+  story.currentPhysicalEnvironmentForbidden = String(init.currentPhysicalEnvironmentForbidden || '')
+  story.globalContext = ''
   story.messages = []
   story.playerOptions = normalizeInitialPlayerOptions(init.initialPlayerOptions || init.playerOptions)
   story.debug = {}
@@ -1195,11 +1514,13 @@ function normalizeInitialPlayerOptions(options) {
 }
 
 function buildFallbackStatusPanelSchema(asset, characters) {
-  const subject = characters.find(character => character.name && character.name !== '玩家')?.name
-    || characters.find(character => character.name)?.name
-    || '玩家'
+  const trackedCharacters = characters.some(character => character.name === '玩家')
+    ? characters
+    : [{ id: 'character.player', name: '玩家', role: '玩家操控角色', health: '正常' }, ...characters]
+  const subject = trackedCharacters.length > 1 ? '全体人物' : trackedCharacters[0]?.name || '玩家'
   return ensureSpatialStatusPanelSchema([
     `# 人物状态 Schema｜${subject}`,
+    '每个人物独立一条，玩家角色、正在互动的 NPC 和新登场重要人物都按同一字段记录。',
     '- 当前位置：人物当前所在位置。',
     '- 外显状态：玩家能观察到的姿态、表情、动作。',
     '- 情绪：当前情绪和强度。',
@@ -1208,24 +1529,25 @@ function buildFallbackStatusPanelSchema(asset, characters) {
     '- 隐藏意图：该人物暂未明说但需要持续追踪的动机。',
     '- 当前可互动入口：玩家下一步最容易触发的互动。',
     '- 固定设定：不得被后续输出擅自改写的人物设定。',
-  ].join('\n'), subject, characters)
+  ].join('\n'), subject, trackedCharacters)
 }
 
 function buildFallbackStatusPanel(asset, characters) {
-  const subject = characters.find(character => character.name && character.name !== '玩家')?.name
-    || characters.find(character => character.name)?.name
-    || '玩家'
-  return ensureSpatialStatusPanel([
-    `## ${subject}｜人物状态`,
-    '当前位置：开场',
-    '外显状态：等待玩家输入',
-    '情绪：未定',
-    '对玩家态度：未定',
+  const trackedCharacters = characters.some(character => character.name === '玩家')
+    ? characters
+    : [{ id: 'character.player', name: '玩家', role: '玩家操控角色', health: '正常' }, ...characters]
+  const subject = trackedCharacters.length > 1 ? '全体人物' : trackedCharacters[0]?.name || '玩家'
+  return ensureSpatialStatusPanel(trackedCharacters.map(character => [
+    `## ${character.name || character.id || '人物'}｜人物状态`,
+    `当前位置：${character.location || '开场'}`,
+    `外显状态：${character.health || '等待玩家输入'}`,
+    `情绪：${character.mood || '未定'}`,
+    `对玩家态度：${character.trust || (character.name === '玩家' ? '玩家本人' : '未定')}`,
     '已知信息：按故事资料',
     '隐藏意图：未揭示',
     '当前可互动入口：输入第一句行动、对话或想法',
-    '固定设定：遵守人物介绍和世界观',
-  ].join('\n'), subject, characters)
+    `固定设定：${[character.role, character.notes].filter(Boolean).join('；') || '遵守人物介绍和世界观'}`,
+  ].join('\n')).join('\n\n'), subject, trackedCharacters)
 }
 
 function extractOpeningText(entries) {
@@ -1263,6 +1585,36 @@ function renderConnection() {
   const mode = 'narrator + postprocess'
   els.connectionStatus.textContent = `${providerConfig.baseUrl} · ${modelLabel(model)} · ${providerLabel(provider)} · ${mode} · ${keyState}`
   renderTurnStatus()
+}
+
+async function testCurrentProvider() {
+  const model = normalizeModel(state.model || config.model)
+  const provider = providerForModel(model)
+  const startedAt = Date.now()
+  els.providerTestButton.disabled = true
+  els.providerTestButton.textContent = '测试中'
+  els.connectionStatus.textContent = `${providerLabel(provider)} 连通性测试中 · ${modelLabel(model)}`
+  try {
+    const response = await fetch('/api/provider-test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        apiKey: getLocalApiKey(provider),
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || '连接测试失败')
+    }
+    const durationMs = Number(payload.durationMs || Date.now() - startedAt)
+    els.connectionStatus.textContent = `${providerLabel(provider)} 可用 · ${modelLabel(model)} · ${durationMs}ms · ${String(payload.reply || '').slice(0, 40)}`
+  } catch (error) {
+    els.connectionStatus.textContent = `${providerLabel(provider)} 不可用 · ${modelLabel(model)} · ${error.message}`
+  } finally {
+    els.providerTestButton.disabled = false
+    els.providerTestButton.textContent = '测试连接'
+  }
 }
 
 function openDirectorControl() {
@@ -1450,13 +1802,8 @@ function renderStatusPanel() {
     els.statusPanelView.innerHTML = '<p class="meta no-indent">未初始化状态栏</p>'
     return
   }
-  const subject = state.statusSubject ? `追踪：${state.statusSubject}` : 'Postprocess 状态'
   els.statusPanelView.innerHTML = `
     <div class="status-card">
-      <div class="status-card-head">
-        <span>${escapeHtml(subject)}</span>
-        <small>每轮后处理更新</small>
-      </div>
       ${renderStatusPanelBody(state.statusPanel)}
     </div>
     ${state.statusPanelSchema ? `
@@ -1469,6 +1816,14 @@ function renderStatusPanel() {
 }
 
 function renderStatusPanelBody(value) {
+  const personCards = parseStatusPanelPersons(value)
+  if (personCards.length) {
+    return `
+      <div class="status-body status-people">
+        ${personCards.map(renderStatusPersonCard).join('')}
+      </div>
+    `
+  }
   const parsed = tryParseJsonStatusPanel(value)
   if (parsed !== null) {
     return `<div class="status-body structured">${renderStatusValue(parsed)}</div>`
@@ -1481,6 +1836,124 @@ function renderStatusPanelBody(value) {
       ${lines.map(line => renderStatusTextLine(line)).join('')}
     </div>
   `
+}
+
+function renderStatusPersonCard(person, index) {
+  const summary = person.summary || pickStatusPersonSummary(person.content) || '点击展开详细状态'
+  return `
+    <details class="status-person-card" data-person-index="${index}">
+      <summary>
+        <span>${escapeHtml(person.name || `人物 ${index + 1}`)}</span>
+        <small>${escapeHtml(summary)}</small>
+      </summary>
+      <div class="status-person-detail">
+        ${renderStatusPersonContent(person.content)}
+      </div>
+    </details>
+  `
+}
+
+function renderStatusPersonContent(content) {
+  if (content && typeof content === 'object') return renderStatusValue(content)
+  const lines = formatStatusPanelForDisplay(content).split('\n').map(line => line.trim()).filter(Boolean)
+  if (!lines.length) return '<p class="meta no-indent">暂无详细状态。</p>'
+  return lines.map(line => renderStatusTextLine(line)).join('')
+}
+
+function parseStatusPanelPersons(value) {
+  const parsed = tryParseJsonStatusPanel(value)
+  if (parsed !== null) return parseJsonStatusPanelPersons(parsed)
+  return parseMarkdownStatusPanelPersons(formatStatusPanelForDisplay(value))
+}
+
+function parseJsonStatusPanelPersons(value) {
+  if (!value || typeof value !== 'object') return []
+  if (Array.isArray(value)) {
+    return value
+      .map((item, index) => normalizeStatusPersonObject(item, `人物 ${index + 1}`))
+      .filter(Boolean)
+  }
+  const entries = Object.entries(value).filter(([, item]) => item && typeof item === 'object')
+  if (entries.length >= 2) {
+    return entries.map(([name, item]) => normalizeStatusPersonObject(item, name)).filter(Boolean)
+  }
+  const possibleList = Object.values(value).find(item => Array.isArray(item))
+  if (Array.isArray(possibleList)) {
+    return possibleList
+      .map((item, index) => normalizeStatusPersonObject(item, `人物 ${index + 1}`))
+      .filter(Boolean)
+  }
+  return []
+}
+
+function normalizeStatusPersonObject(item, fallbackName) {
+  if (!item || typeof item !== 'object') return null
+  const name = String(item.name || item.姓名 || item.人物 || item.character || fallbackName || '').trim()
+  if (!name) return null
+  return {
+    name,
+    summary: pickStatusPersonSummary(item),
+    content: item,
+  }
+}
+
+function parseMarkdownStatusPanelPersons(text) {
+  const lines = String(text || '').split('\n')
+  const persons = []
+  let current = null
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const heading = trimmed.match(/^#{2,4}\s+(.+?)(?:\s*[｜|]\s*人物状态)?$/)
+      || trimmed.match(/^人物[：:]\s*(.+)$/)
+      || trimmed.match(/^姓名[：:]\s*(.+)$/)
+    if (heading) {
+      if (current && current.lines.some(item => item.trim())) persons.push(current)
+      current = { name: cleanupStatusPersonName(heading[1]), lines: [] }
+      continue
+    }
+    if (current) current.lines.push(line)
+  }
+  if (current && current.lines.some(item => item.trim())) persons.push(current)
+  return persons.length
+    ? persons.map(person => {
+      const content = person.lines.join('\n').trim()
+      return {
+        name: person.name,
+        summary: pickStatusPersonSummary(content),
+        content,
+      }
+    })
+    : []
+}
+
+function cleanupStatusPersonName(value) {
+  return String(value || '')
+    .replace(/^[#\s-]+/, '')
+    .replace(/[｜|]\s*人物状态.*$/, '')
+    .trim()
+}
+
+function pickStatusPersonSummary(content) {
+  if (!content) return ''
+  if (typeof content === 'object') {
+    const fields = ['当前位置', '位置', 'location', '外显状态', '当前姿势', '姿势', '情绪', 'mood']
+    const values = []
+    for (const field of fields) {
+      if (content[field] !== undefined && content[field] !== null && String(content[field]).trim()) {
+        values.push(String(content[field]).trim())
+      }
+      if (values.length >= 2) break
+    }
+    return values.join(' / ')
+  }
+  const lines = String(content || '').split('\n').map(line => line.trim()).filter(Boolean)
+  const picked = []
+  for (const line of lines) {
+    const field = line.match(/^(?:[-*]\s*)?(当前位置|位置|外显状态|当前姿势|姿势|情绪)[：:]\s*(.+)$/)
+    if (field) picked.push(field[2].trim())
+    if (picked.length >= 2) break
+  }
+  return picked.join(' / ')
 }
 
 function tryParseJsonStatusPanel(value) {
@@ -1608,17 +2081,55 @@ function formatStatusPanelObject(value, depth = 2) {
 function ensureSpatialStatusPanelSchema(value, subject = '人物', characters = []) {
   const text = String(value || '').trim()
   if (!text) return ''
-  void subject
-  void characters
-  return stripSpatialStatusSection(text)
+  return ensureMultiPersonStatusPanelSchema(stripSpatialStatusSection(text), subject, characters)
 }
 
 function ensureSpatialStatusPanel(value, subject = '人物', characters = []) {
   const text = String(value || '').trim()
   if (!text) return ''
   void subject
-  void characters
-  return stripSpatialStatusSection(text)
+  return ensurePlayerStatusPanelForPrompt(stripSpatialStatusSection(text), characters)
+}
+
+function ensureMultiPersonStatusPanelSchema(value, subject = '人物', characters = []) {
+  const text = String(value || '').trim()
+  const trackedNames = trackedCharacterNames(characters)
+  const header = [
+    `# 多人物状态表规则｜${subject && subject !== '人物' ? subject : '全体人物'}`,
+    '每个人物独立一条；玩家角色、正在互动的 NPC、新登场且后续可能影响剧情的重要人物，都必须按同一字段模板记录。',
+    `当前已知应追踪人物：${trackedNames.join('、')}`,
+    '如果下方旧 schema 只写了某个 NPC，也只能把它视为字段模板；不得因此省略玩家状态。',
+    '新人物未知字段写“未知”或“未揭示”，不要编造。',
+  ].join('\n')
+  if (!text) return header
+  if (text.includes('不得因此省略玩家状态')) return text
+  return `${header}\n\n## 原状态字段模板\n${text}`
+}
+
+function trackedCharacterNames(characters = []) {
+  const names = characters
+    .map(character => String(character.name || '').trim())
+    .filter(Boolean)
+  return [...new Set(['玩家', ...names])]
+}
+
+function ensurePlayerStatusPanelForPrompt(value, characters = []) {
+  const text = String(value || '').trim()
+  if (/玩家[｜|].*人物状态|玩家本人|姓名[:：]\s*玩家/.test(text)) return text
+  const player = characters.find(character => character.name === '玩家')
+  const stub = [
+    '## 玩家｜人物状态',
+    '姓名：玩家',
+    `当前位置：${player?.location || '未知'}`,
+    `外显状态：${player?.health || '由玩家输入和正文决定'}`,
+    `情绪：${player?.mood || '由玩家输入决定'}`,
+    '对玩家态度：玩家本人',
+    '已知信息：以玩家输入、最近正文和历史总结为准',
+    '隐藏意图：由玩家输入决定',
+    '当前可互动入口：自由输入行动、对话或想法',
+    `固定设定：${[player?.role, player?.notes].filter(Boolean).join('；') || '玩家操控角色；不得替玩家锁死长期选择'}`,
+  ].join('\n')
+  return [stub, text].filter(Boolean).join('\n\n')
 }
 
 function stripSpatialStatusSection(value) {
@@ -1701,11 +2212,19 @@ function renderStoryTracking() {
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', summary || '暂无历史总结。')}
     ${renderTrackerSection('当前剧情', currentPlot || '暂无当前剧情。')}
-    ${renderTrackerSection('物理场景状态', renderPhysicalSceneState(state.physicalSceneState) || '暂无物理场景状态。')}
+    ${renderTrackerSection('当前物理环境', renderPhysicalEnvironment(state.currentPhysicalEnvironment, state.currentPhysicalEnvironmentForbidden) || '暂无当前物理环境。')}
+    ${renderTrackerSection('故事风格', formatStoryStyleForTracker() || '暂无故事风格。')}
     ${renderTrackerSection('当前长期剧情', longRangeOutline || '暂无当前长期剧情。')}
     ${renderTrackerSection('伏笔', foreshadowText || '暂无伏笔。')}
     ${state.qualityFeedback ? renderTrackerSection('写作负反馈', state.qualityFeedback) : ''}
   `
+}
+
+function formatStoryStyleForTracker() {
+  return [
+    state.directorStyle ? `导演风格：${state.directorStyle}` : '',
+    state.narratorStyle ? `叙事风格：${state.narratorStyle}` : '',
+  ].filter(Boolean).join('\n')
 }
 
 function renderTrackerSection(title, content) {
@@ -1745,7 +2264,7 @@ function deriveGlobalContextBlock(type) {
 function isLegacySummaryLine(text) {
   if (!text) return false
   if (text.includes('[伏笔') || text.includes('[当前剧情]') || text.includes('[大纲]') || text.includes('[逻辑]')) return false
-  return !/^(当前故事资料|世界观|状态追踪人物|资料文件|初始化配置|开场白)：/.test(text)
+  return !isStoryMetadataLine(text)
 }
 
 function normalizeForeshadowRecords(records) {
@@ -1921,7 +2440,7 @@ function renderRegenerateButton() {
   const pending = Boolean(getPendingPostprocess())
   els.regenerateButton.disabled = generationBusy || pending || !hasSnapshot
   els.regenerateButton.title = pending
-    ? '先重试未完成阶段，避免丢失上一轮状态。'
+    ? '先继续未完成阶段，避免丢失上一轮状态。'
     : hasSnapshot
     ? '删除上次 AI 回复，恢复本轮前状态，并用当前模型重新生成'
     : '发送一轮后才能重新生成'
@@ -1929,12 +2448,12 @@ function renderRegenerateButton() {
 
 function renderRetryStageButton() {
   const pending = getPendingPostprocess()
-  const canRetryFullTurn = state.debug?.status === 'error' && Boolean(getRegenerationSnapshot())
-  els.retryStageButton.disabled = generationBusy || (!pending && !canRetryFullTurn)
+  const canContinueGeneration = state.debug?.status === 'error' && Boolean(getRegenerationSnapshot())
+  els.retryStageButton.disabled = generationBusy || (!pending && !canContinueGeneration)
   els.retryStageButton.title = pending
     ? '上一轮正文已生成，但 Postprocess 未完成。点击只重试后处理。'
-    : canRetryFullTurn
-      ? '上一轮在正文显示前失败。点击重新生成本轮。'
+    : canContinueGeneration
+      ? '按当前状态重新执行未完成流程。'
       : '没有未完成阶段。'
 }
 
@@ -1968,17 +2487,19 @@ async function regenerateLastTurn() {
   await generateTurn(snapshot.playerInput, { snapshot, modeLabel: 'regenerating' })
 }
 
-async function retryUnfinishedStage() {
+async function continueUnfinishedTurn() {
   const pending = getPendingPostprocess()
   if (pending) {
     await retryPendingPostprocess(pending)
     return
   }
-  if (state.debug?.status === 'error' && getRegenerationSnapshot()) {
-    await regenerateLastTurn()
+  const snapshot = getRegenerationSnapshot()
+  if (state.debug?.status === 'error' && snapshot?.playerInput) {
+    restoreTurnSnapshot(snapshot)
+    await generateTurn(snapshot.playerInput, { snapshot, modeLabel: 'continuing' })
     return
   }
-  alert('没有可重试的未完成阶段。')
+  alert('没有可继续的未完成阶段。')
 }
 
 function getPendingPostprocess() {
@@ -2021,8 +2542,11 @@ function buildPendingPostprocessFromState() {
     foreshadowRecords: state.foreshadowRecords,
     statusPanelSchema: state.statusPanelSchema,
     statusPanel: state.statusPanel,
-    physicalSceneState: state.physicalSceneState,
+    currentPhysicalEnvironment: state.currentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: state.currentPhysicalEnvironmentForbidden,
     longRangeOutline: state.longRangeOutline,
+    directorStyle: state.directorStyle,
+    narratorStyle: state.narratorStyle,
     turnIndex: completedAssistantTurnCount(),
     model: normalizeModel(state.model || config.model),
     temperature: Number(els.temperatureInput.value || 0.8),
@@ -2067,20 +2591,178 @@ async function retryPendingPostprocess(pending) {
     state.model = normalizeModel(payload.model || state.model)
     applyPostprocess(payload)
     persistPostprocessResult()
-    triggerDirectorPrewarm()
+    await prepareEvaluationMaterialFromState()
+    persistPostprocessResult()
   } catch (error) {
     state.debug.status = 'error'
     state.debug.postprocessPending = true
     state.debug.error = error.message
-    state.debug.note = 'Postprocess 仍未完成。可再次点击“重试未完成阶段”。'
+    state.debug.note = 'Postprocess 仍未完成。可再次点击“继续未完成”。'
     persistAndRender()
   } finally {
     setBusy(false)
   }
 }
 
+function buildEvaluationPayloadFromState() {
+  const base = buildPendingPostprocessFromState()
+  if (!base) return null
+  return {
+    ...base,
+    storyId: state.id,
+    storyName: state.name,
+    narrator: state.debug?.narrator || {},
+    postprocess: state.debug?.postprocess || {},
+    globalContext: state.globalContext,
+    qualityFeedback: state.qualityFeedback,
+    playerOptions: state.playerOptions,
+    storybookEntries: (state.storybookEntries || []).filter(entry => entry.enabled),
+  }
+}
+
+async function prepareEvaluationMaterialFromState() {
+  const payload = buildEvaluationPayloadFromState()
+  if (!payload) return null
+  try {
+    const response = await fetch('/api/evaluation-material', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        model: normalizeModel(state.model || config.model),
+      }),
+    })
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}))
+      throw new Error(errorPayload.error || '评估材料写入失败')
+    }
+    const result = await response.json()
+    state.debug = state.debug || {}
+    state.debug.evaluationRun = {
+      ...(state.debug.evaluationRun || {}),
+      status: 'material-ready',
+      updatedAt: new Date().toISOString(),
+    }
+    state.debug.evaluationMaterialFile = String(result.evaluationMaterialFile || '')
+    state.debug.latestEvaluationMaterialFile = String(result.latestEvaluationMaterialFile || '')
+    state.debug.evaluatorPrompt = String(result.evaluatorPrompt || '')
+    return result
+  } catch (error) {
+    state.debug = state.debug || {}
+    state.debug.evaluationRun = {
+      ...(state.debug.evaluationRun || {}),
+      status: 'error',
+      error: error.message,
+    }
+    return null
+  }
+}
+
+async function evaluateLatestTurn() {
+  const pendingPostprocess = getPendingPostprocess()
+  if (pendingPostprocess) {
+    alert('上一轮 Postprocess 还没完成。先点“继续未完成”，再评估。')
+    return
+  }
+  const payload = buildEvaluationPayloadFromState()
+  if (!payload) {
+    alert('没有可评估的上一轮正文。')
+    return
+  }
+  evaluationBusy = true
+  state.debug = state.debug || {}
+  state.debug.evaluationRun = {
+    status: 'running',
+    progress: [],
+    startedAt: new Date().toISOString(),
+  }
+  state.debug.evaluationReport = null
+  state.debug.evaluatorPrompt = ''
+  state.debug.evaluationMetrics = null
+  renderEvaluation()
+
+  try {
+    const response = await fetch('/api/evaluate-stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        apiKey: getLocalApiKey(),
+        model: normalizeModel(state.model || config.model),
+        evaluationTarget: normalizeEvaluationTarget(state.evaluationTarget),
+      }),
+    })
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}))
+      throw new Error(errorPayload.error || '评估失败')
+    }
+    const result = await readNdjsonStream(response, handleEvaluationEvent)
+    if (!result) throw new Error('评估失败：没有收到最终报告。')
+
+    state.debug.evaluationRun.status = 'done'
+    if (result.pipelineMode === 'codex-evaluation-request') {
+      state.debug.evaluationRun.status = 'prepared'
+    }
+    state.debug.evaluationReport = result.evaluation
+    state.debug.evaluatorPrompt = String(result.evaluatorPrompt || '')
+    state.debug.evaluationMetrics = result.metrics || null
+    state.debug.evaluationMaterialFile = String(result.evaluationMaterialFile || state.debug.evaluationMaterialFile || '')
+    state.debug.latestEvaluationMaterialFile = String(result.latestEvaluationMaterialFile || state.debug.latestEvaluationMaterialFile || '')
+    state.debug.evaluationFile = String(result.evaluationFile || '')
+    state.debug.latestEvaluationFile = String(result.latestEvaluationFile || '')
+    state.debug.evaluator = result.evaluation
+    state.model = normalizeModel(result.model || state.model)
+    saveState()
+    renderEvaluation()
+    renderDebug()
+  } catch (error) {
+    state.debug.evaluationRun = state.debug.evaluationRun || {}
+    state.debug.evaluationRun.status = 'error'
+    state.debug.evaluationRun.error = error.message
+    saveState()
+    renderEvaluation()
+  } finally {
+    evaluationBusy = false
+    renderEvaluation()
+  }
+}
+
+function handleEvaluationEvent(event) {
+  const stage = event.stage
+  if (!stage) return
+  state.debug = state.debug || {}
+  const run = state.debug.evaluationRun && typeof state.debug.evaluationRun === 'object'
+    ? state.debug.evaluationRun
+    : { status: 'running', progress: [] }
+  const progress = Array.isArray(run.progress) ? run.progress : []
+  let row = progress.find(item => item.stage === stage)
+  if (!row) {
+    row = { stage, label: event.label || stage, status: 'pending', logs: [] }
+    progress.push(row)
+  }
+  row.label = event.label || row.label
+  if (event.type === 'stage_start') {
+    row.status = 'running'
+    row.message = event.message || row.message || ''
+  }
+  if (event.type === 'stage_tick') {
+    row.status = 'running'
+    row.logs = Array.isArray(row.logs) ? row.logs : []
+    if (event.message) row.logs.push(event.message)
+    row.message = event.message || row.message || ''
+  }
+  if (event.type === 'stage_result') {
+    row.status = 'done'
+    row.message = event.message || row.message || ''
+    run.report = event.json
+  }
+  row.updatedAt = event.at || new Date().toISOString()
+  run.progress = progress
+  state.debug.evaluationRun = run
+  renderEvaluation()
+}
+
 async function generateTurn(playerInput, { snapshot, modeLabel = 'running' } = {}) {
-  cancelClientPrewarm('player-input')
   setBusy(true)
   const startedAt = Date.now()
   if (snapshot) state.lastTurnSnapshot = snapshot
@@ -2091,8 +2773,10 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running' } = {
     startedAt,
     pipelineMode: 'narrator+postprocess',
     note: modeLabel === 'regenerating'
-      ? '正在回滚并重新生成本次对话；会使用当前选择的模型和配置。'
-      : 'Narrator 正文会直接显示；Postprocess 继续后台更新状态，完成前不能发送下一轮。',
+      ? '正在回滚并重新生成本次对话；会使用当前模型和配置完整重跑。'
+      : modeLabel === 'continuing'
+        ? '继续未完成：按当前状态重新执行未完成流程。'
+        : 'Narrator 正文会直接显示；Postprocess 继续后台更新状态，完成前不能发送下一轮。',
     visibleTextShown: false,
     postprocessPending: false,
     progress: [],
@@ -2107,9 +2791,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running' } = {
   render()
 
   try {
-    const requestPayload = buildGenerateRequestPayload(playerInput, {
-      bypassGenerationCache: modeLabel === 'regenerating',
-    })
+    const requestPayload = buildGenerateRequestPayload(playerInput)
     state.debug.postprocessRecoveryBase = sanitizePostprocessRecoveryBase(requestPayload)
     const response = await fetch('/api/generate-stream', {
       method: 'POST',
@@ -2142,12 +2824,14 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running' } = {
     state.model = normalizeModel(payload.model || state.model)
     applyPostprocess(payload)
     persistPostprocessResult()
-    triggerDirectorPrewarm()
+    await prepareEvaluationMaterialFromState()
+    persistPostprocessResult()
   } catch (error) {
     state.debug.status = 'error'
     state.debug.error = error.message
+    markRunningPipelineStageError(error.message)
     if (state.debug.visibleTextShown && state.debug.postprocessPending) {
-      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“重试未完成阶段”补上状态、总结和候选项。'
+      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“继续未完成”补上状态、总结和候选项。'
     } else {
       state.messages.push({ role: 'error', content: error.message })
     }
@@ -2157,13 +2841,15 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running' } = {
   }
 }
 
-function buildGenerateRequestPayload(playerInput, options = {}) {
+function buildGenerateRequestPayload(playerInput) {
   return {
     playerInput,
     globalContext: state.globalContext,
     qualityFeedback: state.qualityFeedback,
     longRangeOutline: state.longRangeOutline,
     directorGuidance: state.directorGuidance,
+    directorStyle: state.directorStyle,
+    narratorStyle: state.narratorStyle,
     turnIndex: nextAssistantTurnIndex(),
     recentTurns: buildRecentTurnsForRequest(playerInput),
     characters: state.characters,
@@ -2172,8 +2858,8 @@ function buildGenerateRequestPayload(playerInput, options = {}) {
     foreshadowRecords: state.foreshadowRecords,
     statusPanelSchema: state.statusPanelSchema,
     statusPanel: state.statusPanel,
-    physicalSceneState: state.physicalSceneState,
-    bypassGenerationCache: Boolean(options.bypassGenerationCache),
+    currentPhysicalEnvironment: state.currentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: state.currentPhysicalEnvironmentForbidden,
     model: normalizeModel(state.model || config.model),
     apiKey: getLocalApiKey(),
     temperature: Number(els.temperatureInput.value || 0.8),
@@ -2188,75 +2874,6 @@ function buildRecentTurnsForRequest(playerInput) {
     ? turns.slice(0, -1)
     : turns
   return withoutPendingUser.slice(-12)
-}
-
-function triggerDirectorPrewarm() {
-  const options = normalizeInitialPlayerOptions(state.playerOptions || [])
-    .map(option => String(option.inputText || option.label || '').trim())
-    .filter(Boolean)
-    .slice(0, 3)
-  if (!options.length) return
-  if (state.debug?.postprocessPending) return
-  if (!hasRuntimeApiKey(providerForModel(state.model || config.model))) return
-  const requests = options.map(inputText => buildGenerateRequestPayload(inputText))
-  cancelClientPrewarm('new-prewarm')
-  const controller = new AbortController()
-  prewarmController = controller
-  updatePrewarmProgress('running', `正在预生成 ${requests.length} 个下一轮 Director / Narrator 缓存。`)
-  fetch('/api/director-prewarm', {
-    method: 'POST',
-    signal: prewarmController.signal,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ requests }),
-  })
-    .then(response => response.ok ? response.json() : response.json().catch(() => ({})).then(payload => Promise.reject(new Error(payload.error || 'Director 预生成失败'))))
-    .then(payload => {
-      const queued = Number(payload.queued || 0)
-      const cached = Number(payload.cached || 0)
-      const running = Number(payload.running || 0)
-      const completed = Number(payload.completed || 0)
-      const failed = Number(payload.failed || 0)
-      const narratorCompleted = Number(payload.narratorCompleted || 0)
-      const narratorCached = Number(payload.narratorCached || 0)
-      const narratorRunning = Number(payload.narratorRunning || 0)
-      const narratorSkipped = Number(payload.narratorSkipped || 0)
-      const narratorFailed = Number(payload.narratorFailed || 0)
-      if (prewarmController === controller) prewarmController = null
-      updatePrewarmProgress('done', `预生成完成：Director ${completed} 新写入 / ${cached} 命中 / ${running} 复用 / ${failed} 失败；Narrator ${narratorCompleted} 新写入 / ${narratorCached} 命中 / ${narratorRunning} 复用 / ${narratorSkipped} 跳过 / ${narratorFailed} 失败。`)
-    })
-    .catch(error => {
-      if (error.name === 'AbortError') return
-      if (prewarmController === controller) prewarmController = null
-      updatePrewarmProgress('error', `下一轮预生成失败：${error.message}`)
-      console.warn('Director prewarm failed', error)
-  })
-}
-
-function cancelClientPrewarm(reason) {
-  if (!prewarmController) return
-  prewarmController.abort()
-  prewarmController = null
-  if (reason === 'player-input') {
-    updatePrewarmProgress('cancelled', '玩家已输入，取消本地等待中的后台预热请求。')
-  }
-}
-
-function updatePrewarmProgress(status, message) {
-  state.debug = state.debug && typeof state.debug === 'object' ? state.debug : {}
-  const progress = Array.isArray(state.debug.progress) ? state.debug.progress : []
-  let row = progress.find(item => item.stage === 'director-prewarm')
-  if (!row) {
-    row = { stage: 'director-prewarm', label: 'Next Turn Prewarm', status: 'pending' }
-    progress.push(row)
-  }
-  row.status = status
-  row.message = message
-  row.updatedAt = new Date().toISOString()
-  if (status === 'running') row.startedAtMs = Date.now()
-  if (status === 'done' || status === 'error' || status === 'cancelled') row.endedAtMs = Date.now()
-  state.debug.progress = progress
-  saveState()
-  renderDebug()
 }
 
 function createTurnSnapshot(playerInput) {
@@ -2329,16 +2946,21 @@ function pickRegenerableStoryState(story) {
     'outline',
     'longRangeOutline',
     'directorGuidance',
+    'directorStyle',
+    'narratorStyle',
     'plotLines',
     'foreshadowRecords',
     'qualityFeedback',
+    'storyAssetId',
     'programConfigFile',
     'statusSubject',
     'statusPanelSchema',
     'statusPanel',
-    'physicalSceneState',
+    'currentPhysicalEnvironment',
+    'currentPhysicalEnvironmentForbidden',
     'globalContext',
     'playerOptions',
+    'evaluationTarget',
     'runtimeStats',
     'debug',
   ]
@@ -2432,6 +3054,22 @@ function handlePipelineEvent(event) {
   renderDebug()
 }
 
+function markRunningPipelineStageError(message) {
+  const progress = Array.isArray(state.debug?.progress) ? state.debug.progress : []
+  const row = [...progress].reverse().find(item => item.status === 'running')
+  if (!row) return
+
+  const now = Date.now()
+  const nowIso = new Date(now).toISOString()
+  row.status = 'error'
+  row.message = message || row.message || '阶段失败'
+  row.updatedAt = nowIso
+  row.updatedAtMs = now
+  row.endedAtMs = now
+  state.debug.progress = progress
+  updateRuntimeStatsFromPipeline()
+}
+
 function applyVisibleTextEvent(event) {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
   const finalText = String(payload.finalText || event.finalText || '').trim()
@@ -2489,11 +3127,16 @@ function applyPostprocess(payload) {
       completedAssistantTurnCount(),
     )
   }
+  const statusPanelSchema = formatStatusPanelPayload(payload.statusPanelSchema)
+  if (statusPanelSchema) {
+    state.statusPanelSchema = ensureSpatialStatusPanelSchema(statusPanelSchema, state.statusSubject || '人物', state.characters)
+  }
   const statusPanel = formatStatusPanelPayload(payload.statusPanel)
   if (statusPanel) {
     state.statusPanel = ensureSpatialStatusPanel(statusPanel, state.statusSubject || '人物', state.characters)
   }
-  state.physicalSceneState = normalizePhysicalSceneState(payload.physicalSceneState ?? payload.sceneState, state.physicalSceneState)
+  state.currentPhysicalEnvironment = String(payload.currentPhysicalEnvironment || state.currentPhysicalEnvironment || '').trim()
+  state.currentPhysicalEnvironmentForbidden = String(payload.currentPhysicalEnvironmentForbidden || state.currentPhysicalEnvironmentForbidden || '').trim()
 }
 
 function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {
@@ -2631,16 +3274,22 @@ function removeTrailingErrorMessages() {
 function setBusy(isBusy) {
   generationBusy = isBusy
   const postprocessPending = Boolean(getPendingPostprocess())
+  const canContinueGeneration = state.debug?.status === 'error' && Boolean(getRegenerationSnapshot())
   els.sendButton.disabled = isBusy || postprocessPending
-  els.retryStageButton.disabled = isBusy || (!getPendingPostprocess() && !(state.debug?.status === 'error' && getRegenerationSnapshot()))
+  els.retryStageButton.disabled = isBusy || (!postprocessPending && !canContinueGeneration)
   els.regenerateButton.disabled = isBusy || postprocessPending || !getRegenerationSnapshot()
   els.sendButton.textContent = isBusy
     ? (postprocessPending ? '状态更新中' : '生成中')
     : postprocessPending ? '等待状态更新' : '发送'
-  els.retryStageButton.textContent = isBusy && postprocessPending ? '重试中' : '重试未完成阶段'
+  els.retryStageButton.textContent = isBusy && postprocessPending ? '继续中' : '继续未完成'
   els.regenerateButton.textContent = isBusy
     ? (postprocessPending ? '状态更新中' : '生成中')
     : '重新生成本次对话'
+  if (els.evaluateTurnButton) {
+    const canEvaluate = Boolean(buildEvaluationPayloadFromState()) && !isBusy && !postprocessPending
+    els.evaluateTurnButton.disabled = evaluationBusy || !canEvaluate
+    els.evaluateTurnButton.textContent = evaluationBusy ? '评估中' : '评估上一轮'
+  }
   renderTurnStatus()
 }
 
@@ -3036,6 +3685,7 @@ function renderPostprocessSideEffects() {
   renderRegenerateButton()
   renderStats()
   renderDebug()
+  renderEvaluation()
   renderTurnStatus()
 }
 

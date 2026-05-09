@@ -37,6 +37,7 @@
               <select id="modelSelect">
                 <option value="accounts/fireworks/models/deepseek-v4-pro:priority">V4 Pro Fireworks Priority</option>
                 <option value="deepseek-v4-pro">V4 Pro Official</option>
+                <option value="deepseek-v4-flash">V4 Flash Official</option>
               </select>
             </label>
             <label>
@@ -44,6 +45,7 @@
               <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0.8" />
             </label>
             <button id="apiKeyButton" class="ghost-button" type="button">API Key</button>
+            <button id="providerTestButton" class="ghost-button" type="button">测试连接</button>
             <button id="directorControlButton" class="ghost-button" type="button">导演控制台</button>
             <button id="moduleConfigButton" class="ghost-button" type="button">注入配置</button>
             <button id="resetButton" class="ghost-button" type="button">清空当前故事</button>
@@ -60,6 +62,31 @@
             </div>
             <pre id="debugOutput" class="debug-output"></pre>
           </section>
+
+          <section class="panel evaluator-panel">
+            <div class="panel-head">
+              <h2>评估模块</h2>
+              <div class="head-actions">
+                <label class="evaluation-target-control">
+                  <span>给</span>
+                  <select id="evaluationTargetSelect">
+                    <option value="external-api">外部 API</option>
+                    <option value="codex">Codex</option>
+                  </select>
+                </label>
+                <button id="refreshEvaluationButton" class="icon-button" type="button" title="刷新评估文件">↻</button>
+                <button id="evaluateTurnButton" class="ghost-button" type="button">评估上一轮</button>
+              </div>
+            </div>
+            <div class="evaluation-view">
+              <p id="evaluationStatus" class="evaluation-status">未评估。</p>
+              <div id="evaluationReport" class="evaluation-report"></div>
+              <details class="evaluation-input-box">
+                <summary>查看评估材料</summary>
+                <pre id="evaluationInput" class="evaluation-input">点击评估后显示完整输入。</pre>
+              </details>
+            </div>
+          </section>
         </aside>
 
         <section class="main-stage">
@@ -72,7 +99,7 @@
           <form id="playForm" class="composer">
             <textarea id="playerInput" rows="2" placeholder="输入你的行动、对话或想法"></textarea>
             <div class="composer-actions">
-              <button id="retryStageButton" class="ghost-button" type="button">重试未完成阶段</button>
+              <button id="retryStageButton" class="ghost-button" type="button">继续未完成</button>
               <button id="regenerateButton" class="ghost-button" type="button">重新生成本次对话</button>
               <button id="sendButton" type="submit">发送</button>
             </div>
@@ -136,7 +163,55 @@
           <input id="storyLibraryFileInput" type="file" accept=".json,.md,.txt,.png" multiple hidden />
         </div>
         <p id="storyLibraryStatus" class="dialog-status">未开始初始化。</p>
-        <div id="libraryAssetList" class="asset-list"></div>
+        <div class="story-library-grid">
+          <div id="libraryAssetList" class="asset-list"></div>
+          <section id="storySettingsForm" class="story-settings-form" aria-label="故事设定编辑">
+            <div class="story-settings-head">
+              <h4>故事设定</h4>
+              <button id="saveStorySettingsButton" class="ghost-button" type="button">保存设定</button>
+            </div>
+            <label>
+              <span>世界观</span>
+              <textarea id="storyWorldviewInput" rows="5" placeholder="故事背景、规则、人物关系、知识边界。"></textarea>
+            </label>
+            <label>
+              <span>开场白</span>
+              <textarea id="storyOpeningTextInput" rows="4" placeholder="开始新游戏后展示给玩家的第一段文字。"></textarea>
+            </label>
+            <div class="story-settings-two">
+              <label>
+                <span>导演风格</span>
+                <textarea id="storyDirectorStyleInput" rows="5" placeholder="例如：打脸爽文、悬疑压迫、慢热日常、群像权谋。影响 Director 的剧情推进、矛盾设计和人物关系变化。"></textarea>
+              </label>
+              <label>
+                <span>叙事风格</span>
+                <textarea id="storyNarratorStyleInput" rows="5" placeholder="例如：张扬、克制、冷峻、轻快、细腻。影响 Narrator 的正文语调、句式、描写密度。"></textarea>
+              </label>
+            </div>
+            <div class="story-settings-two">
+              <label>
+                <span>初始物理环境</span>
+                <textarea id="storyPhysicalEnvironmentInput" rows="3"></textarea>
+              </label>
+              <label>
+                <span>物理环境禁止</span>
+                <textarea id="storyPhysicalForbiddenInput" rows="3"></textarea>
+              </label>
+            </div>
+            <label>
+              <span>人物状态 Schema</span>
+              <textarea id="storyStatusSchemaInput" rows="5"></textarea>
+            </label>
+            <label>
+              <span>初始人物状态</span>
+              <textarea id="storyStatusPanelInput" rows="5"></textarea>
+            </label>
+            <label>
+              <span>长期上下文种子</span>
+              <textarea id="storyGlobalContextSeedInput" rows="4"></textarea>
+            </label>
+          </section>
+        </div>
         <div id="libraryPreview" class="asset-preview"></div>
         <div class="dialog-actions">
           <button value="cancel" type="button" id="closeStoryLibraryButton" class="ghost-button">关闭</button>

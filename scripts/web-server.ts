@@ -51,21 +51,14 @@ interface ConversationItem {
   content: string
 }
 
-interface PhysicalSceneStateFields {
-  currentScene: string
-  nextScene: string
-  transitionRule: string
-  currentSceneForbidden: string
-}
-
-type PhysicalSceneStateInput = string | Partial<PhysicalSceneStateFields> | null | undefined
-
 interface GenerateRequest {
   playerInput: string
   globalContext?: string
   qualityFeedback?: string
   longRangeOutline?: string
   directorGuidance?: string
+  directorStyle?: string
+  narratorStyle?: string
   turnIndex?: number
   recentTurns?: ConversationItem[]
   characters?: CharacterState[]
@@ -74,16 +67,11 @@ interface GenerateRequest {
   foreshadowRecords?: Array<Record<string, unknown>>
   statusPanelSchema?: string
   statusPanel?: string
-  physicalSceneState?: PhysicalSceneStateInput
-  sceneState?: PhysicalSceneStateInput
-  bypassGenerationCache?: boolean
+  currentPhysicalEnvironment?: string
+  currentPhysicalEnvironmentForbidden?: string
   model?: string
   apiKey?: string
   temperature?: number
-}
-
-interface DirectorPrewarmRequest {
-  requests?: GenerateRequest[]
 }
 
 interface PostprocessRequest {
@@ -97,16 +85,32 @@ interface PostprocessRequest {
   foreshadowRecords?: Array<Record<string, unknown>>
   statusPanelSchema?: string
   statusPanel?: string
-  physicalSceneState?: PhysicalSceneStateInput
-  sceneState?: PhysicalSceneStateInput
+  currentPhysicalEnvironment?: string
+  currentPhysicalEnvironmentForbidden?: string
   longRangeOutline?: string
   directorGuidance?: string
+  directorStyle?: string
+  narratorStyle?: string
   globalContext?: string
   qualityFeedback?: string
   turnIndex?: number
   model?: string
   apiKey?: string
   temperature?: number
+}
+
+interface EvaluationRequest extends PostprocessRequest {
+  narrator?: Record<string, unknown>
+  postprocess?: Record<string, unknown>
+  evaluationTarget?: 'external-api' | 'codex'
+  storyId?: string
+  storyName?: string
+  playerOptions?: unknown[]
+}
+
+interface ProviderTestRequest {
+  model?: string
+  apiKey?: string
 }
 
 interface PersistedStoryAsset {
@@ -144,8 +148,10 @@ interface StoryProgramConfig {
   statusSubject?: string
   statusPanelSchema: string
   statusPanel: string
-  physicalSceneState?: PhysicalSceneStateInput
-  sceneState?: PhysicalSceneStateInput
+  currentPhysicalEnvironment?: string
+  currentPhysicalEnvironmentForbidden?: string
+  directorStyle?: string
+  narratorStyle?: string
   initialPlayerOptions: PlayerOption[]
   normalizedEntries: StorybookEntry[]
   globalContextSeed: string
@@ -183,51 +189,11 @@ interface LlmCallMetrics {
   outputTokens: number
   totalTokens: number
   estimatedOutputTokens: number
-  cacheHit?: boolean
-}
-
-interface DirectorCacheEntry {
-  key: string
-  createdAt: string
-  model: string
-  temperature: number
-  playerInput: string
-  directorPlan: Record<string, unknown>
-}
-
-interface NarratorCacheEntry {
-  key: string
-  createdAt: string
-  model: string
-  temperature: number
-  playerInput: string
-  narratorJson: Record<string, unknown>
-  raw: string
-}
-
-interface PrewarmJob<T> {
-  key: string
-  stage: 'director' | 'narrator'
-  playerInput: string
-  controller: AbortController
-  promise: Promise<T | null>
-  startedAt: number
-}
-
-interface PrewarmStageResult {
-  key: string
-  status: string
-  completed?: boolean
-}
-
-interface NextTurnPrewarmResult {
-  director: PrewarmStageResult
-  narrator: PrewarmStageResult
 }
 
 interface PipelineEvent {
   type: 'stage_start' | 'stage_tick' | 'stage_result' | 'stage_skip' | 'visible_text'
-  stage: 'initializer' | 'director' | 'narrator' | 'postprocess'
+  stage: 'initializer' | 'director' | 'narrator' | 'postprocess' | 'evaluator'
   label: string
   message?: string
   json?: Record<string, unknown> | null
@@ -244,29 +210,34 @@ const storyDir = path.join(rootDir, 'story')
 const saveDir = path.join(rootDir, 'save')
 const debugDir = path.join(rootDir, 'debug')
 const llmDebugDir = path.join(debugDir, 'llm-raw')
+const evaluationDebugDir = path.join(debugDir, 'evaluations')
+const evaluationMaterialDir = path.join(debugDir, 'evaluation-materials')
 const saveFile = path.join(saveDir, 'current-state.json')
-const directorCacheFile = path.join(saveDir, 'director-cache.json')
-const narratorCacheFile = path.join(saveDir, 'narrator-cache.json')
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
+const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
 const fireworksDeepSeekV4ProModel = 'accounts/fireworks/models/deepseek-v4-pro'
 const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
 const defaultModel = fireworksDeepSeekV4ProPriorityModel
 const modelIds = new Set([
   officialDeepSeekV4ProModel,
+  officialDeepSeekV4FlashModel,
   fireworksDeepSeekV4ProPriorityModel,
 ])
 const defaultDeepSeekBaseUrl = 'https://api.deepseek.com'
 const defaultFireworksBaseUrl = 'https://api.fireworks.ai/inference/v1'
 const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS || 300_000)
+const longRangeDirectorTimeoutMs = Number(process.env.LONG_RANGE_DIRECTOR_TIMEOUT_MS || 45_000)
+const directorTimeoutMs = Number(process.env.DIRECTOR_TIMEOUT_MS || 300_000)
+const narratorTimeoutMs = Number(process.env.NARRATOR_TIMEOUT_MS || 120_000)
+const providerFetchRetryCount = Number(process.env.LLM_FETCH_RETRY_COUNT || 2)
+const providerFetchRetryDelayMs = Number(process.env.LLM_FETCH_RETRY_DELAY_MS || 1200)
 const defaultMaxTokens = 4096
+const directorMaxTokens = Number(process.env.DIRECTOR_MAX_TOKENS || 1200)
 const narratorMaxTokens = 8192
-const prewarmWaitMs = Number(process.env.PREWARM_WAIT_MS || 12_000)
 const port = Number(process.env.PORT || 4173)
 const localEnv = readDotEnv(path.join(rootDir, '.env.local'))
 const internalizedModuleIds = new Set<string>()
 const metadataKeys = new Set(['id', 'name', 'description', 'layer', 'group', 'exclusiveGroup', 'enabled'])
-const directorPrewarmJobs = new Map<string, PrewarmJob<DirectorCacheEntry>>()
-const narratorPrewarmJobs = new Map<string, PrewarmJob<NarratorCacheEntry>>()
 
 function readDotEnv(filePath: string): Record<string, string> {
   if (!fs.existsSync(filePath)) return {}
@@ -357,6 +328,42 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || /请求已取消|aborted|abort/i.test(error.message))
 }
 
+function isTransientFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const cause = error.cause && typeof error.cause === 'object' ? error.cause as { code?: unknown; message?: unknown } : {}
+  const detail = [
+    error.name,
+    error.message,
+    cause.code,
+    cause.message,
+  ].filter(Boolean).join(' ')
+  return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|UND_ERR|network|socket|TLS/i.test(detail)
+}
+
+function formatFetchError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  const cause = error.cause && typeof error.cause === 'object' ? error.cause as { code?: unknown; message?: unknown } : {}
+  return [
+    error.message,
+    cause.code ? `cause=${String(cause.code)}` : '',
+    cause.message ? String(cause.message) : '',
+  ].filter(Boolean).join('；')
+}
+
+async function fetchWithTransientRetry(input: string, init: RequestInit): Promise<Response> {
+  let attempt = 0
+  while (true) {
+    try {
+      return await fetch(input, init)
+    } catch (error) {
+      const aborted = isAbortError(error) || init.signal instanceof AbortSignal && init.signal.aborted
+      if (aborted || !isTransientFetchError(error) || attempt >= providerFetchRetryCount) throw error
+      attempt += 1
+      await delay(providerFetchRetryDelayMs * attempt)
+    }
+  }
+}
+
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -391,6 +398,8 @@ function ensureDataDirs(): void {
   fs.mkdirSync(storyDir, { recursive: true })
   fs.mkdirSync(saveDir, { recursive: true })
   fs.mkdirSync(llmDebugDir, { recursive: true })
+  fs.mkdirSync(evaluationDebugDir, { recursive: true })
+  fs.mkdirSync(evaluationMaterialDir, { recursive: true })
 }
 
 function safeName(value: string, fallback = 'untitled'): string {
@@ -403,6 +412,21 @@ function safeName(value: string, fallback = 'untitled'): string {
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8')
+}
+
+function readJsonFileIfExists(filePath: string): Record<string, unknown> | null {
+  if (!fs.existsSync(filePath)) return null
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function sanitizeEvaluationRequest(input: EvaluationRequest): Record<string, unknown> {
+  const { apiKey: _apiKey, ...safeInput } = input
+  return safeInput as Record<string, unknown>
 }
 
 function writeLlmDebugFile(input: {
@@ -430,6 +454,139 @@ function writeLlmDebugFile(input: {
   return path.relative(rootDir, filePath)
 }
 
+function writeEvaluationMaterialFile(input: EvaluationRequest, model = normalizeModel(input.model)): {
+  file: string
+  latestFile: string
+  payload: Record<string, unknown>
+  evaluatorPayload: ReturnType<typeof buildEvaluationPromptPayload>
+} {
+  ensureDataDirs()
+  const evaluatorPayload = buildEvaluationPromptPayload(input, model)
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const filePath = path.join(evaluationMaterialDir, `${stamp}-material.json`)
+  const payload = {
+    type: 'evaluation-material',
+    createdAt: new Date().toISOString(),
+    storyId: String(input.storyId || '').trim(),
+    storyName: String(input.storyName || '').trim(),
+    model,
+    turnIndex: input.turnIndex,
+    playerInput: evaluatorPayload.playerInput,
+    finalText: evaluatorPayload.finalText,
+    evaluatorPrompt: evaluatorPayload.evaluatorUser,
+    material: {
+      director: input.director || {},
+      narrator: input.narrator || {},
+      postprocess: input.postprocess || {},
+      recentTurns: input.recentTurns || [],
+      characters: input.characters || [],
+      storybookEntries: input.storybookEntries || [],
+      foreshadowRecords: input.foreshadowRecords || [],
+      statusPanelSchema: input.statusPanelSchema || '',
+      statusPanel: input.statusPanel || '',
+      currentPhysicalEnvironment: input.currentPhysicalEnvironment || '',
+      currentPhysicalEnvironmentForbidden: input.currentPhysicalEnvironmentForbidden || '',
+      longRangeOutline: input.longRangeOutline || '',
+      globalContext: input.globalContext || '',
+      qualityFeedback: input.qualityFeedback || '',
+      playerOptions: input.playerOptions || [],
+      userModules: input.userModules || [],
+    },
+    sourcePayload: sanitizeEvaluationRequest(input),
+  }
+  writeJsonFile(filePath, payload)
+  writeJsonFile(path.join(evaluationMaterialDir, 'latest.json'), {
+    ...payload,
+    file: path.relative(rootDir, filePath),
+  })
+  return {
+    file: path.relative(rootDir, filePath),
+    latestFile: 'debug/evaluation-materials/latest.json',
+    payload,
+    evaluatorPayload,
+  }
+}
+
+function writeEvaluationDebugFile(input: {
+  model: string
+  storyId?: string
+  storyName?: string
+  playerInput: string
+  finalText: string
+  evaluatorPrompt: string
+  evaluation: Record<string, unknown>
+  metrics: Record<string, unknown>
+  materialFile?: string
+}): string {
+  ensureDataDirs()
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const filePath = path.join(evaluationDebugDir, `${stamp}-evaluation.json`)
+  const payload = {
+    type: 'external-api-report',
+    createdAt: new Date().toISOString(),
+    model: input.model,
+    storyId: input.storyId || '',
+    storyName: input.storyName || '',
+    playerInput: input.playerInput,
+    finalText: input.finalText,
+    evaluatorPrompt: input.evaluatorPrompt,
+    materialFile: input.materialFile || '',
+    evaluation: input.evaluation,
+    metrics: input.metrics,
+  }
+  writeJsonFile(filePath, payload)
+  writeJsonFile(path.join(evaluationDebugDir, 'latest.json'), {
+    ...payload,
+    file: path.relative(rootDir, filePath),
+  })
+  return path.relative(rootDir, filePath)
+}
+
+function writeCodexEvaluationRequestFile(input: {
+  model: string
+  storyId?: string
+  storyName?: string
+  playerInput: string
+  finalText: string
+  evaluatorPrompt: string
+  materialFile?: string
+}): string {
+  ensureDataDirs()
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const filePath = path.join(evaluationDebugDir, `${stamp}-codex-request.json`)
+  const payload = {
+    type: 'codex-request',
+    createdAt: new Date().toISOString(),
+    instruction: '请 Codex 基于 evaluatorPrompt 和上下文材料，按评估准则输出质量评估报告；不要续写正文，不要自动修改文件。',
+    model: input.model,
+    storyId: input.storyId || '',
+    storyName: input.storyName || '',
+    playerInput: input.playerInput,
+    finalText: input.finalText,
+    materialFile: input.materialFile || '',
+    evaluatorPrompt: input.evaluatorPrompt,
+  }
+  writeJsonFile(filePath, payload)
+  writeJsonFile(path.join(evaluationDebugDir, 'latest.json'), {
+    ...payload,
+    file: path.relative(rootDir, filePath),
+  })
+  return path.relative(rootDir, filePath)
+}
+
+function readLatestEvaluationArtifacts(): Record<string, unknown> {
+  const material = readJsonFileIfExists(path.join(evaluationMaterialDir, 'latest.json'))
+  const report = readJsonFileIfExists(path.join(evaluationDebugDir, 'latest.json'))
+  return {
+    material,
+    report,
+    materialFile: material?.file || '',
+    reportFile: report?.file || '',
+    latestEvaluationMaterialFile: 'debug/evaluation-materials/latest.json',
+    latestEvaluationFile: 'debug/evaluations/latest.json',
+  }
+}
+
 function readSaveState(): unknown | null {
   ensureDataDirs()
   if (!fs.existsSync(saveFile)) return null
@@ -439,56 +596,6 @@ function readSaveState(): unknown | null {
 function writeSaveState(value: unknown): void {
   ensureDataDirs()
   writeJsonFile(saveFile, value)
-}
-
-function readDirectorCache(): Record<string, DirectorCacheEntry> {
-  ensureDataDirs()
-  if (!fs.existsSync(directorCacheFile)) return {}
-  try {
-    const value = JSON.parse(fs.readFileSync(directorCacheFile, 'utf-8'))
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, DirectorCacheEntry> : {}
-  } catch {
-    return {}
-  }
-}
-
-function getDirectorCacheEntry(key: string): DirectorCacheEntry | null {
-  const entry = readDirectorCache()[key]
-  return entry?.directorPlan && typeof entry.directorPlan === 'object' ? entry : null
-}
-
-function writeDirectorCacheEntry(entry: DirectorCacheEntry): void {
-  const cache = readDirectorCache()
-  cache[entry.key] = entry
-  const entries = Object.values(cache)
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-    .slice(0, 80)
-  writeJsonFile(directorCacheFile, Object.fromEntries(entries.map(item => [item.key, item])))
-}
-
-function readNarratorCache(): Record<string, NarratorCacheEntry> {
-  ensureDataDirs()
-  if (!fs.existsSync(narratorCacheFile)) return {}
-  try {
-    const value = JSON.parse(fs.readFileSync(narratorCacheFile, 'utf-8'))
-    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, NarratorCacheEntry> : {}
-  } catch {
-    return {}
-  }
-}
-
-function getNarratorCacheEntry(key: string): NarratorCacheEntry | null {
-  const entry = readNarratorCache()[key]
-  return entry?.narratorJson && typeof entry.narratorJson === 'object' ? entry : null
-}
-
-function writeNarratorCacheEntry(entry: NarratorCacheEntry): void {
-  const cache = readNarratorCache()
-  cache[entry.key] = entry
-  const entries = Object.values(cache)
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-    .slice(0, 80)
-  writeJsonFile(narratorCacheFile, Object.fromEntries(entries.map(item => [item.key, item])))
 }
 
 function persistStoryAsset(asset: PersistedStoryAsset): Record<string, string> {
@@ -744,8 +851,38 @@ function extractOpeningTextFromEntries(entries: StorybookEntry[] = []): string {
   return String(preferred?.content || '').trim()
 }
 
+function inferInitialStoryStyles(
+  input: InitializeStoryRequest,
+  worldview = '',
+  openingText = '',
+): { directorStyle: string; narratorStyle: string } {
+  const material = [
+    input.sourceName || '',
+    worldview,
+    openingText,
+    ...(input.entries || []).slice(0, 12).map(entry => [
+      entry.title || '',
+      entry.type || '',
+      ...(entry.tags || []),
+      entry.content || '',
+    ].join('\n')),
+  ].join('\n')
+
+  if (/重生之都市修仙|重生都市修仙|都市修仙|陈凡|陈北玄|灵气|武道|术法/.test(material)) {
+    return {
+      directorStyle: '都市修仙 / 重生爽文导演风格：以“低估、试探、压迫、反转或震慑、余波”构成本轮动力；主动引入校园、家族、地下江湖、资源线和前世遗憾的外部压力；早期保留陈凡身体弱、资源少、身份低的限制；每轮制造一个可推进的矛盾、线索或身份误判，不让世界无条件顺从玩家。',
+      narratorStyle: '现代都市修仙叙事风格：语调克制但有压迫感，突出陈凡重生后的冷静、信息差和旧日遗憾；描写以都市现实细节、人物反应、身体凡胎限制和微弱灵气感知为主；少堆设定名词，爽点通过旁人误判、局势反转和细节震慑呈现，正文清晰紧凑。',
+    }
+  }
+
+  return {
+    directorStyle: '通用互动小说导演风格：以玩家输入作为局部触发点，同时保持 NPC 独立和世界压力；主动制造信息差、关系变化、短期扰动和可回收伏笔；重大事件分阶段推进，小事可以几笔带过；每轮保留玩家可接续的行动窗口。',
+    narratorStyle: '通用小说叙事风格：正文以清晰可读为先，动作、神态和具体场景细节替代空泛形容；角色保持限知视角，通过看、听、触、推理逐步获得信息；避免设定宣读、重复句式和无意义铺陈，保持段落节奏紧凑。',
+  }
+}
+
 function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgramConfig {
-  const cast = input.characters?.length
+  const baseCast = input.characters?.length
     ? input.characters
     : [{
       id: 'character.player',
@@ -757,7 +894,19 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
       trust: '',
       notes: '玩家操控角色；不替玩家锁死长期选择。',
     }]
-  const statusSubject = cast.find(character => character.name && character.name !== '玩家')?.name || cast[0]?.name || '玩家'
+  const cast = baseCast.some(character => character.name === '玩家')
+    ? baseCast
+    : [{
+      id: 'character.player',
+      name: '玩家',
+      role: '玩家操控角色',
+      mood: '待输入',
+      location: '开场',
+      health: '正常',
+      trust: '',
+      notes: '玩家操控角色；不替玩家锁死长期选择。',
+    }, ...baseCast]
+  const statusSubject = cast.length > 1 ? '全体人物' : cast[0]?.name || '玩家'
   const openingText = extractOpeningTextFromEntries(input.entries || [])
   const worldview = [
     `故事资料：${input.sourceName || '未命名故事'}`,
@@ -765,6 +914,7 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
   ].filter(Boolean).join('\n')
   const statusPanelSchema = ensureSpatialStatusPanelSchema([
     `# 人物状态 Schema｜${statusSubject}`,
+    '每个人物独立一条，玩家角色、正在互动的 NPC 和新登场重要人物都按同一字段记录。',
     '- 当前位置：人物当前所在位置。',
     '- 外显状态：玩家能观察到的姿态、表情、动作。',
     '- 情绪：当前情绪和强度。',
@@ -774,23 +924,22 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
     '- 当前可互动入口：玩家下一步最容易触发的互动。',
     '- 固定设定：不得被后续输出擅自改写的人物设定。',
   ].join('\n'), statusSubject, cast)
-  const statusPanel = ensureSpatialStatusPanel([
-    `## ${statusSubject}｜人物状态`,
-    '当前位置：开场',
-    '外显状态：等待玩家输入',
-    '情绪：未定',
-    '对玩家态度：未定',
+  const statusPanel = ensureSpatialStatusPanel(cast.map(character => [
+    `## ${character.name || character.id || '人物'}｜人物状态`,
+    `当前位置：${character.location || '开场'}`,
+    `外显状态：${character.health || '等待玩家输入'}`,
+    `情绪：${character.mood || '未定'}`,
+    `对玩家态度：${character.trust || (character.name === '玩家' ? '玩家本人' : '未定')}`,
     '已知信息：按故事资料',
     '隐藏意图：未揭示',
     '当前可互动入口：输入第一句行动、对话或想法',
-    '固定设定：遵守人物介绍和世界观',
-  ].join('\n'), statusSubject, cast)
-  const physicalSceneState = normalizePhysicalSceneState({
-    currentScene: openingText ? `开场环境：${openingText.slice(0, 80)}` : '开场环境：等待玩家进入第一轮互动。',
-    nextScene: '第一轮玩家输入后的当前互动场景。',
-    transitionRule: '玩家输入明确行动、对话或观察目标后进入下一步；若玩家保持观望，场景只做轻微自然推进。',
-    currentSceneForbidden: '无缘无故跳到远期剧情；未交代过渡就改变地点、时间或主要角色位置。',
-  })
+    `固定设定：${[character.role, character.notes].filter(Boolean).join('；') || '遵守人物介绍和世界观'}`,
+  ].join('\n')).join('\n\n'), statusSubject, cast)
+  const currentPhysicalEnvironment = '开场物理环境由开场白决定。'
+  const currentPhysicalEnvironmentForbidden = '不得写出与开场地点、姿势、载具、公共规则明显冲突的动作。'
+  const inferredStyles = inferInitialStoryStyles(input, worldview, openingText)
+  const directorStyle = inferredStyles.directorStyle
+  const narratorStyle = inferredStyles.narratorStyle
   const normalizedEntries = [
     {
       id: 'worldview.main',
@@ -819,7 +968,10 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
     statusSubject,
     statusPanelSchema,
     statusPanel,
-    physicalSceneState,
+    currentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden,
+    directorStyle,
+    narratorStyle,
     initialPlayerOptions: [
       { id: 'A', label: '观察', description: '先观察当前局面。', inputText: '我先观察周围和对方的反应。' },
       { id: 'B', label: '开口', description: '用一句话打开互动。', inputText: '我开口问道：“现在是什么情况？”' },
@@ -830,7 +982,9 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
       `当前故事资料：${input.sourceName || '未命名故事'}`,
       worldview ? `世界观：${worldview.slice(0, 300)}` : '',
       statusSubject ? `状态追踪人物：${statusSubject}` : '',
-      physicalSceneState.currentScene ? `物理场景状态：${renderPhysicalSceneState(physicalSceneState)}` : '',
+      directorStyle ? `故事导演风格：${directorStyle}` : '',
+      narratorStyle ? `故事叙事风格：${narratorStyle}` : '',
+      `当前物理环境：${renderPhysicalEnvironment(currentPhysicalEnvironment, currentPhysicalEnvironmentForbidden)}`,
       openingText ? `开场白：${openingText.slice(0, 300)}` : '',
     ].filter(Boolean).join('\n'),
   }
@@ -839,17 +993,55 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
 function ensureSpatialStatusPanelSchema(value: string, subject = '人物', characters: CharacterState[] = []): string {
   const text = String(value || '').trim()
   if (!text) return ''
-  void subject
-  void characters
-  return stripSpatialStatusSection(text)
+  return ensureMultiPersonStatusPanelSchema(stripSpatialStatusSection(text), subject, characters)
 }
 
 function ensureSpatialStatusPanel(value: string, subject = '人物', characters: CharacterState[] = []): string {
   const text = String(value || '').trim()
   if (!text) return ''
   void subject
-  void characters
-  return stripSpatialStatusSection(text)
+  return ensurePlayerStatusPanelForPrompt(stripSpatialStatusSection(text), characters)
+}
+
+function ensureMultiPersonStatusPanelSchema(value: string, subject = '人物', characters: CharacterState[] = []): string {
+  const text = String(value || '').trim()
+  const trackedNames = trackedCharacterNames(characters)
+  const header = [
+    `# 多人物状态表规则｜${subject && subject !== '人物' ? subject : '全体人物'}`,
+    '每个人物独立一条；玩家角色、正在互动的 NPC、新登场且后续可能影响剧情的重要人物，都必须按同一字段模板记录。',
+    `当前已知应追踪人物：${trackedNames.join('、')}`,
+    '如果下方旧 schema 只写了某个 NPC，也只能把它视为字段模板；不得因此省略玩家状态。',
+    '新人物未知字段写“未知”或“未揭示”，不要编造。',
+  ].join('\n')
+  if (!text) return header
+  if (text.includes('不得因此省略玩家状态')) return text
+  return `${header}\n\n## 原状态字段模板\n${text}`
+}
+
+function trackedCharacterNames(characters: CharacterState[] = []): string[] {
+  const names = characters
+    .map(character => String(character.name || '').trim())
+    .filter(Boolean)
+  return [...new Set(['玩家', ...names])]
+}
+
+function ensurePlayerStatusPanelForPrompt(value: string, characters: CharacterState[] = []): string {
+  const text = String(value || '').trim()
+  if (/玩家[｜|].*人物状态|玩家本人|姓名[:：]\s*玩家/.test(text)) return text
+  const player = characters.find(character => character.name === '玩家')
+  const stub = [
+    '## 玩家｜人物状态',
+    '姓名：玩家',
+    `当前位置：${player?.location || '未知'}`,
+    `外显状态：${player?.health || '由玩家输入和正文决定'}`,
+    `情绪：${player?.mood || '由玩家输入决定'}`,
+    '对玩家态度：玩家本人',
+    '已知信息：以玩家输入、最近正文和历史总结为准',
+    '隐藏意图：由玩家输入决定',
+    '当前可互动入口：自由输入行动、对话或想法',
+    `固定设定：${[player?.role, player?.notes].filter(Boolean).join('；') || '玩家操控角色；不得替玩家锁死长期选择'}`,
+  ].join('\n')
+  return [stub, text].filter(Boolean).join('\n\n')
 }
 
 function stripSpatialStatusSection(value: string): string {
@@ -866,67 +1058,12 @@ function formatStatusPanelPayload(value: unknown): string {
   return formatStatusPanelObject(value).trim()
 }
 
-function emptyPhysicalSceneState(): PhysicalSceneStateFields {
-  return {
-    currentScene: '',
-    nextScene: '',
-    transitionRule: '',
-    currentSceneForbidden: '',
-  }
-}
-
-function normalizePhysicalSceneState(value: unknown, fallback?: unknown): PhysicalSceneStateFields {
-  const base = fallback ? normalizePhysicalSceneState(fallback) : emptyPhysicalSceneState()
-  if (typeof value === 'string') {
-    const currentScene = value.trim()
-    return currentScene ? { ...base, currentScene } : base
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return base
-  const record = value as Record<string, unknown>
-  return {
-    currentScene: compactText(record.currentScene || base.currentScene, 180),
-    nextScene: compactText(record.nextScene || base.nextScene, 140),
-    transitionRule: compactText(record.transitionRule || base.transitionRule, 220),
-    currentSceneForbidden: compactText(record.currentSceneForbidden || base.currentSceneForbidden, 180),
-  }
-}
-
-function hasPhysicalSceneStateContent(value: unknown): boolean {
-  if (typeof value === 'string') return Boolean(value.trim())
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const record = value as Record<string, unknown>
-  return ['currentScene', 'nextScene', 'transitionRule', 'currentSceneForbidden']
-    .some(key => String(record[key] || '').trim())
-}
-
-function pickStoredPhysicalSceneState(raw: Record<string, unknown>): unknown {
-  const debug = raw.debug && typeof raw.debug === 'object' && !Array.isArray(raw.debug)
-    ? raw.debug as Record<string, unknown>
-    : {}
-  const postprocess = debug.postprocess && typeof debug.postprocess === 'object' && !Array.isArray(debug.postprocess)
-    ? debug.postprocess as Record<string, unknown>
-    : {}
-  return [
-    raw.physicalSceneState,
-    raw.sceneState,
-    postprocess.physicalSceneState,
-    postprocess.sceneState,
-  ].find(hasPhysicalSceneStateContent)
-}
-
-function renderPhysicalSceneState(value: unknown, fallback = '（无）'): string {
-  const scene = normalizePhysicalSceneState(value)
+function renderPhysicalEnvironment(environment: unknown, forbidden: unknown, fallback = '（无）'): string {
   const lines = [
-    scene.currentScene ? `currentScene：${scene.currentScene}` : '',
-    scene.nextScene ? `nextScene：${scene.nextScene}` : '',
-    scene.transitionRule ? `transitionRule：${scene.transitionRule}` : '',
-    scene.currentSceneForbidden ? `currentSceneForbidden：${scene.currentSceneForbidden}` : '',
+    compactText(environment, 180) ? `currentPhysicalEnvironment：${compactText(environment, 180)}` : '',
+    compactText(forbidden, 180) ? `currentPhysicalEnvironmentForbidden：${compactText(forbidden, 180)}` : '',
   ].filter(Boolean)
   return lines.length ? lines.join('\n') : fallback
-}
-
-function pickPhysicalSceneStateInput(value: { physicalSceneState?: PhysicalSceneStateInput; sceneState?: PhysicalSceneStateInput }): PhysicalSceneStateInput {
-  return value.physicalSceneState ?? value.sceneState
 }
 
 function formatStatusPanelObject(value: unknown, depth = 2): string {
@@ -972,6 +1109,35 @@ function writeProgramConfig(assetDir: string, config: StoryProgramConfig): void 
   fs.writeFileSync(path.join(assetDir, 'program-config.md'), renderProgramConfigMarkdown(config), 'utf-8')
 }
 
+function updateStoryAssetProgramConfig(assetId: string, patch: Partial<StoryProgramConfig>): StoryProgramConfig {
+  const assetDir = getStoryAssetDir(assetId)
+  if (!assetDir) throw new Error('找不到故事资料目录。')
+  const record = readStoryAssetRecord(assetDir, assetId)
+  const existing = readProgramConfig(assetDir) || fallbackStoryInitialization({
+    assetId,
+    sourceName: record?.sourceName || assetId,
+    entries: record?.entries || [],
+    characters: record?.characters || [],
+  })
+  const editablePatch = {
+    worldview: String(patch.worldview ?? existing.worldview ?? ''),
+    openingText: String(patch.openingText ?? existing.openingText ?? ''),
+    directorStyle: String(patch.directorStyle ?? existing.directorStyle ?? ''),
+    narratorStyle: String(patch.narratorStyle ?? existing.narratorStyle ?? ''),
+    currentPhysicalEnvironment: String(patch.currentPhysicalEnvironment ?? existing.currentPhysicalEnvironment ?? ''),
+    currentPhysicalEnvironmentForbidden: String(patch.currentPhysicalEnvironmentForbidden ?? existing.currentPhysicalEnvironmentForbidden ?? ''),
+    statusPanelSchema: String(patch.statusPanelSchema ?? existing.statusPanelSchema ?? ''),
+    statusPanel: String(patch.statusPanel ?? existing.statusPanel ?? ''),
+    globalContextSeed: String(patch.globalContextSeed ?? existing.globalContextSeed ?? ''),
+  }
+  const config = normalizeProgramConfig({
+    ...existing,
+    ...editablePatch,
+  } as Record<string, unknown>, existing)
+  writeProgramConfig(assetDir, config)
+  return config
+}
+
 function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
   return [
     '---',
@@ -1009,8 +1175,14 @@ function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
     '## 初始人物状态',
     config.statusPanel || '（无）',
     '',
-    '## 初始物理场景状态',
-    renderPhysicalSceneState(config.physicalSceneState),
+    '## 初始物理环境',
+    renderPhysicalEnvironment(config.currentPhysicalEnvironment, config.currentPhysicalEnvironmentForbidden),
+    '',
+    '## 导演风格',
+    config.directorStyle || '（无）',
+    '',
+    '## 叙事风格',
+    config.narratorStyle || '（无）',
     '',
     '## 初始玩家选项',
     config.initialPlayerOptions.length
@@ -1053,7 +1225,10 @@ function normalizeProgramConfig(raw: Record<string, unknown>, fallback: StoryPro
     statusSubject: String(raw.statusSubject || fallback.statusSubject || ''),
     statusPanelSchema: ensureSpatialStatusPanelSchema(String(raw.statusPanelSchema || fallback.statusPanelSchema || ''), String(raw.statusSubject || fallback.statusSubject || '人物'), cast as CharacterState[]),
     statusPanel: ensureSpatialStatusPanel(formatStatusPanelPayload(raw.statusPanel || fallback.statusPanel), String(raw.statusSubject || fallback.statusSubject || '人物'), cast as CharacterState[]),
-    physicalSceneState: normalizePhysicalSceneState(pickStoredPhysicalSceneState(raw), fallback.physicalSceneState ?? fallback.sceneState),
+    currentPhysicalEnvironment: String(raw.currentPhysicalEnvironment || fallback.currentPhysicalEnvironment || ''),
+    currentPhysicalEnvironmentForbidden: String(raw.currentPhysicalEnvironmentForbidden || fallback.currentPhysicalEnvironmentForbidden || ''),
+    directorStyle: String(raw.directorStyle || fallback.directorStyle || ''),
+    narratorStyle: String(raw.narratorStyle || fallback.narratorStyle || ''),
     initialPlayerOptions: initialPlayerOptions as PlayerOption[],
     normalizedEntries: normalizedEntries as StorybookEntry[],
     globalContextSeed: String(raw.globalContextSeed || fallback.globalContextSeed || ''),
@@ -1194,7 +1369,7 @@ async function requestDeepSeekContent(
   const startedAt = Date.now()
 
   try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
+    response = await fetchWithTransientRetry(`${baseUrl}/chat/completions`, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -1215,6 +1390,15 @@ async function requestDeepSeekContent(
         throw Object.assign(new Error(`${label} 请求已取消。`), { name: 'AbortError' })
       }
       throw new Error(`DeepSeek 请求超过 ${Math.round(llmTimeoutMs / 1000)} 秒未返回，已中断。`)
+    }
+    if (isTransientFetchError(error)) {
+      const file = writeLlmDebugFile({
+        label: `${label}-deepseek-fetch-error`,
+        raw: '',
+        messages,
+        error: error instanceof Error ? error : new Error(String(error)),
+      })
+      throw new Error(`DeepSeek 网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
     }
     throw error
   } finally {
@@ -1293,7 +1477,7 @@ async function requestFireworksContent(
   const startedAt = Date.now()
 
   try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
+    response = await fetchWithTransientRetry(`${baseUrl}/chat/completions`, {
       method: 'POST',
       signal: controller.signal,
       headers: {
@@ -1306,134 +1490,90 @@ async function requestFireworksContent(
         messages,
         temperature,
         max_tokens: maxTokens,
-        stream: true,
-        stream_options: { include_usage: true },
-        response_format: { type: 'json_object' },
         ...(fireworksServiceTier(model) ? { service_tier: fireworksServiceTier(model) } : {}),
       }),
     })
+
+    if (!response.ok) {
+      const text = await response.text()
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('Fireworks API Key 无效、无权限，或当前账号不能调用该模型。请检查 Fireworks key 和模型权限。')
+      }
+      throw new Error(`Fireworks ${response.status}: ${text.slice(0, 500)}`)
+    }
+
+    const text = await response.text()
+    const durationMs = Date.now() - startedAt
+    const payload = JSON.parse(text) as {
+      error?: { message?: string; code?: number | string; metadata?: unknown }
+      choices?: Array<{ message?: { content?: string } }>
+      usage?: {
+        prompt_tokens?: number
+        completion_tokens?: number
+        total_tokens?: number
+      }
+    }
+    if (payload.error) {
+      const detail =
+        typeof payload.error.message === 'string' && payload.error.message.trim()
+          ? payload.error.message.trim()
+          : JSON.stringify(payload.error)
+      const file = writeLlmDebugFile({
+        label: `${label}-fireworks-error`,
+        raw: text,
+        messages,
+        error: new Error(detail),
+      })
+      throw new Error(`Fireworks 上游错误：${detail}；原始返回已保存：${file}`)
+    }
+    const raw = payload.choices?.[0]?.message?.content?.trim()
+    if (!raw) {
+      const file = writeLlmDebugFile({
+        label: `${label}-fireworks-empty`,
+        raw: text,
+        messages,
+        error: new Error('Fireworks returned an empty response'),
+      })
+      throw new Error(`Fireworks 返回空内容；原始返回已保存：${file}`)
+    }
+    const estimatedOutputTokens = estimateTokens(raw)
+    const inputTokens = Number(payload.usage?.prompt_tokens || 0)
+    const outputTokens = Number(payload.usage?.completion_tokens || 0)
+    const totalTokens = Number(payload.usage?.total_tokens || 0)
+    return {
+      raw,
+      metrics: {
+        label,
+        model,
+        durationMs,
+        ttftMs: durationMs,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        estimatedOutputTokens,
+      },
+    }
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (isAbortError(error)) {
       if (externallyAborted || signal?.aborted) {
         throw Object.assign(new Error(`${label} 请求已取消。`), { name: 'AbortError' })
       }
       throw new Error(`Fireworks 请求超过 ${Math.round(llmTimeoutMs / 1000)} 秒未返回，已中断。`)
+    }
+    if (isTransientFetchError(error)) {
+      const file = writeLlmDebugFile({
+        label: `${label}-fireworks-fetch-error`,
+        raw: '',
+        messages,
+        error: error instanceof Error ? error : new Error(String(error)),
+      })
+      throw new Error(`Fireworks 网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
     }
     throw error
   } finally {
     unlinkAbortSignal()
     clearTimeout(timer)
   }
-
-  if (!response.ok) {
-    const text = await response.text()
-    if (response.status === 401 || response.status === 403) {
-      throw new Error('Fireworks API Key 无效、无权限，或当前账号不能调用该模型。请检查 Fireworks key 和模型权限。')
-    }
-    throw new Error(`Fireworks ${response.status}: ${text.slice(0, 500)}`)
-  }
-  const streamed = await readFireworksStream(response, messages, label, startedAt)
-  const durationMs = Date.now() - startedAt
-  const raw = streamed.raw.trim()
-  if (!raw) {
-    const file = writeLlmDebugFile({
-      label: `${label}-fireworks-empty`,
-      raw: streamed.rawSse,
-      messages,
-      error: new Error('Fireworks returned an empty response'),
-    })
-    throw new Error(`Fireworks 返回空内容；原始返回已保存：${file}`)
-  }
-  const estimatedOutputTokens = estimateTokens(raw)
-  const inputTokens = Number(streamed.usage?.prompt_tokens || 0)
-  const outputTokens = Number(streamed.usage?.completion_tokens || 0)
-  const totalTokens = Number(streamed.usage?.total_tokens || 0)
-  return {
-    raw,
-    metrics: {
-      label,
-      model,
-      durationMs,
-      ttftMs: streamed.firstTokenMs || durationMs,
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      estimatedOutputTokens,
-    },
-  }
-}
-
-async function readFireworksStream(
-  response: Response,
-  messages: ChatMessage[],
-  label: string,
-  startedAt: number,
-): Promise<{
-  raw: string
-  rawSse: string
-  firstTokenMs?: number
-  usage?: {
-    prompt_tokens?: number
-    completion_tokens?: number
-    total_tokens?: number
-  }
-}> {
-  if (!response.body) throw new Error('Fireworks 流式响应没有 body。')
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let rawSse = ''
-  let raw = ''
-  let firstTokenMs = 0
-  let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    const chunk = decoder.decode(value, { stream: true })
-    rawSse += chunk
-    buffer += chunk
-    const events = buffer.split(/\r?\n\r?\n/)
-    buffer = events.pop() || ''
-    for (const event of events) {
-      for (const line of event.split(/\r?\n/)) {
-        if (!line.startsWith('data:')) continue
-        const data = line.slice(5).trim()
-        if (!data || data === '[DONE]') continue
-        let payload: {
-          error?: { message?: string; code?: number | string; metadata?: unknown }
-          choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>
-          usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
-        }
-        try {
-          payload = JSON.parse(data)
-        } catch {
-          continue
-        }
-        if (payload.error) {
-          const detail =
-            typeof payload.error.message === 'string' && payload.error.message.trim()
-              ? payload.error.message.trim()
-              : JSON.stringify(payload.error)
-          const file = writeLlmDebugFile({
-            label: `${label}-fireworks-error`,
-            raw: rawSse,
-            messages,
-            error: new Error(detail),
-          })
-          throw new Error(`Fireworks 上游错误：${detail}；原始返回已保存：${file}`)
-        }
-        if (payload.usage) usage = payload.usage
-        for (const choice of payload.choices || []) {
-          const content = choice.delta?.content || choice.message?.content || ''
-          if (content && !firstTokenMs) firstTokenMs = Date.now() - startedAt
-          raw += content
-        }
-      }
-    }
-  }
-
-  return { raw, rawSse, firstTokenMs: firstTokenMs || undefined, usage }
 }
 
 async function repairJsonWithModel(apiKey: string, raw: string, model = defaultModel): Promise<{ raw: string; metrics: LlmCallMetrics }> {
@@ -1456,22 +1596,79 @@ async function repairJsonWithModel(apiKey: string, raw: string, model = defaultM
   ], 0, normalizeModel(model), 'JSON Repair')
 }
 
+async function testProvider(input: ProviderTestRequest): Promise<Record<string, unknown>> {
+  const model = normalizeModel(input.model)
+  const provider = providerForModel(model)
+  const apiKey = providerApiKey(provider, input.apiKey)
+  const startedAt = Date.now()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 12_000)
+  try {
+    const result = await requestModelContent(apiKey, [
+      {
+        role: 'user',
+        content: '连通性测试。只输出一个 JSON：{"ok":true}',
+      },
+    ], 0, model, 'ProviderTest', 80, controller.signal)
+    return {
+      ok: true,
+      provider,
+      providerLabel: providerLabel(provider),
+      model,
+      durationMs: result.metrics.durationMs || Date.now() - startedAt,
+      reply: result.raw.slice(0, 120),
+      usage: {
+        inputTokens: result.metrics.inputTokens,
+        outputTokens: result.metrics.outputTokens,
+        totalTokens: result.metrics.totalTokens,
+      },
+    }
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error(`${providerLabel(provider)} 连通性测试超过 12 秒未返回。`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function callModelWithPublicTrace(
   stage: PipelineEvent['stage'],
   label: string,
   messages: ChatMessage[],
-  options: { temperature: number; apiKey?: string; model?: string; maxTokens?: number },
+  options: { temperature: number; apiKey?: string; model?: string; maxTokens?: number; timeoutMs?: number },
   emit: (event: PipelineEvent) => void,
   traceMessages: string[],
 ): Promise<LayerResult> {
   let index = 0
+  const controller = options.timeoutMs ? new AbortController() : undefined
+  let deadline: ReturnType<typeof setTimeout> | undefined
   const timer = setInterval(() => {
     const message = traceMessages[Math.min(index, traceMessages.length - 1)]
     index += 1
     emit({ type: 'stage_tick', stage, label, message })
   }, 2500)
   try {
-    const result = await callModel(messages, { ...options, debugLabel: label })
+    const call = callModel(messages, { ...options, debugLabel: label, signal: controller?.signal })
+    const result = options.timeoutMs
+      ? await Promise.race([
+        call,
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => {
+            const error = new Error(`${label} 超过 ${Math.round(Number(options.timeoutMs) / 1000)} 秒未完成，已中断。`)
+            const file = writeLlmDebugFile({
+              label: `${label}-timeout`,
+              raw: '',
+              messages,
+              error,
+            })
+            controller?.abort()
+            reject(new Error(`${error.message}；请求上下文已保存：${file}`))
+          }, options.timeoutMs)
+        }),
+      ])
+      : await call
     emit({
       type: 'stage_tick',
       stage,
@@ -1480,6 +1677,7 @@ async function callModelWithPublicTrace(
     })
     return result
   } finally {
+    if (deadline) clearTimeout(deadline)
     clearInterval(timer)
   }
 }
@@ -1491,7 +1689,7 @@ function buildHardRules(): string {
 function buildRuntimeBlocks(input: GenerateRequest): {
   worldState: string
   spatialState: string
-  physicalSceneState: string
+  physicalEnvironment: string
   recentTurns: string
   storybook: string
   storybookRegistry: string
@@ -1508,7 +1706,7 @@ function buildRuntimeBlocks(input: GenerateRequest): {
         input.statusPanel,
       ].join('\n')
       : '无明确空间状态；必须从最近正文保持姿势、朝向、接触关系和手部占用的连续性。',
-    physicalSceneState: renderPhysicalSceneState(pickPhysicalSceneStateInput(input)),
+    physicalEnvironment: renderPhysicalEnvironment(input.currentPhysicalEnvironment, input.currentPhysicalEnvironmentForbidden),
     recentTurns: renderConversation(input.recentTurns),
     storybook,
     storybookRegistry: renderStorybookRegistry(input.storybookEntries),
@@ -1595,13 +1793,55 @@ function pruneEmpty(value: unknown): unknown {
   return output
 }
 
-function compactSceneBeat(value: unknown): string {
-  if (typeof value === 'string') return compactText(value, 100)
+function compactModuleType(value: unknown, fallback: string): string {
+  const text = compactText(value, 16)
+  if (/氛围|环境/.test(text)) return '氛围模块'
+  if (/推进|行动|事件/.test(text)) return '推进模块'
+  if (/插入|信息|角色|反应/.test(text)) return '插入模块'
+  if (/结尾/.test(text)) return '结尾模块'
+  return text || fallback
+}
+
+function compactDescriptionChain(value: unknown): string {
+  if (typeof value === 'string') return compactText(value, 70)
   const record = compactRecord(value)
+  const mode = compactText(record.mode || record.type || record.kind, 12)
+  const objects = Array.isArray(record.objects)
+    ? compactStringArray(record.objects, 2, 24)
+    : compactStringArray(record.chain || record.object || record.target, 2, 24)
+  const notes = compactText(record.notes || record.summary || record.goal || record.detail, 45)
+  const chain = objects.length ? objects.join('→') : notes
+  if (!mode) return chain
+  return [mode, chain].filter(Boolean).join('｜')
+}
+
+function compactModuleBeat(value: unknown): string {
+  if (typeof value === 'string') return compactText(value, 140)
+  const record = compactRecord(value)
+  const moduleType = compactModuleType(record.moduleType || record.type || record.kind || record.mode, '推进模块')
+  const summary = compactText(record.summary || record.synopsis || record.event || record.goal || record.description, 80)
+  const chain = compactDescriptionChain(record.descriptionChain || record.chain || record.focus)
   return [
-    compactText(record.summary, 70),
-    compactText(record.goal, 50),
-  ].filter(Boolean).join('；')
+    moduleType,
+    summary,
+    chain,
+  ].filter(Boolean).join('｜')
+}
+
+function compactEndingBeat(value: unknown): string {
+  if (typeof value === 'string') {
+    const text = compactText(value, 140)
+    if (!text) return ''
+    return text.startsWith('结尾模块') ? text : `结尾模块｜${text}`
+  }
+  const record = compactRecord(value)
+  const summary = compactText(record.summary || record.synopsis || record.event || record.goal || record.description, 80)
+  const chain = compactDescriptionChain(record.descriptionChain || record.chain || record.focus)
+  return [
+    '结尾模块',
+    summary,
+    chain,
+  ].filter(Boolean).join('｜')
 }
 
 function compactDescriptionFocus(value: unknown): string {
@@ -1616,34 +1856,11 @@ function compactDirectorPlan(value: unknown): Record<string, unknown> {
   const source = compactRecord(value)
   const preflight = compactRecord(source.preflight)
   const requirement = compactRecord(source.requirementReinforcement)
-  const novel = compactRecord(source.novelGuidance)
-  const outline = compactRecord(source.outlineGuidance)
   const intent = compactText(source.intent, 100)
     || [
       compactText(preflight.turnIntent, 70),
       compactStringArray(preflight.playerMustCarry, 2, 45).join('；'),
     ].filter(Boolean).join('；')
-  const policy = Array.isArray(source.policy) ? source.policy : [
-    requirement.retellPolicy ? `转述:${compactText(requirement.retellPolicy, 24)}` : '',
-    requirement.initiativePolicy ? `抢话:${compactText(requirement.initiativePolicy, 24)}` : '',
-    requirement.dialoguePlan ? `对话:${compactText(requirement.dialoguePlan, 40)}` : '',
-    requirement.paragraphPlan ? `段落:${compactText(requirement.paragraphPlan, 40)}` : '',
-    requirement.intentFit ? `顺应:${compactText(requirement.intentFit, 45)}` : '',
-  ].filter(Boolean)
-  const craft = Array.isArray(source.craft) ? source.craft : [
-    [novel.conflictEngine, novel.characterArc].map(item => compactText(item, 35)).filter(Boolean).join('；'),
-    compactText(novel.dramaticGradient, 70),
-    [
-      compactStringArray(novel.sensoryPlan, 2, 12).join('/'),
-      compactText(novel.freshDetail, 35),
-      compactText(novel.textureDiscipline, 35),
-    ].filter(Boolean).join('；'),
-  ].filter(Boolean)
-  const currentPlot = Array.isArray(source.currentPlot) ? source.currentPlot : [
-    ...compactStringArray(outline.follow, 2, 55).map(item => `follow:${item}`),
-    ...compactStringArray(outline.avoid, 1, 55).map(item => `avoid:${item}`),
-    ...compactStringArray(outline.revise, 1, 55).map(item => `revise:${item}`),
-  ]
   const foreshadow = Array.isArray(source.foreshadow) ? source.foreshadow : (Array.isArray(source.foreshadowing) ? source.foreshadowing : [])
     .slice(0, 3)
     .map(item => {
@@ -1655,32 +1872,38 @@ function compactDirectorPlan(value: unknown): Record<string, unknown> {
 
   return pruneEmpty({
     intent,
-    npc: compactText(source.npc || requirement.mainNpcRead, 90),
-    policy: compactStringArray(policy, 4, 55),
-    craft: compactStringArray(craft, 3, 70),
-    load: compactStringArray(source.load || source.loadModuleIds, 6, 80),
-    beats: (Array.isArray(source.beats) ? source.beats : Array.isArray(source.sceneBeats) ? source.sceneBeats : []).slice(0, 3).map(compactSceneBeat).filter(Boolean),
-    ending: compactSceneBeat(source.ending || source.endingBeat || source.exitWindow),
+    beats: (Array.isArray(source.beats) ? source.beats : Array.isArray(source.sceneBeats) ? source.sceneBeats : []).slice(0, 3).map(compactModuleBeat).filter(Boolean),
+    ending: compactEndingBeat(source.ending || source.endingBeat || source.exitWindow),
     focus: (Array.isArray(source.focus) ? source.focus : Array.isArray(source.descriptionFocus) ? source.descriptionFocus : Array.isArray(source.descriptionPlans) ? source.descriptionPlans : [])
       .slice(0, 4)
       .map(compactDescriptionFocus)
       .filter(Boolean),
-    sceneDecision: compactText(source.sceneDecision || source.sceneTransition || source.transitionDecision, 100),
+    currentPhysicalEnvironment: compactText(source.currentPhysicalEnvironment, 180),
+    currentPhysicalEnvironmentForbidden: compactText(source.currentPhysicalEnvironmentForbidden, 180),
     foreshadow: compactStringArray(foreshadow, 3, 65),
-    currentPlot: compactStringArray(currentPlot, 4, 70),
     mustNotResolve: compactStringArray(source.mustNotResolve, 3, 70),
-    brief: compactText(source.brief || source.narratorBrief || source.exitWindow, 120),
   }) as Record<string, unknown>
 }
 
 function compactPostprocessDirectorBrief(plan: Record<string, unknown>): string {
-  const currentPlot = compactStringArray(plan.currentPlot, 2, 70)
   return [
     compactText(plan.intent, 80) ? `intent: ${compactText(plan.intent, 80)}` : '',
-    currentPlot.length ? `currentPlot: ${currentPlot.join('；')}` : '',
+    compactText(plan.currentPhysicalEnvironment, 80) ? `environment: ${compactText(plan.currentPhysicalEnvironment, 80)}` : '',
+    compactText(plan.currentPhysicalEnvironmentForbidden, 80) ? `environmentForbidden: ${compactText(plan.currentPhysicalEnvironmentForbidden, 80)}` : '',
     compactStringArray(plan.foreshadow, 2, 60).length ? `foreshadow: ${compactStringArray(plan.foreshadow, 2, 60).join('；')}` : '',
     compactStringArray(plan.mustNotResolve, 2, 60).length ? `mustNotResolve: ${compactStringArray(plan.mustNotResolve, 2, 60).join('；')}` : '',
   ].filter(Boolean).join('\n')
+}
+
+function normalizeTurnSummary(value: unknown, finalText = ''): string {
+  const summary = compactText(value, 120)
+  if (summary) return summary
+  return compactText(
+    String(finalText || '')
+      .replace(/\s+/g, ' ')
+      .replace(/[。！？!?].*$/s, match => match.slice(0, 1)),
+    100,
+  )
 }
 
 function normalizeLongRangeStatus(value: unknown, currentLongRangeOutline = ''): string {
@@ -1715,6 +1938,7 @@ function buildLongRangeDirectorUser(input: {
   turnSummary: string
   finalText: string
   directorGuidance?: string
+  directorStyle?: string
   modules?: UserModule[]
 }): string {
   return wrapWithMustRead([
@@ -1729,6 +1953,7 @@ function buildLongRangeDirectorUser(input: {
     block('最近正文', input.recentTurns, '（无）'),
     block('已加载动态注入模块', input.storybook, '（无）'),
     block('上帝模式导演要求', input.directorGuidance || '', '（无）'),
+    block('故事导演风格', input.directorStyle || '', '（无）'),
     block('导演风格配置', renderModulesForStage(input.modules || [], 'director'), '（无）'),
   ].join('\n'))
 }
@@ -1742,7 +1967,7 @@ function extractDirectorForeshadowRecords(plan: Record<string, unknown>): Array<
 function parseDirectorForeshadowRecord(value: string): Record<string, unknown> | null {
   const text = String(value || '').trim()
   if (!text) return null
-  const match = text.match(/^\s*(plant|delay|payoff|drop|埋下|延迟|回收|废弃|删除)\s*[:：]\s*(.+)$/i)
+  const match = text.match(/^\s*(plant|delay|payoff|drop|埋下|延迟|回收|废弃|删除)\s*[:：｜|]\s*(.+)$/i)
   const type = normalizeDirectorForeshadowType(match?.[1] || 'plant')
   const body = String(match?.[2] || text).trim()
   return body ? { type, text: body } : null
@@ -1816,7 +2041,6 @@ function buildInteractionMetrics(input: {
       inputTokens: item.inputTokens,
       outputTokens: item.outputTokens || item.estimatedOutputTokens,
       totalTokens: item.totalTokens,
-      cacheHit: item.cacheHit,
     })),
   }
 }
@@ -1833,7 +2057,6 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
   playerInput: string
   modules: UserModule[]
   directorUser: string
-  cacheKey: string
 } {
   const context = buildRuntimeBlocks(input)
   const hardRules = buildHardRules()
@@ -1841,6 +2064,7 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
   const qualityFeedback = String(input.qualityFeedback || '').trim()
   const longRangeOutline = String(input.longRangeOutline || '').trim()
   const directorGuidance = String(input.directorGuidance || '').trim()
+  const directorStyle = String(input.directorStyle || '').trim()
   const turnIndex = normalizeTurnIndex(input.turnIndex, input.recentTurns)
   const playerInput = input.playerInput.trim()
   const modules = input.userModules || []
@@ -1851,11 +2075,12 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
     block('已加载动态注入模块', context.storybook),
     block('可请求动态注入模块 registry', context.storybookRegistry, '当前没有故事书条目。'),
     block('当前世界状态', context.worldState),
-    block('当前物理场景状态', context.physicalSceneState, '（无）'),
+    block('当前物理环境', context.physicalEnvironment, '（无）'),
     block('长期剧情总结', globalContext),
     block('长期写作负反馈', String(input.qualityFeedback || '').trim(), '（无）'),
     block('当前长期剧情', longRangeOutline, '（无。Director 只能规划本轮，不得生成长期剧情。）'),
     block('上帝模式导演要求', directorGuidance, '（无）'),
+    block('故事导演风格', directorStyle, '（无）'),
     block('导演风格配置', renderModulesForStage(modules, 'director'), '（无）'),
     block('当前伏笔', renderForeshadowContext(input.foreshadowRecords, turnIndex)),
     block('最近正文', context.recentTurns),
@@ -1874,33 +2099,6 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
     playerInput,
     modules,
     directorUser,
-    cacheKey: buildDirectorCacheKey(model, temperature, directorUser),
-  }
-}
-
-function buildDirectorCacheKey(model: string, temperature: number, directorUser: string): string {
-  return crypto
-    .createHash('sha256')
-    .update(JSON.stringify({ version: 2, model, temperature: Number(temperature.toFixed(2)), directorUser }))
-    .digest('hex')
-}
-
-function cachedDirectorResult(entry: DirectorCacheEntry, model: string): LayerResult {
-  const raw = JSON.stringify(entry.directorPlan)
-  return {
-    raw,
-    json: entry.directorPlan,
-    metrics: {
-      label: 'Director',
-      model,
-      durationMs: 0,
-      ttftMs: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      estimatedOutputTokens: 0,
-      cacheHit: true,
-    },
   }
 }
 
@@ -1912,7 +2110,7 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
   globalContext: string
   qualityFeedback: string
   nextLongRangeOutline: string
-  physicalSceneState: string
+  physicalEnvironment: string
   playerInput: string
   modules: UserModule[]
   directorPlan: Record<string, unknown>
@@ -1921,14 +2119,14 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
   temperature: number
   playerInput: string
   narratorUser: string
-  cacheKey: string
 } {
+  const narratorStyle = String(input.narratorStyle || '').trim()
   const narratorUser = wrapWithMustRead([
     block('固定 Narrator prompt', readPrompt('narrator/prompt.md')),
     block('硬规则', options.hardRules),
     block('导演计划', JSON.stringify(options.directorPlan)),
     block('当前世界状态', options.context.worldState),
-    block('当前物理场景状态', options.physicalSceneState, '（无）'),
+    block('当前物理环境', options.physicalEnvironment, '（无）'),
     block('叙事空间输入', options.context.spatialState),
     block('长期剧情总结', options.globalContext),
     block('长期写作负反馈', options.qualityFeedback, '（无）'),
@@ -1936,6 +2134,7 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
     block('最近正文', options.context.recentTurns),
     block('当前玩家输入', options.playerInput),
     block('已加载动态注入模块', options.context.storybook),
+    block('故事叙事风格', narratorStyle, '（无）'),
     block('叙事风格配置', renderModulesForStage(options.modules, 'narrator')),
   ].join('\n'))
   return {
@@ -1943,182 +2142,104 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
     temperature: options.temperature,
     playerInput: options.playerInput || input.playerInput.trim(),
     narratorUser,
-    cacheKey: buildNarratorCacheKey(options.model, options.temperature, narratorUser),
   }
 }
 
-function buildNarratorCacheKey(model: string, temperature: number, narratorUser: string): string {
-  return crypto
-    .createHash('sha256')
-    .update(JSON.stringify({ version: 3, model, temperature: Number(temperature.toFixed(2)), maxTokens: narratorMaxTokens, narratorUser }))
-    .digest('hex')
+function extractNarratorFinalText(entry: LayerResult): string {
+  const json = entry.json
+  const raw = entry.raw || ''
+  return typeof json.draftText === 'string'
+    ? json.draftText
+    : String(raw)
 }
 
-function cachedNarratorResult(entry: NarratorCacheEntry, model: string): LayerResult {
+function buildPostprocessPromptPayload(input: GenerateRequest, options: {
+  model: string
+  temperature?: number
+  playerInput: string
+  finalText: string
+  directorPlan: Record<string, unknown>
+  globalContext: string
+  context: ReturnType<typeof buildRuntimeBlocks>
+  turnIndex: number
+  longRangeOutline: string
+  currentPhysicalEnvironment: string
+  currentPhysicalEnvironmentForbidden: string
+}): {
+  model: string
+  temperature: number
+  playerInput: string
+  finalText: string
+  postprocessUser: string
+} {
+  const temperature = Number.isFinite(options.temperature) ? Number(options.temperature) : 0.5
+  const postprocessUser = wrapWithMustRead([
+    block('固定 Postprocess prompt', readPrompt('postprocess/prompt.md')),
+    block('玩家输入', options.playerInput),
+    block('最终正文', options.finalText),
+    block('导演摘要', compactPostprocessDirectorBrief(options.directorPlan)),
+    block('长期剧情总结', options.globalContext),
+    block('当前伏笔', renderForeshadowContext(input.foreshadowRecords, options.turnIndex)),
+    block('最近正文', options.context.recentTurns),
+    block('人物状态 Schema', ensureMultiPersonStatusPanelSchema(String(input.statusPanelSchema || ''), '全体人物', input.characters || [])),
+    block('当前人物状态', ensurePlayerStatusPanelForPrompt(String(input.statusPanel || ''), input.characters || [])),
+    block('当前物理环境', renderPhysicalEnvironment(options.currentPhysicalEnvironment, options.currentPhysicalEnvironmentForbidden)),
+    block('当前长期剧情', options.longRangeOutline, '（无）'),
+  ].join('\n'))
   return {
-    raw: entry.raw || JSON.stringify(entry.narratorJson),
-    json: entry.narratorJson,
-    metrics: {
-      label: 'Narrator',
-      model,
-      durationMs: 0,
-      ttftMs: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      estimatedOutputTokens: 0,
-      cacheHit: true,
-    },
+    model: options.model,
+    temperature,
+    playerInput: options.playerInput,
+    finalText: options.finalText,
+    postprocessUser,
   }
 }
 
-async function runDirectorCall(input: GenerateRequest, payload: ReturnType<typeof buildDirectorPromptPayload>, signal?: AbortSignal): Promise<DirectorCacheEntry> {
-  const director = await callModel([
-    { role: 'user', content: payload.directorUser },
-  ], { temperature: payload.temperature, apiKey: input.apiKey, model: payload.model, debugLabel: 'Director', signal })
-  const directorPlan = compactDirectorPlan(director.json)
-  const entry: DirectorCacheEntry = {
-    key: payload.cacheKey,
-    createdAt: new Date().toISOString(),
-    model: payload.model,
-    temperature: payload.temperature,
-    playerInput: payload.playerInput,
-    directorPlan,
-  }
-  writeDirectorCacheEntry(entry)
-  return entry
-}
-
-async function runNarratorCall(input: GenerateRequest, payload: ReturnType<typeof buildNarratorPromptPayload>, signal?: AbortSignal): Promise<NarratorCacheEntry> {
-  const narrator = await callModel([
-    { role: 'user', content: payload.narratorUser },
-  ], { temperature: payload.temperature, apiKey: input.apiKey, model: payload.model, debugLabel: 'Narrator', maxTokens: narratorMaxTokens, signal })
-  const entry: NarratorCacheEntry = {
-    key: payload.cacheKey,
-    createdAt: new Date().toISOString(),
-    model: payload.model,
-    temperature: payload.temperature,
-    playerInput: payload.playerInput,
-    narratorJson: narrator.json,
-    raw: narrator.raw,
-  }
-  writeNarratorCacheEntry(entry)
-  return entry
-}
-
-function startDirectorPrewarm(input: GenerateRequest): { key: string; status: string } {
-  const temperature = Number.isFinite(input.temperature) ? Number(input.temperature) : 0.8
-  const payload = buildDirectorPromptPayload(input, temperature)
-  if (!payload.playerInput) return { key: payload.cacheKey, status: 'empty-input' }
-  if (getDirectorCacheEntry(payload.cacheKey)) return { key: payload.cacheKey, status: 'cached' }
-  if (directorPrewarmJobs.has(payload.cacheKey)) return { key: payload.cacheKey, status: 'running' }
-  const controller = new AbortController()
-  const promise = runDirectorCall(input, payload, controller.signal)
-    .catch(error => {
-      if (isAbortError(error)) return null
-      writeLlmDebugFile({
-        label: 'Director Prewarm',
-        raw: '',
-        messages: [{ role: 'user', content: payload.directorUser }],
-        error,
-      })
-      return null
-    })
-    .finally(() => {
-      directorPrewarmJobs.delete(payload.cacheKey)
-    })
-  directorPrewarmJobs.set(payload.cacheKey, {
-    key: payload.cacheKey,
-    stage: 'director',
-    playerInput: payload.playerInput,
-    controller,
-    promise,
-    startedAt: Date.now(),
-  })
-  return { key: payload.cacheKey, status: 'queued' }
-}
-
-function startNarratorPrewarm(input: GenerateRequest, payload: ReturnType<typeof buildNarratorPromptPayload>): { key: string; status: string } {
-  if (!payload.playerInput) return { key: payload.cacheKey, status: 'empty-input' }
-  if (getNarratorCacheEntry(payload.cacheKey)) return { key: payload.cacheKey, status: 'cached' }
-  if (narratorPrewarmJobs.has(payload.cacheKey)) return { key: payload.cacheKey, status: 'running' }
-  const controller = new AbortController()
-  const promise = runNarratorCall(input, payload, controller.signal)
-    .catch(error => {
-      if (isAbortError(error)) return null
-      writeLlmDebugFile({
-        label: 'Narrator Prewarm',
-        raw: '',
-        messages: [{ role: 'user', content: payload.narratorUser }],
-        error,
-      })
-      return null
-    })
-    .finally(() => {
-      narratorPrewarmJobs.delete(payload.cacheKey)
-    })
-  narratorPrewarmJobs.set(payload.cacheKey, {
-    key: payload.cacheKey,
-    stage: 'narrator',
-    playerInput: payload.playerInput,
-    controller,
-    promise,
-    startedAt: Date.now(),
-  })
-  return { key: payload.cacheKey, status: 'queued' }
-}
-
-async function startNextTurnPrewarm(input: GenerateRequest): Promise<NextTurnPrewarmResult> {
-  const temperature = Number.isFinite(input.temperature) ? Number(input.temperature) : 0.8
-  const directorPayload = buildDirectorPromptPayload(input, temperature)
-  const director = startDirectorPrewarm(input)
-  let directorEntry = getDirectorCacheEntry(director.key)
-  if (!directorEntry) {
-    const job = directorPrewarmJobs.get(director.key)
-    if (job) directorEntry = await job.promise
-  }
-  if (!directorEntry) {
-    return {
-      director: { ...director, completed: false },
-      narrator: { key: '', status: 'director-failed' },
-    }
-  }
-
-  const directorPlan = directorEntry.directorPlan
-  const nextLongRangeOutline = directorPayload.longRangeOutline
-
-  const narratorPayload = buildNarratorPromptPayload(input, {
-    model: directorPayload.model,
-    temperature: directorPayload.temperature,
-    context: directorPayload.context,
-    hardRules: directorPayload.hardRules,
-    globalContext: directorPayload.globalContext,
-    qualityFeedback: directorPayload.qualityFeedback,
-    nextLongRangeOutline,
-    physicalSceneState: directorPayload.context.physicalSceneState,
-    playerInput: directorPayload.playerInput,
-    modules: directorPayload.modules,
-    directorPlan,
-  })
-  const narrator = startNarratorPrewarm(input, narratorPayload)
-  let narratorEntry = getNarratorCacheEntry(narrator.key)
-  if (!narratorEntry) {
-    const job = narratorPrewarmJobs.get(narrator.key)
-    if (job) narratorEntry = await job.promise
-  }
-
+function buildEvaluationPromptPayload(input: EvaluationRequest, model: string): {
+  model: string
+  temperature: number
+  playerInput: string
+  finalText: string
+  evaluatorUser: string
+} {
+  const playerInput = String(input.playerInput || '').trim()
+  const finalText = String(input.finalText || '').trim()
+  const turnIndex = normalizeTurnIndex(input.turnIndex, input.recentTurns)
+  const context = buildRuntimeBlocks({
+    playerInput,
+    recentTurns: input.recentTurns,
+    characters: input.characters,
+    storybookEntries: input.storybookEntries,
+    statusPanel: input.statusPanel,
+    currentPhysicalEnvironment: input.currentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: input.currentPhysicalEnvironmentForbidden,
+  } as GenerateRequest)
+  const evaluatorUser = wrapWithMustRead([
+    block('固定 Evaluator prompt', readPrompt('evaluator/prompt.md')),
+    block('当前玩家输入', playerInput),
+    block('最终正文', finalText),
+    block('Director 输出', JSON.stringify(input.director || {}, null, 2)),
+    block('Narrator 输出', JSON.stringify(input.narrator || {}, null, 2)),
+    block('Postprocess 输出', JSON.stringify(input.postprocess || {}, null, 2)),
+    block('最近正文', context.recentTurns),
+    block('人物状态 Schema', ensureMultiPersonStatusPanelSchema(String(input.statusPanelSchema || ''), '全体人物', input.characters || [])),
+    block('当前人物状态', ensurePlayerStatusPanelForPrompt(String(input.statusPanel || ''), input.characters || [])),
+    block('当前物理环境', renderPhysicalEnvironment(input.currentPhysicalEnvironment, input.currentPhysicalEnvironmentForbidden)),
+    block('当前伏笔', renderForeshadowContext(input.foreshadowRecords, turnIndex)),
+    block('当前长期剧情', String(input.longRangeOutline || '').trim(), '（无）'),
+    block('长期剧情总结', String(input.globalContext || '').trim(), '（无）'),
+    block('长期写作负反馈', String(input.qualityFeedback || '').trim(), '（无）'),
+    block('故事导演风格', String(input.directorStyle || '').trim(), '（无）'),
+    block('故事叙事风格', String(input.narratorStyle || '').trim(), '（无）'),
+    block('已加载动态资料', context.storybook),
+    block('用户配置模块', renderModulesForStage(input.userModules || [], 'director') + '\n\n' + renderModulesForStage(input.userModules || [], 'narrator')),
+  ].join('\n'))
   return {
-    director: { ...director, completed: true },
-    narrator: { ...narrator, completed: Boolean(narratorEntry) },
-  }
-}
-
-function cancelPrewarmJobsExcept(allowedKeys: Set<string>, stage: 'director' | 'narrator'): void {
-  const jobs = stage === 'director' ? directorPrewarmJobs : narratorPrewarmJobs
-  for (const [key, job] of jobs.entries()) {
-    if (allowedKeys.has(key)) continue
-    job.controller.abort()
-    jobs.delete(key)
+    model,
+    temperature: 0.2,
+    playerInput,
+    finalText,
+    evaluatorUser,
   }
 }
 
@@ -2126,48 +2247,15 @@ function delay(ms: number): Promise<null> {
   return new Promise(resolve => setTimeout(() => resolve(null), ms))
 }
 
-async function awaitPrewarmJob<T>(
-  job: PrewarmJob<T> | undefined,
-  stage: PipelineEvent['stage'],
-  label: string,
-  emit: (event: PipelineEvent) => void,
-): Promise<T | null> {
-  if (!job) return null
-  const startedAt = Date.now()
-  while (true) {
-    const result = await Promise.race([
-      job.promise.then(value => ({ done: true as const, value })),
-      delay(2500).then(() => ({ done: false as const, value: null })),
-    ])
-    if (result.done) return result.value
-    const elapsedMs = Date.now() - startedAt
-    emit({
-      type: 'stage_tick',
-      stage,
-      label,
-      message: `等待命中的后台 ${label} 预热结果，已等待 ${(elapsedMs / 1000).toFixed(1)}s。`,
-    })
-    if (elapsedMs >= prewarmWaitMs) {
-      job.controller.abort()
-      emit({
-        type: 'stage_tick',
-        stage,
-        label,
-        message: `后台 ${label} 预热超过 ${(prewarmWaitMs / 1000).toFixed(0)}s 未返回，已取消并转为前台生成。`,
-      })
-      return null
-    }
-  }
-}
-
 async function generate(
   input: GenerateRequest,
   emit: (event: PipelineEvent) => void = () => {},
 ): Promise<Record<string, unknown>> {
   const temperature = Number.isFinite(input.temperature) ? Number(input.temperature) : 0.8
+  const directorTemperature = Math.min(temperature, 0.4)
   const startedAt = Date.now()
   const model = normalizeModel(input.model)
-  const directorPayload = buildDirectorPromptPayload(input, temperature)
+  const directorPayload = buildDirectorPromptPayload(input, directorTemperature)
   const context = directorPayload.context
   const hardRules = directorPayload.hardRules
   const globalContext = directorPayload.globalContext
@@ -2176,67 +2264,24 @@ async function generate(
   const modules = directorPayload.modules
   const turnIndex = directorPayload.turnIndex
 
-  if (!input.bypassGenerationCache) {
-    cancelPrewarmJobsExcept(new Set([directorPayload.cacheKey]), 'director')
-  }
-
   emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：规划本轮结构、节奏、伏笔和玩家窗口。' })
-  if (input.bypassGenerationCache) {
-    emit({ type: 'stage_tick', stage: 'director', label: 'Director', message: '重新生成：跳过 Director 缓存，完整重跑导演层。' })
+  const director = await callModelWithPublicTrace('director', 'Director', [
+    { role: 'user', content: directorPayload.directorUser },
+  ], { temperature: directorPayload.temperature, apiKey: input.apiKey, model, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs }, emit, [
+    '公开日志：正在判断玩家输入类型、承接边界和本轮互动入口。',
+    '公开日志：正在安排剧情模块、推进速度和玩家下轮窗口。',
+    '公开日志：正在检查人物知识边界、伏笔和不可提前解决的问题。',
+    '公开日志：导演层仍在等待模型返回结构化计划。',
+  ])
+  let directorPlan = compactDirectorPlan(director.json)
+  const nextCurrentPhysicalEnvironment = compactText(directorPlan.currentPhysicalEnvironment || input.currentPhysicalEnvironment, 180)
+  const nextCurrentPhysicalEnvironmentForbidden = compactText(directorPlan.currentPhysicalEnvironmentForbidden || input.currentPhysicalEnvironmentForbidden, 180)
+  directorPlan = {
+    ...directorPlan,
+    currentPhysicalEnvironment: nextCurrentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: nextCurrentPhysicalEnvironmentForbidden,
   }
-  const cachedDirector = input.bypassGenerationCache ? null : getDirectorCacheEntry(directorPayload.cacheKey)
-  const runningDirectorJob = input.bypassGenerationCache ? undefined : directorPrewarmJobs.get(directorPayload.cacheKey)
-  let director: LayerResult
-  let directorPlan: Record<string, unknown>
-  if (cachedDirector) {
-    director = cachedDirectorResult(cachedDirector, model)
-    directorPlan = cachedDirector.directorPlan
-    emit({ type: 'stage_tick', stage: 'director', label: 'Director', message: '命中本地 Director 缓存，跳过模型调用。' })
-  } else if (runningDirectorJob) {
-    emit({ type: 'stage_tick', stage: 'director', label: 'Director', message: '等待命中的后台 Director 预热计划。' })
-    const entry = await awaitPrewarmJob(runningDirectorJob, 'director', 'Director', emit)
-    if (entry) {
-      director = cachedDirectorResult(entry, model)
-      directorPlan = entry.directorPlan
-    } else {
-      director = await callModelWithPublicTrace('director', 'Director', [
-        { role: 'user', content: directorPayload.directorUser },
-      ], { temperature, apiKey: input.apiKey, model }, emit, [
-        '公开日志：正在判断玩家输入类型、承接边界和本轮互动入口。',
-        '公开日志：正在安排剧情模块、推进速度和玩家下轮窗口。',
-        '公开日志：正在检查人物知识边界、伏笔和不可提前解决的问题。',
-        '公开日志：导演层仍在等待模型返回结构化计划。',
-      ])
-      directorPlan = compactDirectorPlan(director.json)
-      writeDirectorCacheEntry({
-        key: directorPayload.cacheKey,
-        createdAt: new Date().toISOString(),
-        model,
-        temperature,
-        playerInput,
-        directorPlan,
-      })
-    }
-  } else {
-    director = await callModelWithPublicTrace('director', 'Director', [
-      { role: 'user', content: directorPayload.directorUser },
-    ], { temperature, apiKey: input.apiKey, model }, emit, [
-      '公开日志：正在判断玩家输入类型、承接边界和本轮互动入口。',
-      '公开日志：正在安排剧情模块、推进速度和玩家下轮窗口。',
-      '公开日志：正在检查人物知识边界、伏笔和不可提前解决的问题。',
-      '公开日志：导演层仍在等待模型返回结构化计划。',
-    ])
-    directorPlan = compactDirectorPlan(director.json)
-    writeDirectorCacheEntry({
-      key: directorPayload.cacheKey,
-      createdAt: new Date().toISOString(),
-      model,
-      temperature,
-      playerInput,
-      directorPlan,
-    })
-  }
-  emit({ type: 'stage_result', stage: 'director', label: 'Director', message: director.metrics.cacheHit ? '导演层完成：命中本地缓存。' : '导演层完成：已得到压缩结构化计划。', json: directorPlan })
+  emit({ type: 'stage_result', stage: 'director', label: 'Director', message: '导演层完成：已得到压缩结构化计划。', json: directorPlan })
 
   let nextLongRangeOutline = longRangeOutline
 
@@ -2248,74 +2293,24 @@ async function generate(
     globalContext,
     qualityFeedback: directorPayload.qualityFeedback,
     nextLongRangeOutline,
-    physicalSceneState: context.physicalSceneState,
+    physicalEnvironment: renderPhysicalEnvironment(nextCurrentPhysicalEnvironment, nextCurrentPhysicalEnvironmentForbidden),
     playerInput,
     modules,
     directorPlan,
   })
 
   emit({ type: 'stage_start', stage: 'narrator', label: 'Narrator', message: '叙事层：按导演计划写正文草稿。' })
-  if (input.bypassGenerationCache) {
-    emit({ type: 'stage_tick', stage: 'narrator', label: 'Narrator', message: '重新生成：跳过 Narrator 缓存，完整重跑叙事层。' })
-  }
-  const cachedNarrator = input.bypassGenerationCache ? null : getNarratorCacheEntry(narratorPayload.cacheKey)
-  if (!input.bypassGenerationCache) {
-    cancelPrewarmJobsExcept(new Set([narratorPayload.cacheKey]), 'narrator')
-  }
-  const runningNarratorJob = input.bypassGenerationCache ? undefined : narratorPrewarmJobs.get(narratorPayload.cacheKey)
-  let narrator: LayerResult
-  if (cachedNarrator) {
-    narrator = cachedNarratorResult(cachedNarrator, model)
-    emit({ type: 'stage_tick', stage: 'narrator', label: 'Narrator', message: '命中本地 Narrator 缓存，跳过模型调用。' })
-  } else if (runningNarratorJob) {
-    emit({ type: 'stage_tick', stage: 'narrator', label: 'Narrator', message: '等待命中的后台 Narrator 预热草稿。' })
-    const entry = await awaitPrewarmJob(runningNarratorJob, 'narrator', 'Narrator', emit)
-    if (entry) {
-      narrator = cachedNarratorResult(entry, model)
-    } else {
-      narrator = await callModelWithPublicTrace('narrator', 'Narrator', [
-        { role: 'user', content: narratorPayload.narratorUser },
-      ], { temperature, apiKey: input.apiKey, model, maxTokens: narratorMaxTokens }, emit, [
-        '公开日志：正在把导演计划转成可读正文，不更新人物状态。',
-        '公开日志：正在平衡对话、动作、环境和心理描写。',
-        '公开日志：正在检查是否替玩家做了长期选择。',
-        '公开日志：叙事层仍在等待模型返回正文草稿。',
-      ])
-      writeNarratorCacheEntry({
-        key: narratorPayload.cacheKey,
-        createdAt: new Date().toISOString(),
-        model,
-        temperature,
-        playerInput,
-        narratorJson: narrator.json,
-        raw: narrator.raw,
-      })
-    }
-  } else {
-    narrator = await callModelWithPublicTrace('narrator', 'Narrator', [
-      { role: 'user', content: narratorPayload.narratorUser },
-    ], { temperature, apiKey: input.apiKey, model, maxTokens: narratorMaxTokens }, emit, [
-      '公开日志：正在把导演计划转成可读正文，不更新人物状态。',
-      '公开日志：正在平衡对话、动作、环境和心理描写。',
-      '公开日志：正在检查是否替玩家做了长期选择。',
-      '公开日志：叙事层仍在等待模型返回正文草稿。',
-    ])
-    writeNarratorCacheEntry({
-      key: narratorPayload.cacheKey,
-      createdAt: new Date().toISOString(),
-      model,
-      temperature,
-      playerInput,
-      narratorJson: narrator.json,
-      raw: narrator.raw,
-    })
-  }
-  emit({ type: 'stage_result', stage: 'narrator', label: 'Narrator', message: narrator.metrics.cacheHit ? '叙事层完成：命中本地缓存。' : '叙事层完成：已得到正文草稿。', json: narrator.json })
+  const narrator = await callModelWithPublicTrace('narrator', 'Narrator', [
+    { role: 'user', content: narratorPayload.narratorUser },
+  ], { temperature, apiKey: input.apiKey, model, maxTokens: narratorMaxTokens, timeoutMs: narratorTimeoutMs }, emit, [
+    '公开日志：正在把导演计划转成可读正文，不更新人物状态。',
+    '公开日志：正在平衡对话、动作、环境和心理描写。',
+    '公开日志：正在检查是否替玩家做了长期选择。',
+    '公开日志：叙事层仍在等待模型返回正文草稿。',
+  ])
+  emit({ type: 'stage_result', stage: 'narrator', label: 'Narrator', message: '叙事层完成：已得到正文草稿。', json: narrator.json })
 
-  const draftText = typeof narrator.json.draftText === 'string'
-    ? narrator.json.draftText
-    : String(narrator.raw)
-  const finalText = draftText
+  const finalText = extractNarratorFinalText(narrator)
 
   emit({
     type: 'visible_text',
@@ -2328,34 +2323,35 @@ async function generate(
     },
   })
 
-  const postprocessUser = wrapWithMustRead([
-    block('固定 Postprocess prompt', readPrompt('postprocess/prompt.md')),
-    block('玩家输入', playerInput),
-    block('最终正文', finalText),
-    block('导演摘要', compactPostprocessDirectorBrief(directorPlan)),
-    block('长期剧情总结', globalContext),
-    block('当前伏笔', renderForeshadowContext(input.foreshadowRecords, turnIndex)),
-    block('最近正文', context.recentTurns),
-    block('人物状态 Schema', input.statusPanelSchema),
-    block('当前人物状态', input.statusPanel),
-    block('当前物理场景状态', renderPhysicalSceneState(pickPhysicalSceneStateInput(input))),
-    block('当前长期剧情', longRangeOutline, '（无）'),
-  ].join('\n'))
+  const postprocessPayload = buildPostprocessPromptPayload(input, {
+    model,
+    playerInput,
+    finalText,
+    directorPlan,
+    globalContext,
+    context,
+    turnIndex,
+    longRangeOutline,
+    currentPhysicalEnvironment: nextCurrentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: nextCurrentPhysicalEnvironmentForbidden,
+  })
 
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：更新总结、状态栏、伏笔、写作负反馈和玩家选项。' })
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：总结本轮正文，更新状态栏、写作负反馈、长期剧情判定和玩家选项。' })
   const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', [
-    { role: 'user', content: postprocessUser },
-  ], { temperature: 0.5, apiKey: input.apiKey, model }, emit, [
-    '公开日志：正文已经可读，正在后台整理本轮事实。',
+    { role: 'user', content: postprocessPayload.postprocessUser },
+  ], { temperature: postprocessPayload.temperature, apiKey: input.apiKey, model }, emit, [
+    '公开日志：正文已经可读，正在后台总结本轮事实。',
+    '公开日志：正在后台更新人物状态。',
     '公开日志：正在按人物状态 Schema 更新人物状态。',
-    '公开日志：正在更新历史总结、当前剧情和写作负反馈。',
+    '公开日志：正在生成写作负反馈和长期剧情判定。',
     '公开日志：正在生成 3 个玩家候选项。',
     '公开日志：后处理层仍在等待模型返回结构化状态。',
   ])
   const postprocessJson = postprocess.json
-  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理完成：状态、总结和候选项已更新。', json: postprocessJson })
+  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理完成：状态、负反馈和候选项已更新。', json: postprocessJson })
 
   let longRangeDirector: LayerResult | null = null
+  const turnSummary = normalizeTurnSummary(postprocess.json.turnSummary, finalText)
   if (shouldRunLongRangeDirector(postprocess.json.longRangeStatus, longRangeOutline)) {
     const longRangeStatus = normalizeLongRangeStatus(postprocess.json.longRangeStatus, longRangeOutline)
     const longRangeDirectorUser = buildLongRangeDirectorUser({
@@ -2366,24 +2362,40 @@ async function generate(
       globalContext,
       currentLongRangeOutline: longRangeOutline,
       longRangeStatus,
-      turnSummary: String(postprocess.json.turnSummary || ''),
+      turnSummary,
       finalText,
       directorGuidance: input.directorGuidance,
+      directorStyle: input.directorStyle,
       modules,
     })
     emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: '高级导演层：生成或修订当前长期剧情。' })
-    longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
-      { role: 'user', content: longRangeDirectorUser },
-    ], { temperature: 0.6, apiKey: input.apiKey, model }, emit, [
-      '公开日志：正在判断当前长期剧情是否已完成、缺失或偏离。',
-      '公开日志：正在生成可供后续多轮缓慢靠近的高层方向。',
-      '公开日志：高级导演层仍在等待模型返回长期剧情。',
-    ])
-    nextLongRangeOutline = normalizeLongRangeDirectorOutline(longRangeDirector.json.longRangeOutline || longRangeDirector.json, longRangeOutline)
-    emit({ type: 'stage_result', stage: 'director', label: 'LongRangeDirector', message: '高级导演层完成：当前长期剧情已更新。', json: { longRangeOutline: nextLongRangeOutline } })
+    try {
+      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
+        { role: 'user', content: longRangeDirectorUser },
+      ], { temperature: 0.6, apiKey: input.apiKey, model, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
+        '公开日志：正在判断当前长期剧情是否已完成、缺失或偏离。',
+        '公开日志：正在生成可供后续多轮缓慢靠近的高层方向。',
+        '公开日志：高级导演层仍在等待模型返回长期剧情。',
+      ])
+      nextLongRangeOutline = normalizeLongRangeDirectorOutline(longRangeDirector.json.longRangeOutline || longRangeDirector.json, longRangeOutline)
+      emit({ type: 'stage_result', stage: 'director', label: 'LongRangeDirector', message: '高级导演层完成：当前长期剧情已更新。', json: { longRangeOutline: nextLongRangeOutline } })
+    } catch (error) {
+      longRangeDirector = null
+      emit({
+        type: 'stage_skip',
+        stage: 'director',
+        label: 'LongRangeDirector',
+        message: `高级导演层未返回，已跳过以免阻塞本轮：${error instanceof Error ? error.message : String(error)}`,
+      })
+    }
   }
 
   const playerOptions = normalizePlayerOptions(postprocess.json.playerOptions)
+  const nextStatusPanelSchema = ensureMultiPersonStatusPanelSchema(
+    formatStatusPanelPayload(postprocess.json.statusPanelSchema || input.statusPanelSchema || ''),
+    '全体人物',
+    input.characters || [],
+  )
   const nextStatusPanel = formatStatusPanelPayload(postprocess.json.statusPanel || input.statusPanel || '')
   const metrics = buildInteractionMetrics({
     model,
@@ -2399,12 +2411,14 @@ async function generate(
     narrator: narrator.json,
     postprocess: postprocessJson,
     playerOptions,
-    turnSummary: postprocess.json.turnSummary || '',
+    turnSummary,
     foreshadowRecords: extractDirectorForeshadowRecords(directorPlan),
     longRangeOutline: nextLongRangeOutline,
     qualityFeedback: postprocess.json.qualityFeedback || '',
+    statusPanelSchema: nextStatusPanelSchema,
     statusPanel: nextStatusPanel,
-    physicalSceneState: normalizePhysicalSceneState(postprocess.json.physicalSceneState ?? postprocess.json.sceneState, pickPhysicalSceneStateInput(input)),
+    currentPhysicalEnvironment: nextCurrentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: nextCurrentPhysicalEnvironmentForbidden,
     metrics,
     model,
   }
@@ -2423,14 +2437,22 @@ async function runPostprocess(
   const startedAt = Date.now()
   const turnIndex = normalizeTurnIndex(input.turnIndex, input.recentTurns)
   const director = input.director && typeof input.director === 'object' ? input.director : {}
-  const directorPlan = compactDirectorPlan(director)
+  let directorPlan = compactDirectorPlan(director)
+  const nextCurrentPhysicalEnvironment = compactText(directorPlan.currentPhysicalEnvironment || input.currentPhysicalEnvironment, 180)
+  const nextCurrentPhysicalEnvironmentForbidden = compactText(directorPlan.currentPhysicalEnvironmentForbidden || input.currentPhysicalEnvironmentForbidden, 180)
+  directorPlan = {
+    ...directorPlan,
+    currentPhysicalEnvironment: nextCurrentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: nextCurrentPhysicalEnvironmentForbidden,
+  }
   const context = buildRuntimeBlocks({
     playerInput,
     recentTurns: input.recentTurns,
     characters: input.characters,
     storybookEntries: input.storybookEntries,
     statusPanel: input.statusPanel,
-    physicalSceneState: pickPhysicalSceneStateInput(input),
+    currentPhysicalEnvironment: input.currentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: input.currentPhysicalEnvironmentForbidden,
   } as GenerateRequest)
   const hardRules = buildHardRules()
   const currentLongRangeOutline = String(input.longRangeOutline || '').trim()
@@ -2442,26 +2464,28 @@ async function runPostprocess(
     block('长期剧情总结', String(input.globalContext || '').trim()),
     block('当前伏笔', renderForeshadowContext(input.foreshadowRecords, turnIndex)),
     block('最近正文', context.recentTurns),
-    block('人物状态 Schema', input.statusPanelSchema),
-    block('当前人物状态', input.statusPanel),
-    block('当前物理场景状态', renderPhysicalSceneState(pickPhysicalSceneStateInput(input))),
+    block('人物状态 Schema', ensureMultiPersonStatusPanelSchema(String(input.statusPanelSchema || ''), '全体人物', input.characters || [])),
+    block('当前人物状态', ensurePlayerStatusPanelForPrompt(String(input.statusPanel || ''), input.characters || [])),
+    block('当前物理环境', renderPhysicalEnvironment(nextCurrentPhysicalEnvironment, nextCurrentPhysicalEnvironmentForbidden)),
     block('当前长期剧情', currentLongRangeOutline, '（无）'),
   ].join('\n'))
 
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写总结、状态栏、伏笔、写作负反馈和玩家选项。' })
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写本轮总结、状态栏、写作负反馈、长期剧情判定和玩家选项。' })
   const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', [
     { role: 'user', content: postprocessUser },
   ], { temperature: Number.isFinite(input.temperature) ? Number(input.temperature) : 0.5, apiKey: input.apiKey, model }, emit, [
     '公开日志：正在补跑上一轮失败的 Postprocess。',
+    '公开日志：正在补写本轮事实总结。',
     '公开日志：正在按人物状态 Schema 更新人物状态。',
-    '公开日志：正在补写历史总结、当前剧情和写作负反馈。',
+    '公开日志：正在补写写作负反馈和长期剧情判定。',
     '公开日志：正在生成 3 个玩家候选项。',
     '公开日志：Postprocess 重试仍在等待模型返回结构化状态。',
   ])
-  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理重试完成：状态、总结和候选项已更新。', json: postprocess.json })
+  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理重试完成：状态、负反馈和候选项已更新。', json: postprocess.json })
 
   let nextLongRangeOutline = currentLongRangeOutline
   let longRangeDirector: LayerResult | null = null
+  const turnSummary = normalizeTurnSummary(postprocess.json.turnSummary, finalText)
   if (shouldRunLongRangeDirector(postprocess.json.longRangeStatus, currentLongRangeOutline)) {
     const longRangeStatus = normalizeLongRangeStatus(postprocess.json.longRangeStatus, currentLongRangeOutline)
     const longRangeDirectorUser = buildLongRangeDirectorUser({
@@ -2472,22 +2496,38 @@ async function runPostprocess(
       globalContext: String(input.globalContext || '').trim(),
       currentLongRangeOutline,
       longRangeStatus,
-      turnSummary: String(postprocess.json.turnSummary || ''),
+      turnSummary,
       finalText,
       directorGuidance: input.directorGuidance,
+      directorStyle: input.directorStyle,
       modules: input.userModules || [],
     })
     emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: '高级导演层：生成或修订当前长期剧情。' })
-    longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
-      { role: 'user', content: longRangeDirectorUser },
-    ], { temperature: Number.isFinite(input.temperature) ? Number(input.temperature) : 0.6, apiKey: input.apiKey, model }, emit, [
-      '公开日志：正在补跑长期剧情生成/修订。',
-      '公开日志：正在生成可供后续多轮缓慢靠近的高层方向。',
-      '公开日志：高级导演层仍在等待模型返回长期剧情。',
-    ])
-    nextLongRangeOutline = normalizeLongRangeDirectorOutline(longRangeDirector.json.longRangeOutline || longRangeDirector.json, currentLongRangeOutline)
-    emit({ type: 'stage_result', stage: 'director', label: 'LongRangeDirector', message: '高级导演层完成：当前长期剧情已更新。', json: { longRangeOutline: nextLongRangeOutline } })
+    try {
+      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
+        { role: 'user', content: longRangeDirectorUser },
+      ], { temperature: Number.isFinite(input.temperature) ? Number(input.temperature) : 0.6, apiKey: input.apiKey, model, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
+        '公开日志：正在补跑长期剧情生成/修订。',
+        '公开日志：正在生成可供后续多轮缓慢靠近的高层方向。',
+        '公开日志：高级导演层仍在等待模型返回长期剧情。',
+      ])
+      nextLongRangeOutline = normalizeLongRangeDirectorOutline(longRangeDirector.json.longRangeOutline || longRangeDirector.json, currentLongRangeOutline)
+      emit({ type: 'stage_result', stage: 'director', label: 'LongRangeDirector', message: '高级导演层完成：当前长期剧情已更新。', json: { longRangeOutline: nextLongRangeOutline } })
+    } catch (error) {
+      longRangeDirector = null
+      emit({
+        type: 'stage_skip',
+        stage: 'director',
+        label: 'LongRangeDirector',
+        message: `高级导演层未返回，已跳过以免阻塞本轮：${error instanceof Error ? error.message : String(error)}`,
+      })
+    }
   }
+  const nextStatusPanelSchema = ensureMultiPersonStatusPanelSchema(
+    formatStatusPanelPayload(postprocess.json.statusPanelSchema || input.statusPanelSchema || ''),
+    '全体人物',
+    input.characters || [],
+  )
   const nextStatusPanel = formatStatusPanelPayload(postprocess.json.statusPanel || input.statusPanel || '')
   const metrics = buildInteractionMetrics({
     model,
@@ -2502,12 +2542,131 @@ async function runPostprocess(
     director: directorPlan,
     postprocess: postprocess.json,
     playerOptions: normalizePlayerOptions(postprocess.json.playerOptions),
-    turnSummary: postprocess.json.turnSummary || '',
+    turnSummary,
     foreshadowRecords: extractDirectorForeshadowRecords(directorPlan),
     longRangeOutline: nextLongRangeOutline,
     qualityFeedback: postprocess.json.qualityFeedback || '',
+    statusPanelSchema: nextStatusPanelSchema,
     statusPanel: nextStatusPanel,
-    physicalSceneState: normalizePhysicalSceneState(postprocess.json.physicalSceneState ?? postprocess.json.sceneState, pickPhysicalSceneStateInput(input)),
+    currentPhysicalEnvironment: nextCurrentPhysicalEnvironment,
+    currentPhysicalEnvironmentForbidden: nextCurrentPhysicalEnvironmentForbidden,
+    metrics,
+    model,
+  }
+}
+
+async function runEvaluation(
+  input: EvaluationRequest,
+  emit: (event: PipelineEvent) => void = () => {},
+): Promise<Record<string, unknown>> {
+  const playerInput = String(input.playerInput || '').trim()
+  const finalText = String(input.finalText || '').trim()
+  if (!playerInput) throw new Error('playerInput is required')
+  if (!finalText) throw new Error('finalText is required')
+
+  const model = normalizeModel(input.model)
+  const startedAt = Date.now()
+  const material = writeEvaluationMaterialFile(input, model)
+  const evaluatorPayload = material.evaluatorPayload
+  const evaluationTarget = input.evaluationTarget === 'codex' ? 'codex' : 'external-api'
+
+  if (evaluationTarget === 'codex') {
+    emit({
+      type: 'stage_start',
+      stage: 'evaluator',
+      label: 'Evaluator',
+      message: '评估层：正在把完整评估材料写给 Codex。',
+    })
+    const evaluationFile = writeCodexEvaluationRequestFile({
+      model,
+      storyId: input.storyId,
+      storyName: input.storyName,
+      playerInput,
+      finalText,
+      evaluatorPrompt: evaluatorPayload.evaluatorUser,
+      materialFile: material.file,
+    })
+    const evaluation = {
+      score: null,
+      summary: '评估材料已写入本地，等待 Codex 读取后评估。',
+      issues: [],
+      strengths: [],
+      nextActions: ['在 Codex 对话里说“看最新评估”。'],
+      doNotAutoChange: true,
+    }
+    emit({
+      type: 'stage_result',
+      stage: 'evaluator',
+      label: 'Evaluator',
+      message: `Codex 待评估材料已写入：${evaluationFile}`,
+      json: evaluation,
+    })
+    return {
+      pipelineMode: 'codex-evaluation-request',
+      evaluation,
+      evaluatorPrompt: evaluatorPayload.evaluatorUser,
+      evaluationMaterialFile: material.file,
+      latestEvaluationMaterialFile: material.latestFile,
+      evaluationFile,
+      latestEvaluationFile: 'debug/evaluations/latest.json',
+      metrics: buildInteractionMetrics({
+        model,
+        startedAt,
+        stages: [],
+        finalText: '',
+      }),
+      model,
+    }
+  }
+
+  emit({
+    type: 'stage_start',
+    stage: 'evaluator',
+    label: 'Evaluator',
+    message: '评估层：读取本轮输入、正文、流水线输出和状态，生成质量报告。',
+  })
+  const evaluation = await callModelWithPublicTrace('evaluator', 'Evaluator', [
+    { role: 'user', content: evaluatorPayload.evaluatorUser },
+  ], { temperature: evaluatorPayload.temperature, apiKey: input.apiKey, model }, emit, [
+    '公开日志：正在核对本轮正文和导演计划。',
+    '公开日志：正在检查剧情推进、人物独立性和空间物理逻辑。',
+    '公开日志：正在检查状态更新、伏笔闭环和玩家选项质量。',
+    '公开日志：评估层仍在等待模型返回结构化报告。',
+  ])
+  emit({
+    type: 'stage_result',
+    stage: 'evaluator',
+    label: 'Evaluator',
+    message: '评估完成：报告已生成，等待人工判断。',
+    json: evaluation.json,
+  })
+
+  const reportText = JSON.stringify(evaluation.json, null, 2)
+  const metrics = buildInteractionMetrics({
+    model,
+    startedAt,
+    stages: [evaluation],
+    finalText: reportText,
+  })
+  const evaluationFile = writeEvaluationDebugFile({
+    model,
+    storyId: input.storyId,
+    storyName: input.storyName,
+    playerInput,
+    finalText,
+    evaluatorPrompt: evaluatorPayload.evaluatorUser,
+    evaluation: evaluation.json,
+    metrics,
+    materialFile: material.file,
+  })
+  return {
+    pipelineMode: 'evaluation',
+    evaluation: evaluation.json,
+    evaluatorPrompt: evaluatorPayload.evaluatorUser,
+    evaluationMaterialFile: material.file,
+    latestEvaluationMaterialFile: material.latestFile,
+    evaluationFile,
+    latestEvaluationFile: 'debug/evaluations/latest.json',
     metrics,
     model,
   }
@@ -2625,6 +2784,7 @@ const server = http.createServer(async (req, res) => {
         models: [
           { id: fireworksDeepSeekV4ProPriorityModel, label: 'DeepSeek V4 Pro (Fireworks Priority)', provider: 'fireworks' },
           { id: officialDeepSeekV4ProModel, label: 'DeepSeek V4 Pro (Official)', provider: 'deepseek' },
+          { id: officialDeepSeekV4FlashModel, label: 'DeepSeek V4 Flash (Official)', provider: 'deepseek' },
         ],
         providers: {
           deepseek: {
@@ -2652,6 +2812,18 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/evaluation-latest') {
+      sendJson(res, 200, readLatestEvaluationArtifacts())
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/provider-test') {
+      const body = await readBody(req)
+      const input = JSON.parse(body) as ProviderTestRequest
+      sendJson(res, 200, await testProvider(input))
+      return
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/save-state') {
       const body = await readBody(req)
       const input = JSON.parse(body) as unknown
@@ -2668,6 +2840,15 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/api/story-assets') {
       sendJson(res, 200, { assets: listStoryAssets() })
+      return
+    }
+
+    const storyConfigMatch = url.pathname.match(/^\/api\/story-assets\/([^/]+)\/program-config$/)
+    if (req.method === 'PUT' && storyConfigMatch) {
+      const body = await readBody(req)
+      const input = JSON.parse(body) as Partial<StoryProgramConfig>
+      const config = updateStoryAssetProgramConfig(decodeURIComponent(storyConfigMatch[1] || ''), input)
+      sendJson(res, 200, { ok: true, config })
       return
     }
 
@@ -2759,37 +2940,6 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/director-prewarm') {
-      const body = await readBody(req)
-      const input = JSON.parse(body) as DirectorPrewarmRequest
-      const requests = Array.isArray(input.requests) ? input.requests.slice(0, 3) : []
-      const jobs = requests
-        .filter(request => request?.playerInput?.trim())
-        .map(request => startNextTurnPrewarm(request))
-      const settled = jobs.length ? await Promise.allSettled(jobs) : []
-      const results = settled
-        .filter((result): result is PromiseFulfilledResult<NextTurnPrewarmResult> => result.status === 'fulfilled')
-        .map(result => result.value)
-      const directorResults = results.map(result => result.director)
-      const narratorResults = results.map(result => result.narrator)
-      const failed = settled.filter(result => result.status === 'rejected').length
-      sendJson(res, 200, {
-        queued: directorResults.filter(result => result.status === 'queued').length,
-        cached: directorResults.filter(result => result.status === 'cached').length,
-        running: directorResults.filter(result => result.status === 'running').length,
-        completed: directorResults.filter(result => result.completed && result.status !== 'cached').length,
-        failed: failed + directorResults.filter(result => result.completed === false).length,
-        narratorQueued: narratorResults.filter(result => result.status === 'queued').length,
-        narratorCached: narratorResults.filter(result => result.status === 'cached').length,
-        narratorRunning: narratorResults.filter(result => result.status === 'running').length,
-        narratorCompleted: narratorResults.filter(result => result.completed && result.status !== 'cached').length,
-        narratorSkipped: narratorResults.filter(result => result.status === 'skipped').length,
-        narratorFailed: narratorResults.filter(result => result.completed === false || result.status === 'director-failed').length,
-        results,
-      })
-      return
-    }
-
     if (req.method === 'POST' && url.pathname === '/api/postprocess-stream') {
       const body = await readBody(req)
       const input = JSON.parse(body) as PostprocessRequest
@@ -2815,6 +2965,65 @@ const server = http.createServer(async (req, res) => {
       }
       try {
         const result = await runPostprocess(input, writePipelineEvent)
+        writeEvent({ type: 'final', payload: result })
+      } catch (error) {
+        writeEvent({
+          type: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        })
+      } finally {
+        res.end()
+      }
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/evaluation-material') {
+      const body = await readBody(req)
+      const input = JSON.parse(body) as EvaluationRequest
+      if (!input.playerInput?.trim()) {
+        sendJson(res, 400, { error: 'playerInput is required' })
+        return
+      }
+      if (!input.finalText?.trim()) {
+        sendJson(res, 400, { error: 'finalText is required' })
+        return
+      }
+      const material = writeEvaluationMaterialFile(input, normalizeModel(input.model))
+      sendJson(res, 200, {
+        ok: true,
+        evaluationMaterialFile: material.file,
+        latestEvaluationMaterialFile: material.latestFile,
+        evaluatorPrompt: material.evaluatorPayload.evaluatorUser,
+        material: material.payload,
+      })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/evaluate-stream') {
+      const body = await readBody(req)
+      const input = JSON.parse(body) as EvaluationRequest
+      if (!input.playerInput?.trim()) {
+        sendJson(res, 400, { error: 'playerInput is required' })
+        return
+      }
+      if (!input.finalText?.trim()) {
+        sendJson(res, 400, { error: 'finalText is required' })
+        return
+      }
+      res.writeHead(200, {
+        'content-type': 'application/x-ndjson; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      })
+      const writeEvent = (event: Record<string, unknown>): void => {
+        res.write(`${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`)
+      }
+      const writePipelineEvent = (event: PipelineEvent): void => {
+        writeEvent(event as unknown as Record<string, unknown>)
+      }
+      try {
+        const result = await runEvaluation(input, writePipelineEvent)
         writeEvent({ type: 'final', payload: result })
       } catch (error) {
         writeEvent({

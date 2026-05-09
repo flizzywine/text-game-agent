@@ -5,9 +5,6 @@
   "type": "module",
   "scripts": {
     "test": "vitest --run",
-    "extract-user-config": "tsx scripts/extract-kedai-user-config.ts",
-    "extract-skills": "npm run extract-user-config",
-    "mvp-demo": "tsx scripts/roleplay-mvp-demo.ts",
     "web": "tsx scripts/web-server.ts"
   },
   "devDependencies": {
