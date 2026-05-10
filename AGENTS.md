@@ -17,13 +17,14 @@ Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Dire
 
 - Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
 - 用户输入：每轮玩家自由输入，是 Director 和 Narrator 的当前触发点。
-- 最近正文：保留最近 5 轮，提供给 Director 和 Narrator；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复。
+- 最近正文：保留第 0 轮和最近 7 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director 和 Narrator；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复。
 - 闭环反馈：Postprocess 只产生拆分后的负反馈，程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。
 - 玩家负反馈：玩家手动维护的持久控制信号，广播给 Director、Narrator、Postprocess、LongRangeDirector；玩家清空输入框才删除，不写入 `feedbackMemory`。
 - Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。
 - Narrator：按导演计划写玩家可见正文；不更新状态。
 - Postprocess：正文显示后运行，只更新事实总结、人物状态补丁、三类负反馈、剧情目标状态和玩家候选项；不改正文。
 - LongRangeDirector：只生成或修订当前剧情目标；剧情目标是 Director 的上层方向输入，用来控制多轮推进，不直接写正文。
+- 剧情目标年龄：程序记录 `longRangeOutlineUpdatedTurn`。同一剧情目标持续 20 轮后，即使 Postprocess 仍判 `keep`，也强制触发 LongRangeDirector，以免粗目标长期不变。
 
 ## 当前状态设计
 
@@ -49,7 +50,6 @@ Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Dire
 
 Postprocess 输出拆分反馈：
 
-- `planExecutionFeedback`
 - `narrativeConstraintFeedback`
 - `narrativeRepetitionFeedback`
 - `narrativePacingFeedback`
@@ -57,6 +57,8 @@ Postprocess 输出拆分反馈：
 - `directorPhysicalFeedback`
 
 程序保存为 `feedbackMemory`，TTL 1 轮，下一轮注入 Director 和 Narrator。不要恢复合并版 `qualityFeedback` 状态字段。
+
+未来可考虑“自动修订轮”：当 Postprocess 发现 Narrator 严重偏离物理约束、世界状态或出现明显质量问题时，不把偏差写成下一轮负反馈，而是立即触发一次修订生成。主要阻碍是时间成本；等模型 token 速度足够快后再引入。暂时不做；当前只保留跨轮有效的负反馈。
 
 ## Prompt 规则
 
@@ -80,13 +82,14 @@ Prompt 文件直接在 `prompts/` 上层：
 - `prompts/导演风格/*.md`
 - `prompts/叙事风格/*.md`
 
-输入变量用 `{{变量名}}`。变量顺序按稳定性排序：越稳定、越容易缓存命中的内容越靠前；当前玩家输入和最终正文靠后。Postprocess 必须接收世界观，因为合理性判断依赖世界观。
+输入变量用 `{{变量名}}`。变量顺序按稳定性排序：越稳定、越不需要每轮重新理解的内容越靠前；当前玩家输入和最终正文靠后。Postprocess 必须接收世界观，因为合理性判断依赖世界观。
 
 ## 不要恢复
 
 - Director / Narrator / Postprocess 缓存。
 - 下一轮预热。
 - `director-prewarm`、`prewarm-cancel` 接口。
+- 任何隐藏的 LLM 结果缓存、命中复用、后台预取或失败 fallback。省下的十几秒不值得牺牲排查确定性；每轮都应重新调用模型，并把请求、返回和错误落到可检查日志。
 - Editor 独立精修层。
 - 应急 Director fallback。
 - 动态加载 prompt 机制。

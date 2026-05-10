@@ -2,11 +2,21 @@ const storageKey = 'text-game-agent.web-state.v2'
 const legacyStorageKey = 'text-game-agent.web-state.v1'
 const deepSeekApiKeyStorageKey = 'text-game-agent.deepseek-api-key'
 const fireworksApiKeyStorageKey = 'text-game-agent.fireworks-api-key'
+const infronApiKeyStorageKey = 'text-game-agent.infron-api-key'
+const cerebrasApiKeyStorageKey = 'text-game-agent.cerebras-api-key'
+const googleAiStudioApiKeyStorageKey = 'text-game-agent.google-ai-studio-api-key'
 const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
 const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
-const defaultModel = officialDeepSeekV4FlashModel
-const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, officialDeepSeekV4ProModel, officialDeepSeekV4FlashModel])
+const infronDeepSeekV4ProModel = 'infron/deepseek-v4-pro'
+const infronDeepSeekV4FlashModel = 'infron/deepseek-v4-flash'
+const infronGemini31FlashLiteModel = 'google/gemini-3.1-flash-lite'
+const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'
+const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'
+const defaultModel = infronGemini31FlashLiteModel
+const defaultPromptProfile = '繁花'
+const promptProfileOptions = new Set(['繁花', '基准'])
+const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, officialDeepSeekV4ProModel, officialDeepSeekV4FlashModel, infronDeepSeekV4ProModel, infronDeepSeekV4FlashModel, infronGemini31FlashLiteModel, googleAiStudioGemini31FlashLiteModel, cerebrasQwenModel])
 const requiredStatusSchema = ['性别', '身份', '外貌', '性格']
 const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '位置']
 
@@ -15,13 +25,19 @@ let state = getCurrentStory()
 let storyLibraryAssets = []
 let selectedNewGameAssetId = ''
 let generationBusy = false
+let interceptionPromptSnapshot = null
 let config = {
   model: defaultModel,
+  promptProfile: defaultPromptProfile,
+  promptProfiles: [defaultPromptProfile, '基准'],
   baseUrl: 'https://api.deepseek.com',
   hasApiKey: false,
   providers: {
     deepseek: { baseUrl: 'https://api.deepseek.com', hasApiKey: false },
     fireworks: { baseUrl: 'https://api.fireworks.ai/inference/v1', hasApiKey: false },
+    infron: { baseUrl: 'https://llm.onerouter.pro/v1', hasApiKey: false, providerSort: 'throughput' },
+    cerebras: { baseUrl: 'https://api.cerebras.ai/v1', hasApiKey: false },
+    googleAiStudio: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', hasApiKey: false },
   },
 }
 
@@ -29,17 +45,27 @@ const els = {
   connectionStatus: document.querySelector('#connectionStatus'),
   turnStatus: document.querySelector('#turnStatus'),
   modelSelect: document.querySelector('#modelSelect'),
+  promptProfileSelect: document.querySelector('#promptProfileSelect'),
   temperatureInput: document.querySelector('#temperatureInput'),
   apiKeyButton: document.querySelector('#apiKeyButton'),
   providerTestButton: document.querySelector('#providerTestButton'),
-  apiKeyDialog: document.querySelector('#apiKeyDialog'),
-  apiKeyForm: document.querySelector('#apiKeyForm'),
-  apiKeyTitle: document.querySelector('#apiKeyTitle'),
+  providerSpeedTestButton: document.querySelector('#providerSpeedTestButton'),
   apiKeyHelp: document.querySelector('#apiKeyHelp'),
   apiKeyLabel: document.querySelector('#apiKeyLabel'),
   apiKeyInput: document.querySelector('#apiKeyInput'),
   clearApiKeyButton: document.querySelector('#clearApiKeyButton'),
-  cancelApiKeyButton: document.querySelector('#cancelApiKeyButton'),
+  modelManagementButton: document.querySelector('#modelManagementButton'),
+  modelManagementPage: document.querySelector('#modelManagementPage'),
+  closeModelManagementButton: document.querySelector('#closeModelManagementButton'),
+  modelManagementStatus: document.querySelector('#modelManagementStatus'),
+  modelTestResults: document.querySelector('#modelTestResults'),
+  buildInterceptionPromptButton: document.querySelector('#buildInterceptionPromptButton'),
+  interceptionPromptFile: document.querySelector('#interceptionPromptFile'),
+  interceptionInstructionFiles: document.querySelector('#interceptionInstructionFiles'),
+  runInterceptionTestButton: document.querySelector('#runInterceptionTestButton'),
+  interceptionStatus: document.querySelector('#interceptionStatus'),
+  interceptionSystemInput: document.querySelector('#interceptionSystemInput'),
+  interceptionResultOutput: document.querySelector('#interceptionResultOutput'),
   directorControlButton: document.querySelector('#directorControlButton'),
   directorControlDialog: document.querySelector('#directorControlDialog'),
   directorControlForm: document.querySelector('#directorControlForm'),
@@ -54,6 +80,11 @@ const els = {
   saveArchiveButton: document.querySelector('#saveArchiveButton'),
   loadArchiveButton: document.querySelector('#loadArchiveButton'),
   deleteSaveButton: document.querySelector('#deleteSaveButton'),
+  saveSlotsDialog: document.querySelector('#saveSlotsDialog'),
+  saveSlotsForm: document.querySelector('#saveSlotsForm'),
+  saveSlotsList: document.querySelector('#saveSlotsList'),
+  saveSlotsStatus: document.querySelector('#saveSlotsStatus'),
+  closeSaveSlotsButton: document.querySelector('#closeSaveSlotsButton'),
   gamePage: document.querySelector('#gamePage'),
   storyLibraryPage: document.querySelector('#storyLibraryPage'),
   newGameDialog: document.querySelector('#newGameDialog'),
@@ -128,6 +159,7 @@ function defaultStory(name = '未选择故事') {
     chapterSummary: '',
     outline: '',
     longRangeOutline: '',
+    longRangeOutlineUpdatedTurn: 0,
     directorStyle: '',
     narratorStyle: '',
     plotLines: [],
@@ -240,6 +272,7 @@ function normalizeStory(raw, fallbackName = '故事') {
     chapterSummary,
     outline: String(raw?.outline || openingText || ''),
     longRangeOutline: String(raw?.longRangeOutline || ''),
+    longRangeOutlineUpdatedTurn: Number.isFinite(Number(raw?.longRangeOutlineUpdatedTurn)) && Number(raw.longRangeOutlineUpdatedTurn) >= 0 ? Math.floor(Number(raw.longRangeOutlineUpdatedTurn)) : 0,
     directorStyle: String(raw?.directorStyle || ''),
     narratorStyle: String(raw?.narratorStyle || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
@@ -377,7 +410,6 @@ function mergeStatusState(current, patch, roster, characters = [], schema = fall
 function normalizeFeedbackType(type) {
   const value = String(type || '').trim()
   if ([
-    'planExecution',
     'narrativeConstraint',
     'narrativeRepetition',
     'narrativePacing',
@@ -391,7 +423,6 @@ function renderFeedbackMemory(items = state.feedbackMemory) {
   return normalizeFeedbackMemory(items)
     .map(item => {
       const label = {
-        planExecution: '执行',
         narrativeConstraint: '约束',
         narrativeRepetition: '重复',
         narrativePacing: '节奏',
@@ -408,7 +439,6 @@ function mergeFeedbackMemory(existing, payload) {
     .map(item => ({ ...item, ttl: item.ttl - 1 }))
     .filter(item => item.ttl > 0)
   const incoming = [
-    ['planExecution', payload.planExecutionFeedback],
     ['narrativeConstraint', payload.narrativeConstraintFeedback],
     ['narrativeRepetition', payload.narrativeRepetitionFeedback],
     ['narrativePacing', payload.narrativePacingFeedback],
@@ -502,19 +532,30 @@ function normalizeModel(value) {
 function providerForModel(model) {
   const normalized = normalizeModel(model)
   if (normalized === fireworksDeepSeekV4ProPriorityModel) return 'fireworks'
+  if (normalized === infronDeepSeekV4ProModel || normalized === infronDeepSeekV4FlashModel || normalized === infronGemini31FlashLiteModel) return 'infron'
+  if (normalized === cerebrasQwenModel) return 'cerebras'
+  if (normalized === googleAiStudioGemini31FlashLiteModel) return 'google-ai-studio'
   return 'deepseek'
 }
 
 function providerLabel(provider) {
   if (provider === 'fireworks') return 'Fireworks'
+  if (provider === 'infron') return 'Infron'
+  if (provider === 'cerebras') return 'Cerebras'
+  if (provider === 'google-ai-studio') return 'Google AI Studio'
   return 'DeepSeek'
 }
 
 function modelLabel(model) {
   return {
-    [officialDeepSeekV4ProModel]: 'V4 Pro Official',
-    [officialDeepSeekV4FlashModel]: 'V4 Flash Official',
-    [fireworksDeepSeekV4ProPriorityModel]: 'V4 Pro Fireworks Priority',
+    [officialDeepSeekV4ProModel]: 'DeepSeek V4 Pro | official | DeepSeek',
+    [officialDeepSeekV4FlashModel]: 'DeepSeek V4 Flash | official | DeepSeek',
+    [fireworksDeepSeekV4ProPriorityModel]: 'DeepSeek V4 Pro | priority | Fireworks',
+    [infronDeepSeekV4ProModel]: 'DeepSeek V4 Pro | throughput | Infron',
+    [infronDeepSeekV4FlashModel]: 'DeepSeek V4 Flash | throughput | Infron',
+    [infronGemini31FlashLiteModel]: 'Gemini 3.1 Flash Lite | throughput | Infron',
+    [googleAiStudioGemini31FlashLiteModel]: 'Gemini 3.1 Flash Lite | AI Studio | Google',
+    [cerebrasQwenModel]: 'Qwen 3 235B A22B Instruct 2507 | fast | Cerebras',
   }[model] || model
 }
 
@@ -533,6 +574,15 @@ async function loadConfig() {
 function normalizeRuntimeConfig(raw) {
   return {
     model: normalizeModel(raw?.model || defaultModel),
+    promptProfile: normalizePromptProfile(raw?.promptProfile || defaultPromptProfile),
+    promptProfiles: Array.isArray(raw?.promptProfiles) && raw.promptProfiles.length ? raw.promptProfiles.map(normalizePromptProfile) : [defaultPromptProfile, '基准'],
+    pipelineModels: raw?.pipelineModels || {
+      director: officialDeepSeekV4ProModel,
+      longRangeDirector: officialDeepSeekV4ProModel,
+      narrator: officialDeepSeekV4ProModel,
+      postprocess: officialDeepSeekV4FlashModel,
+      initializer: officialDeepSeekV4ProModel,
+    },
     baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
     hasApiKey: Boolean(raw?.hasApiKey || raw?.providers?.deepseek?.hasApiKey),
     providers: {
@@ -544,8 +594,26 @@ function normalizeRuntimeConfig(raw) {
         baseUrl: String(raw?.providers?.fireworks?.baseUrl || 'https://api.fireworks.ai/inference/v1'),
         hasApiKey: Boolean(raw?.providers?.fireworks?.hasApiKey),
       },
+      infron: {
+        baseUrl: String(raw?.providers?.infron?.baseUrl || 'https://llm.onerouter.pro/v1'),
+        hasApiKey: Boolean(raw?.providers?.infron?.hasApiKey),
+        providerSort: String(raw?.providers?.infron?.providerSort || 'throughput'),
+      },
+      cerebras: {
+        baseUrl: String(raw?.providers?.cerebras?.baseUrl || 'https://api.cerebras.ai/v1'),
+        hasApiKey: Boolean(raw?.providers?.cerebras?.hasApiKey),
+      },
+      googleAiStudio: {
+        baseUrl: String(raw?.providers?.googleAiStudio?.baseUrl || 'https://generativelanguage.googleapis.com/v1beta/openai'),
+        hasApiKey: Boolean(raw?.providers?.googleAiStudio?.hasApiKey),
+      },
     },
   }
+}
+
+function normalizePromptProfile(value) {
+  const normalized = String(value || '').trim()
+  return promptProfileOptions.has(normalized) ? normalized : defaultPromptProfile
 }
 
 function bindEvents() {
@@ -570,24 +638,47 @@ function bindEvents() {
     scrollToConversationBottom()
   })
 
-  els.apiKeyButton.addEventListener('click', () => {
-    renderApiKeyDialog()
-    els.apiKeyDialog.showModal()
+  els.modelManagementButton.addEventListener('click', () => {
+    openModelManagementPage()
   })
 
   els.providerTestButton.addEventListener('click', () => {
     testCurrentProvider()
   })
 
-  els.cancelApiKeyButton.addEventListener('click', () => {
-    els.apiKeyDialog.close()
+  els.providerSpeedTestButton.addEventListener('click', () => {
+    testCurrentProviderSpeed()
+  })
+
+  els.promptProfileSelect.addEventListener('change', () => {
+    savePromptProfile()
+  })
+
+  els.buildInterceptionPromptButton.addEventListener('click', () => {
+    buildCurrentInterceptionPrompt()
+  })
+
+  els.interceptionPromptFile.addEventListener('change', () => {
+    loadInterceptionPromptFile()
+  })
+
+  els.interceptionInstructionFiles.addEventListener('change', () => {
+    loadInterceptionInstructionFiles()
+  })
+
+  els.runInterceptionTestButton.addEventListener('click', () => {
+    runContentInterceptionTest()
   })
 
   els.clearApiKeyButton.addEventListener('click', () => {
     localStorage.removeItem(apiKeyStorageKeyForProvider(currentProvider()))
     els.apiKeyInput.value = ''
-    els.apiKeyDialog.close()
+    renderModelManagementPage()
     renderConnection()
+  })
+
+  els.closeModelManagementButton.addEventListener('click', () => {
+    closeModelManagementPage()
   })
 
   els.directorControlButton.addEventListener('click', () => {
@@ -603,8 +694,7 @@ function bindEvents() {
     saveDirectorControl()
   })
 
-  els.apiKeyForm.addEventListener('submit', event => {
-    event.preventDefault()
+  els.apiKeyButton.addEventListener('click', () => {
     const provider = currentProvider()
     const key = els.apiKeyInput.value.trim()
     if (provider === 'deepseek' && key && !/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) {
@@ -613,15 +703,24 @@ function bindEvents() {
     }
     if (key) localStorage.setItem(apiKeyStorageKeyForProvider(provider), key)
     else localStorage.removeItem(apiKeyStorageKeyForProvider(provider))
-    els.apiKeyDialog.close()
+    renderModelManagementPage()
     renderConnection()
   })
 
   els.modelSelect.addEventListener('change', event => {
     state.model = normalizeModel(event.target.value)
     saveState()
+    renderModelManagementPage()
     renderConnection()
-    if (els.apiKeyDialog.open) renderApiKeyDialog()
+  })
+
+  document.querySelectorAll('[data-provider-model]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.model = normalizeModel(button.dataset.providerModel)
+      saveState()
+      renderModelManagementPage()
+      renderConnection()
+    })
   })
 
   els.resetButton.addEventListener('click', () => {
@@ -672,13 +771,30 @@ function bindEvents() {
     render()
   })
 
-  els.saveArchiveButton.addEventListener('click', () => {
-    saveState()
-    alert('已保存到 save/current-state.json。')
+  els.saveArchiveButton.addEventListener('click', async () => {
+    await saveCurrentSlot()
   })
 
   els.loadArchiveButton.addEventListener('click', () => {
-    loadDiskSave()
+    openSaveSlotsDialog()
+  })
+
+  els.closeSaveSlotsButton.addEventListener('click', () => {
+    els.saveSlotsDialog.close()
+  })
+
+  els.saveSlotsForm.addEventListener('submit', event => {
+    event.preventDefault()
+  })
+
+  els.saveSlotsList.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-action][data-id]')
+    if (!button) return
+    const id = button.dataset.id
+    const action = button.dataset.action
+    if (action === 'load') await loadSaveSlot(id)
+    if (action === 'favorite') await toggleSaveSlotFavorite(id, button.dataset.favorite !== 'true')
+    if (action === 'delete') await deleteSaveSlot(id, button.dataset.name || id)
   })
 
   els.deleteSaveButton.addEventListener('click', async () => {
@@ -883,10 +999,24 @@ async function openStoryLibraryPage() {
   renderStoryLibraryAssets()
   els.gamePage.hidden = true
   els.storyLibraryPage.hidden = false
+  els.modelManagementPage.hidden = true
 }
 
 function closeStoryLibraryPage() {
   els.storyLibraryPage.hidden = true
+  els.gamePage.hidden = false
+  render()
+}
+
+function openModelManagementPage() {
+  renderModelManagementPage()
+  els.gamePage.hidden = true
+  els.storyLibraryPage.hidden = true
+  els.modelManagementPage.hidden = false
+}
+
+function closeModelManagementPage() {
+  els.modelManagementPage.hidden = true
   els.gamePage.hidden = false
   render()
 }
@@ -1212,6 +1342,7 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.chapterSummary = ''
   story.outline = openingSummary
   story.longRangeOutline = String(init.longRangeOutline || '')
+  story.longRangeOutlineUpdatedTurn = 0
   story.directorStyle = String(init.directorStyle || '')
   story.narratorStyle = String(init.narratorStyle || '')
   story.plotLines = []
@@ -1304,7 +1435,7 @@ async function initializeStoryAssetStream(asset, force = true) {
       entries: asset.entries || [],
       characters: asset.characters || [],
       model: normalizeModel(state.model || config.model),
-      apiKey: getLocalApiKey(providerForModel(state.model || config.model)),
+      apiKey: getPipelineApiKey(),
       force,
     }),
   })
@@ -1400,14 +1531,157 @@ async function loadDiskSave() {
   }
 }
 
+function saveSlotDefaultName() {
+  return `${state.name || '未命名故事'} - 第${completedAssistantTurnCount()}轮 - ${formatSaveTimestamp(new Date())}`
+}
+
+function formatSaveTimestamp(date) {
+  const pad = value => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+async function saveCurrentSlot() {
+  const defaultName = saveSlotDefaultName()
+  const name = prompt('存档名', defaultName)
+  if (name === null) return
+  const trimmedName = name.trim() || defaultName
+  saveState()
+  const response = await fetch('/api/save-slots', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: trimmedName,
+      storyName: state.name,
+      turnIndex: completedAssistantTurnCount(),
+      state: { story: deepClone(state) },
+    }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    alert(payload.error || '保存失败。')
+    return
+  }
+  alert(`已保存：${payload.slot?.name || trimmedName}`)
+}
+
+async function openSaveSlotsDialog() {
+  els.saveSlotsDialog.showModal()
+  await refreshSaveSlots()
+}
+
+async function refreshSaveSlots() {
+  els.saveSlotsStatus.textContent = '读取中。'
+  els.saveSlotsStatus.dataset.tone = 'running'
+  try {
+    const response = await fetch('/api/save-slots')
+    const payload = await response.json()
+    if (!response.ok) throw new Error(payload.error || '读取失败')
+    renderSaveSlots(payload.slots || [])
+    els.saveSlotsStatus.textContent = payload.slots?.length ? `共 ${payload.slots.length} 个存档。` : '暂无手动存档。'
+    els.saveSlotsStatus.dataset.tone = payload.slots?.length ? 'done' : ''
+  } catch (error) {
+    els.saveSlotsList.innerHTML = ''
+    els.saveSlotsStatus.textContent = `读取失败：${error.message}`
+    els.saveSlotsStatus.dataset.tone = 'error'
+  }
+}
+
+function renderSaveSlots(slots) {
+  els.saveSlotsList.innerHTML = slots.length ? slots.map(slot => `
+    <article class="save-slot-item">
+      <div>
+        <strong>${slot.favorite ? '★ ' : ''}${escapeHtml(slot.name)}</strong>
+        <p>${escapeHtml(slot.storyName || '未命名故事')} · 第 ${Number(slot.turnIndex || 0)} 轮 · ${escapeHtml(slot.savedAt || '')}</p>
+      </div>
+      <div class="save-slot-actions">
+        <button type="button" class="ghost-button" data-action="load" data-id="${escapeAttr(slot.id)}">读取</button>
+        <button type="button" class="ghost-button" data-action="favorite" data-id="${escapeAttr(slot.id)}" data-favorite="${slot.favorite ? 'true' : 'false'}">${slot.favorite ? '取消收藏' : '收藏'}</button>
+        <button type="button" class="ghost-button" data-action="delete" data-id="${escapeAttr(slot.id)}" data-name="${escapeAttr(slot.name)}">删除</button>
+      </div>
+    </article>
+  `).join('') : '<div class="empty-state"><strong>暂无存档</strong><span>点击“保存游戏”创建一个手动存档。</span></div>'
+}
+
+async function loadSaveSlot(id) {
+  try {
+    const response = await fetch(`/api/save-slots/${encodeURIComponent(id)}`)
+    const payload = await response.json()
+    if (!response.ok) throw new Error(payload.error || '读取失败')
+    const savedStory = payload.slot?.state?.story || payload.slot?.state
+    if (!savedStory || typeof savedStory !== 'object') throw new Error('存档内容无效。')
+    const loadedStory = normalizeStory(savedStory, payload.slot?.name || '读取存档')
+    appState.stories = appState.stories.filter(story => story.id !== loadedStory.id)
+    appState.stories.push(loadedStory)
+    appState.currentStoryId = loadedStory.id
+    state = getCurrentStory()
+    saveState()
+    els.saveSlotsDialog.close()
+    render()
+  } catch (error) {
+    els.saveSlotsStatus.textContent = `读取失败：${error.message}`
+    els.saveSlotsStatus.dataset.tone = 'error'
+  }
+}
+
+async function toggleSaveSlotFavorite(id, favorite) {
+  const response = await fetch(`/api/save-slots/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ favorite }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    els.saveSlotsStatus.textContent = payload.error || '更新失败。'
+    els.saveSlotsStatus.dataset.tone = 'error'
+    return
+  }
+  await refreshSaveSlots()
+}
+
+async function deleteSaveSlot(id, name) {
+  if (!confirm(`删除存档“${name}”？`)) return
+  const response = await fetch(`/api/save-slots/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    els.saveSlotsStatus.textContent = payload.error || '删除失败。'
+    els.saveSlotsStatus.dataset.tone = 'error'
+    return
+  }
+  await refreshSaveSlots()
+}
+
 function renderConnection() {
   const model = normalizeModel(state.model || config.model)
   const provider = providerForModel(model)
   const providerConfig = getProviderConfig(provider)
-  const keyState = hasRuntimeApiKey(provider) ? 'key ready' : 'no API key'
-  const mode = 'narrator + postprocess'
-  els.connectionStatus.textContent = `${providerConfig.baseUrl} · ${modelLabel(model)} · ${providerLabel(provider)} · ${mode} · ${keyState}`
+  const keyState = hasRuntimeApiKey(provider) ? 'key ready' : `no ${providerLabel(provider)} key`
+  const pipelineModels = pipelineModelsForSelection(model)
+  const route = provider === 'infron' ? ' · sort=throughput' : ''
+  const mode = `分级：Director/LongRange/Narrator=${modelLabel(pipelineModels.narrator)} · Postprocess=${modelLabel(pipelineModels.postprocess)}`
+  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 测试模型 ${modelLabel(model)} · ${providerLabel(provider)} · ${mode} · ${keyState}`
+  if (route) els.connectionStatus.textContent += route
   renderTurnStatus()
+}
+
+function pipelineModelsForSelection(model) {
+  const provider = providerForModel(model)
+  const normalized = normalizeModel(model)
+  if (provider !== 'deepseek') {
+    return {
+      director: normalized,
+      longRangeDirector: normalized,
+      narrator: normalized,
+      postprocess: normalized,
+      initializer: normalized,
+    }
+  }
+  return config.pipelineModels || {
+    director: officialDeepSeekV4ProModel,
+    longRangeDirector: officialDeepSeekV4ProModel,
+    narrator: officialDeepSeekV4ProModel,
+    postprocess: officialDeepSeekV4FlashModel,
+    initializer: officialDeepSeekV4ProModel,
+  }
 }
 
 async function testCurrentProvider() {
@@ -1431,13 +1705,209 @@ async function testCurrentProvider() {
       throw new Error(payload.error || '连接测试失败')
     }
     const durationMs = Number(payload.durationMs || Date.now() - startedAt)
-    els.connectionStatus.textContent = `${providerLabel(provider)} 可用 · ${modelLabel(model)} · ${durationMs}ms · ${String(payload.reply || '').slice(0, 40)}`
+    renderModelTestResult({
+      type: '连通性',
+      provider: providerLabel(provider),
+      model: modelLabel(model),
+      durationMs,
+      ttftMs: '-',
+      tps: '-',
+      outputTokens: '-',
+      reply: '成功',
+      ok: true,
+    })
+    els.connectionStatus.textContent = `${providerLabel(provider)} 可用 · ${modelLabel(model)} · 连通性 ${durationMs}ms`
   } catch (error) {
+    renderModelTestResult({
+      type: '连通性',
+      provider: providerLabel(provider),
+      model: modelLabel(model),
+      error: error.message,
+      ok: false,
+    })
     els.connectionStatus.textContent = `${providerLabel(provider)} 不可用 · ${modelLabel(model)} · ${error.message}`
   } finally {
     els.providerTestButton.disabled = false
-    els.providerTestButton.textContent = '测试连接'
+    els.providerTestButton.textContent = '连通性测试'
   }
+}
+
+async function testCurrentProviderSpeed() {
+  const model = normalizeModel(state.model || config.model)
+  const provider = providerForModel(model)
+  els.providerSpeedTestButton.disabled = true
+  els.providerSpeedTestButton.textContent = '测速中'
+  els.connectionStatus.textContent = `${providerLabel(provider)} 速度测试中 · ${modelLabel(model)}`
+  try {
+    const response = await fetch('/api/provider-speed-test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        apiKey: getLocalApiKey(provider),
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || '速度测试失败')
+    }
+    const outputTokens = Number(payload.usage?.outputTokens || payload.usage?.estimatedOutputTokens || 0)
+    renderModelTestResult({
+      type: '速度',
+      provider: providerLabel(provider),
+      model: modelLabel(model),
+      durationMs: Number(payload.durationMs || 0),
+      ttftMs: Number(payload.ttftMs || 0),
+      tps: Number(payload.tps || 0),
+      outputTokens,
+      reply: String(payload.reply || '').slice(0, 40),
+      ok: true,
+    })
+    els.connectionStatus.textContent = `${providerLabel(provider)} 速度测试完成 · ${modelLabel(model)} · TTFT ${Number(payload.ttftMs || 0)}ms · TPS ${Number(payload.tps || 0)}`
+  } catch (error) {
+    renderModelTestResult({
+      type: '速度',
+      provider: providerLabel(provider),
+      model: modelLabel(model),
+      error: error.message,
+      ok: false,
+    })
+    els.connectionStatus.textContent = `${providerLabel(provider)} 速度测试失败 · ${modelLabel(model)} · ${error.message}`
+  } finally {
+    els.providerSpeedTestButton.disabled = false
+    els.providerSpeedTestButton.textContent = '速度测试'
+  }
+}
+
+function latestPlayerInputForInterception() {
+  const typed = String(els.playerInput.value || '').trim()
+  if (typed) return typed
+  const recoveryInput = String(state.debug?.postprocessRecoveryBase?.playerInput || '').trim()
+  if (recoveryInput) return recoveryInput
+  const messages = Array.isArray(state.messages) ? state.messages : []
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'user') return String(messages[index].content || '').trim()
+  }
+  return '内容拦截测试：使用当前存档状态生成 Narrator prompt。'
+}
+
+function buildInterceptionRequestPayload() {
+  const payload = buildGenerateRequestPayload(latestPlayerInputForInterception())
+  delete payload.apiKey
+  return {
+    ...payload,
+    director: state.debug?.director || {},
+  }
+}
+
+async function buildCurrentInterceptionPrompt() {
+  els.buildInterceptionPromptButton.disabled = true
+  els.interceptionStatus.textContent = '正在拼接当前 Narrator prompt...'
+  els.interceptionStatus.dataset.tone = ''
+  try {
+    const response = await fetch('/api/content-interception/prompt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(buildInterceptionRequestPayload()),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload.ok) throw new Error(payload.error || '生成测试 prompt 失败')
+    interceptionPromptSnapshot = payload
+    els.interceptionStatus.textContent = `已落盘：${payload.file}；可读版：${payload.textFile}；System ${payload.systemLength} 字，User ${payload.userLength} 字。`
+    els.interceptionResultOutput.value = ''
+  } catch (error) {
+    interceptionPromptSnapshot = null
+    els.interceptionStatus.textContent = error.message
+    els.interceptionStatus.dataset.tone = 'error'
+  } finally {
+    els.buildInterceptionPromptButton.disabled = false
+  }
+}
+
+async function loadInterceptionInstructionFiles() {
+  const files = Array.from(els.interceptionInstructionFiles.files || [])
+  if (files.length === 0) return
+  const parts = []
+  for (const file of files) {
+    const text = await file.text()
+    parts.push(`# ${file.name}\n\n${text}`)
+  }
+  els.interceptionSystemInput.value = parts.join('\n\n---\n\n')
+  els.interceptionStatus.textContent = `已拼接系统指令文件：${files.map(file => file.name).join('、')}`
+  els.interceptionStatus.dataset.tone = ''
+}
+
+async function loadInterceptionPromptFile() {
+  const file = els.interceptionPromptFile.files?.[0]
+  if (!file) return
+  const text = await file.text()
+  interceptionPromptSnapshot = {
+    source: 'file',
+    fileName: file.name,
+    narratorSystem: '',
+    narratorUser: text,
+    systemLength: 0,
+    userLength: text.length,
+  }
+  els.interceptionResultOutput.value = ''
+  els.interceptionStatus.textContent = `已选择 Prompt 文件：${file.name}；${text.length} 字。`
+  els.interceptionStatus.dataset.tone = ''
+}
+
+async function runContentInterceptionTest() {
+  if (!interceptionPromptSnapshot) {
+    await buildCurrentInterceptionPrompt()
+    if (!interceptionPromptSnapshot) return
+  }
+  const model = normalizeModel(state.model || config.model)
+  const provider = providerForModel(model)
+  els.runInterceptionTestButton.disabled = true
+  els.interceptionStatus.textContent = `${providerLabel(provider)} 内容拦截测试中 · ${modelLabel(model)}`
+  els.interceptionStatus.dataset.tone = ''
+  try {
+    const response = await fetch('/api/content-interception/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        apiKey: getLocalApiKey(provider),
+        temperature: Number(els.temperatureInput.value || 0.8),
+        systemInstruction: els.interceptionSystemInput.value,
+        narratorSystem: interceptionPromptSnapshot.narratorSystem,
+        narratorUser: interceptionPromptSnapshot.narratorUser,
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || '内容拦截测试失败')
+    if (payload.ok) {
+      els.interceptionResultOutput.value = String(payload.raw || '')
+      els.interceptionStatus.textContent = `测试完成：${payload.responseFile}；请求：${payload.requestFile}；${payload.durationMs}ms · TTFT ${payload.ttftMs}ms · TPS ${payload.tps}`
+    } else {
+      els.interceptionResultOutput.value = String(payload.error || '')
+      els.interceptionStatus.textContent = `模型报错/拦截：${payload.errorFile}；请求：${payload.requestFile}`
+      els.interceptionStatus.dataset.tone = 'error'
+    }
+  } catch (error) {
+    els.interceptionResultOutput.value = error.message
+    els.interceptionStatus.textContent = error.message
+    els.interceptionStatus.dataset.tone = 'error'
+  } finally {
+    els.runInterceptionTestButton.disabled = false
+  }
+}
+
+function renderModelTestResult(result) {
+  if (!els.modelTestResults) return
+  const row = result.ok
+    ? `<tr><td>${escapeHtml(result.type || '测试')}</td><td>${escapeHtml(result.provider)}</td><td>${escapeHtml(result.model)}</td><td>${result.durationMs}</td><td>${result.ttftMs}</td><td>${result.tps}</td><td>${result.outputTokens}</td><td>${escapeHtml(result.reply)}</td></tr>`
+    : `<tr><td>${escapeHtml(result.type || '测试')}</td><td>${escapeHtml(result.provider)}</td><td>${escapeHtml(result.model)}</td><td colspan="5">${escapeHtml(result.error)}</td></tr>`
+  const existing = els.modelTestResults.querySelector('tbody')?.innerHTML || ''
+  els.modelTestResults.innerHTML = `
+    <table>
+      <thead><tr><th>类型</th><th>Provider</th><th>Model</th><th>耗时(ms)</th><th>TTFT(ms)</th><th>TPS</th><th>输出</th><th>返回</th></tr></thead>
+      <tbody>${row}${existing}</tbody>
+    </table>
+  `
 }
 
 function openDirectorControl() {
@@ -1468,11 +1938,17 @@ function currentProvider() {
 function getProviderConfig(provider) {
   if (config.providers?.[provider]) return config.providers[provider]
   if (provider === 'fireworks') return { baseUrl: 'https://api.fireworks.ai/inference/v1', hasApiKey: false }
+  if (provider === 'infron') return { baseUrl: 'https://llm.onerouter.pro/v1', hasApiKey: false, providerSort: 'throughput' }
+  if (provider === 'cerebras') return { baseUrl: 'https://api.cerebras.ai/v1', hasApiKey: false }
+  if (provider === 'google-ai-studio') return { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', hasApiKey: false }
   return { baseUrl: config.baseUrl || 'https://api.deepseek.com', hasApiKey: config.hasApiKey }
 }
 
 function apiKeyStorageKeyForProvider(provider) {
   if (provider === 'fireworks') return fireworksApiKeyStorageKey
+  if (provider === 'infron') return infronApiKeyStorageKey
+  if (provider === 'cerebras') return cerebrasApiKeyStorageKey
+  if (provider === 'google-ai-studio') return googleAiStudioApiKeyStorageKey
   return deepSeekApiKeyStorageKey
 }
 
@@ -1480,22 +1956,59 @@ function getLocalApiKey(provider = currentProvider()) {
   return localStorage.getItem(apiKeyStorageKeyForProvider(provider)) || ''
 }
 
+function getPipelineApiKey() {
+  return getLocalApiKey(currentProvider())
+}
+
 function hasRuntimeApiKey(provider = currentProvider()) {
   return Boolean(getLocalApiKey(provider) || getProviderConfig(provider).hasApiKey)
 }
 
-function renderApiKeyDialog() {
+function renderModelManagementPage() {
   const provider = currentProvider()
   const model = normalizeModel(state.model || config.model)
-  els.apiKeyTitle.textContent = `${providerLabel(provider)} API Key`
+  els.modelSelect.value = model
+  els.promptProfileSelect.innerHTML = config.promptProfiles.map(profile => `<option value="${escapeAttr(profile)}">${escapeHtml(profile)}</option>`).join('')
+  els.promptProfileSelect.value = normalizePromptProfile(config.promptProfile)
   const helpByProvider = {
     fireworks: `当前模型：${modelLabel(model)}。请填写 Fireworks API key，Key 只保存在当前浏览器本地。`,
+    infron: `当前模型：${modelLabel(model)}。请填写 Infron API key；请求会按 throughput 排序路由。Key 只保存在当前浏览器本地。`,
+    cerebras: `当前模型：${modelLabel(model)}。请填写 Cerebras API key，Key 只保存在当前浏览器本地。`,
+    'google-ai-studio': `当前模型：${modelLabel(model)}。请填写 Google AI Studio / Gemini API key，Key 只保存在当前浏览器本地。`,
     deepseek: `当前模型：${modelLabel(model)}。请填写 DeepSeek API key，Key 只保存在当前浏览器本地。`,
   }
   els.apiKeyHelp.textContent = helpByProvider[provider] || helpByProvider.deepseek
-  els.apiKeyLabel.textContent = provider === 'fireworks' ? 'Fireworks Key' : 'DeepSeek Key'
-  els.apiKeyInput.placeholder = provider === 'fireworks' ? 'FIREWORKS_API_KEY' : 'sk-...'
+  els.apiKeyLabel.textContent = provider === 'fireworks' ? 'Fireworks Key' : provider === 'infron' ? 'Infron Key' : provider === 'cerebras' ? 'Cerebras Key' : provider === 'google-ai-studio' ? 'Gemini Key' : 'DeepSeek Key'
+  els.apiKeyInput.placeholder = provider === 'fireworks' ? 'FIREWORKS_API_KEY' : provider === 'infron' ? 'INFRON_API_KEY' : provider === 'cerebras' ? 'CEREBRAS_API_KEY' : provider === 'google-ai-studio' ? 'GEMINI_API_KEY' : 'sk-...'
   els.apiKeyInput.value = getLocalApiKey(provider)
+  document.querySelectorAll('[data-provider-model]').forEach(button => {
+    button.classList.toggle('selected', providerForModel(button.dataset.providerModel) === provider)
+  })
+  els.modelManagementStatus.textContent = `${providerLabel(provider)} · ${modelLabel(model)} · Prompt ${config.promptProfile} · ${hasRuntimeApiKey(provider) ? 'Key ready' : 'No key'}`
+  els.modelManagementStatus.dataset.tone = ''
+}
+
+async function savePromptProfile() {
+  const promptProfile = normalizePromptProfile(els.promptProfileSelect.value)
+  els.modelManagementStatus.textContent = `正在切换 Prompt：${promptProfile}`
+  try {
+    const response = await fetch('/api/prompt-profile', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ promptProfile }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload.ok) throw new Error(payload.error || 'Prompt 版本切换失败')
+    config.promptProfile = normalizePromptProfile(payload.promptProfile)
+    config.promptProfiles = Array.isArray(payload.promptProfiles) ? payload.promptProfiles.map(normalizePromptProfile) : config.promptProfiles
+    interceptionPromptSnapshot = null
+    renderModelManagementPage()
+    renderConnection()
+  } catch (error) {
+    els.modelManagementStatus.textContent = error.message
+    els.modelManagementStatus.dataset.tone = 'error'
+    els.promptProfileSelect.value = normalizePromptProfile(config.promptProfile)
+  }
 }
 
 function renderStatusPanel() {
@@ -1809,6 +2322,7 @@ function buildPendingPostprocessFromState() {
     statusRoster: state.statusRoster,
     statusState: state.statusState,
     longRangeOutline: state.longRangeOutline,
+    longRangeOutlineUpdatedTurn: state.longRangeOutlineUpdatedTurn,
     playerFeedback: state.debug?.postprocessRecoveryBase?.playerFeedback || '',
     feedbackText: renderFeedbackMemory(),
     feedbackMemory: state.feedbackMemory,
@@ -1834,7 +2348,7 @@ async function retryPendingPostprocess(pending) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         ...pending,
-        apiKey: getLocalApiKey(),
+        apiKey: getPipelineApiKey(),
         model: normalizeModel(state.model || config.model),
       }),
     })
@@ -1955,6 +2469,7 @@ function buildGenerateRequestPayload(playerInput) {
     feedbackText: renderFeedbackMemory(),
     feedbackMemory: state.feedbackMemory,
     longRangeOutline: state.longRangeOutline,
+    longRangeOutlineUpdatedTurn: state.longRangeOutlineUpdatedTurn,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: nextAssistantTurnIndex(),
@@ -1964,7 +2479,7 @@ function buildGenerateRequestPayload(playerInput) {
     statusRoster: state.statusRoster,
     statusState: state.statusState,
     model: normalizeModel(state.model || config.model),
-    apiKey: getLocalApiKey(),
+    apiKey: getPipelineApiKey(),
     temperature: Number(els.temperatureInput.value || 0.8),
   }
 }
@@ -2225,7 +2740,14 @@ function applyPostprocess(payload) {
     state.outline = turnSummary
   }
   if (typeof payload.longRangeOutline === 'string' && payload.longRangeOutline.trim()) {
-    state.longRangeOutline = payload.longRangeOutline.trim()
+    const nextLongRangeOutline = payload.longRangeOutline.trim()
+    const changed = nextLongRangeOutline !== String(state.longRangeOutline || '').trim()
+    state.longRangeOutline = nextLongRangeOutline
+    if (Number.isFinite(Number(payload.longRangeOutlineUpdatedTurn))) {
+      state.longRangeOutlineUpdatedTurn = Math.max(0, Math.floor(Number(payload.longRangeOutlineUpdatedTurn)))
+    } else if (changed) {
+      state.longRangeOutlineUpdatedTurn = completedAssistantTurnCount()
+    }
   }
   state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
   const statusPatch = payload.postprocess && typeof payload.postprocess === 'object' ? payload.postprocess : payload
@@ -2322,7 +2844,7 @@ async function persistStoryAsset(sourceName, imported, original) {
       originalText: original.originalText,
       entries: imported.entries || [],
       characters: imported.characters || [],
-      apiKey: getLocalApiKey(),
+      apiKey: getPipelineApiKey(),
     }),
   })
   const payload = await response.json().catch(() => ({}))

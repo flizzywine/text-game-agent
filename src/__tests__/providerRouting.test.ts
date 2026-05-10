@@ -7,19 +7,69 @@ function readServerSource(): string {
 }
 
 describe('provider routing', () => {
-  it('allows official DeepSeek V4 Pro, official V4 Flash, and Fireworks Priority by default', () => {
+  it('allows official DeepSeek, Infron models, Fireworks Priority, Google AI Studio, and Cerebras Qwen by default', () => {
     const source = readServerSource()
 
-    expect(source).toContain("const defaultModel = officialDeepSeekV4FlashModel")
+    expect(source).toContain("const defaultModel = infronGemini31FlashLiteModel")
     expect(source).toContain("officialDeepSeekV4ProModel")
     expect(source).toContain("officialDeepSeekV4FlashModel")
+    expect(source).toContain("infronDeepSeekV4ProModel")
+    expect(source).toContain("infronDeepSeekV4FlashModel")
+    expect(source).toContain("infronGemini31FlashLiteModel")
+    expect(source).toContain("googleAiStudioGemini31FlashLiteModel")
+    expect(source).toContain("cerebrasQwenModel")
     expect(source).toContain("fireworksDeepSeekV4ProPriorityModel")
     expect(source).toContain("{ id: officialDeepSeekV4ProModel")
     expect(source).toContain("{ id: officialDeepSeekV4FlashModel")
+    expect(source).toContain("{ id: infronDeepSeekV4ProModel")
+    expect(source).toContain("{ id: infronDeepSeekV4FlashModel")
+    expect(source).toContain("{ id: infronGemini31FlashLiteModel")
+    expect(source).toContain("{ id: googleAiStudioGemini31FlashLiteModel")
+    expect(source).toContain("{ id: cerebrasQwenModel")
     expect(source).toContain("{ id: fireworksDeepSeekV4ProPriorityModel")
+    expect(source).toContain("google/gemini-3.1-flash-lite")
+    expect(source).toContain("gemini-3.1-flash-lite")
     expect(source).not.toContain("gemini-3.1-flash-lite-preview")
     expect(source).not.toContain("qwen/qwen3.5-flash-02-23")
     expect(source).not.toContain("gemma-4-uncensored")
+  })
+
+  it('routes Infron models through the Infron gateway sorted by throughput', () => {
+    const source = readServerSource()
+
+    expect(source).toContain("type ModelProvider = 'deepseek' | 'fireworks' | 'infron' | 'cerebras' | 'google-ai-studio'")
+    expect(source).toContain("const defaultInfronBaseUrl = 'https://llm.onerouter.pro/v1'")
+    expect(source).toContain('function requestInfronContent')
+    expect(source).toContain("provider: {\n          sort: 'throughput',\n        }")
+    expect(source).toContain('function infronRequestModel')
+    expect(source).toContain('model === infronGemini31FlashLiteModel')
+    expect(source).toContain('INFRON_API_KEY')
+    expect(source).toContain('Infron 上游错误')
+    expect(source).toContain('providerSort: \'throughput\'')
+  })
+
+  it('routes Cerebras Qwen through Cerebras chat completions', () => {
+    const source = readServerSource()
+
+    expect(source).toContain("const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'")
+    expect(source).toContain("const defaultCerebrasBaseUrl = 'https://api.cerebras.ai/v1'")
+    expect(source).toContain('function requestCerebrasContent')
+    expect(source).toContain('CEREBRAS_API_KEY')
+    expect(source).toContain('Cerebras 上游错误')
+    expect(source).toContain('max_completion_tokens: maxTokens')
+    expect(source).not.toContain('Cerebras_BASE_URL')
+  })
+
+  it('routes Google AI Studio Gemini through the official OpenAI-compatible endpoint', () => {
+    const source = readServerSource()
+
+    expect(source).toContain("const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'")
+    expect(source).toContain("const defaultGoogleAiStudioBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/openai'")
+    expect(source).toContain('function requestGoogleAiStudioContent')
+    expect(source).toContain('GEMINI_API_KEY')
+    expect(source).toContain('GOOGLE_AI_STUDIO_API_KEY')
+    expect(source).toContain('Google AI Studio 上游错误')
+    expect(source).toContain("provider === 'google-ai-studio'")
   })
 
   it('routes Fireworks DeepSeek V4 Pro through Fireworks chat completions', () => {
@@ -32,7 +82,6 @@ describe('provider routing', () => {
     expect(source).toContain('FIREWORKS_API_KEY')
     expect(source).toContain('Fireworks API Key')
     expect(source).toContain('Fireworks 上游错误')
-    expect(source).not.toContain('stream: true')
     expect(source).not.toContain('stream_options')
     expect(source).not.toContain('function readFireworksStream')
     expect(source).not.toContain('choice.delta?.content')
@@ -83,17 +132,62 @@ describe('provider routing', () => {
     expect(source).toContain('providerApiKey(provider, input.apiKey)')
     expect(source).toContain('requestModelContent(apiKey')
     expect(source).toContain('ProviderTest')
-    expect(source).toContain('12_000')
+    expect(source).toContain('providerConnectivityTimeoutMs')
+    expect(source).toContain('30_000')
+    const connectivityBody = source.slice(source.indexOf('async function testProvider'), source.indexOf('async function testProviderSpeed'))
+    expect(connectivityBody).not.toContain('usage:')
+    expect(connectivityBody).not.toContain('reply:')
   })
 
-  it('saves official DeepSeek empty responses for diagnosis', () => {
+  it('exposes a streamed provider speed probe with real TTFT and TPS', () => {
+    const source = readServerSource()
+
+    expect(source).toContain('interface ProviderSpeedTestRequest')
+    expect(source).toContain("url.pathname === '/api/provider-speed-test'")
+    expect(source).toContain('async function testProviderSpeed')
+    expect(source).toContain('function requestModelStreamProbe')
+    expect(source).toContain('function extractStreamDelta')
+    expect(source).toContain('function appendSpeedTestRecord')
+    expect(source).toContain("const speedTestRecordFile = path.join(docsDir, '模型速度测试记录.md')")
+    expect(source).toContain('stream: true')
+    expect(source).toContain('providerSpeedTestTimeoutMs')
+    expect(source).toContain('100_000')
+    expect(source).toContain('约 1200 个汉字')
+    expect(source).toContain('firstTokenAt ? firstTokenAt - startedAt : durationMs')
+    expect(source).toContain('generationMs = Math.max(1, result.metrics.durationMs - (result.metrics.ttftMs || 0))')
+    expect(source).toContain('appendSpeedTestRecord({')
+    expect(source).toContain('recordFile: path.relative(rootDir, speedTestRecordFile)')
+    expect(source).toContain("const defaultPromptProfile = '繁花'")
+    expect(source).toContain("url.pathname === '/api/prompt-profile'")
+    expect(source).toContain('writeActivePromptProfile(promptProfile)')
+  })
+
+  it('can snapshot the current Narrator prompt and run raw interception tests', () => {
+    const source = readServerSource()
+
+    expect(source).toContain('interface InterceptionPromptRequest')
+    expect(source).toContain('interface InterceptionTestRequest')
+    expect(source).toContain("const interceptionDebugDir = path.join(debugDir, 'content-interception')")
+    expect(source).toContain("url.pathname === '/api/content-interception/prompt'")
+    expect(source).toContain("url.pathname === '/api/content-interception/test'")
+    expect(source).toContain('function buildInterceptionNarratorPrompt')
+    expect(source).toContain('function runInterceptionTest')
+    expect(source).toContain('缺少测试 Prompt，请先生成快照或选择 Prompt 文件。')
+    expect(source).toContain('requestModelContent(apiKey, messages')
+    expect(source).toContain('interception-test-request')
+    expect(source).toContain('interception-test-response')
+    expect(source).not.toContain('callModel(messages, { temperature: Number.isFinite(input.temperature)')
+  })
+
+  it('does not use official DeepSeek JSON mode because it can return empty content', () => {
     const source = readServerSource()
 
     expect(source).toContain("label: `${label}-deepseek-empty`")
     expect(source).toContain('finish_reason')
     expect(source).toContain('DeepSeek returned an empty response${reasonText}；原始返回已保存')
     expect(source).toContain('const defaultMaxTokens = Number(process.env.LLM_MAX_TOKENS || 8192)')
-    expect(source).toContain("response_format: { type: 'json_object' }")
+    expect(source).not.toContain('response_format')
+    expect(source).not.toContain('json_object')
   })
 
   it('keeps request types compact through a shared pipeline context', () => {
@@ -119,5 +213,24 @@ describe('provider routing', () => {
     expect(source).toContain("label: `${label}-timeout`")
     expect(source).toContain('Director')
     expect(source).toContain('超过 ${Math.round(Number(options.timeoutMs) / 1000)} 秒未完成')
+  })
+
+  it('only routes official DeepSeek through Pro and Flash tiers', () => {
+    const source = readServerSource()
+
+    expect(source).toContain('const strongLayerModel = officialDeepSeekV4ProModel')
+    expect(source).toContain('const simpleLayerModel = officialDeepSeekV4FlashModel')
+    expect(source).toContain("const provider = providerForModel(normalizeModel(requestedModel))")
+    expect(source).toContain("const strongModel = provider === 'deepseek' ? strongLayerModel : selectedModel")
+    expect(source).toContain("const simpleModel = provider === 'deepseek' ? simpleLayerModel : selectedModel")
+    expect(source).toContain('const pipelineModels = buildPipelineModels(requestedModel)')
+    expect(source).toContain('const narratorModel = pipelineModels.narrator')
+    expect(source).toContain('const postprocessModel = pipelineModels.postprocess')
+    expect(source).toContain('const longRangeDirectorModel = pipelineModels.longRangeDirector')
+    expect(source).toContain('model: directorModel')
+    expect(source).toContain('model: narratorModel')
+    expect(source).toContain('model: postprocessModel')
+    expect(source).toContain('model: longRangeDirectorModel')
+    expect(source).toContain('pipelineModels: buildPipelineModels()')
   })
 })

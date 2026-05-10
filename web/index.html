@@ -30,22 +30,13 @@
             <button id="saveArchiveButton" class="ghost-button" type="button">保存游戏</button>
             <button id="loadArchiveButton" class="ghost-button" type="button">读取存档</button>
             <button id="deleteSaveButton" class="ghost-button" type="button">删除存档</button>
+            <button id="modelManagementButton" class="ghost-button" type="button">模型管理</button>
           </div>
           <div class="model-strip">
-            <label>
-              <span>Model</span>
-              <select id="modelSelect">
-                <option value="accounts/fireworks/models/deepseek-v4-pro:priority">V4 Pro Fireworks Priority</option>
-                <option value="deepseek-v4-pro">V4 Pro Official</option>
-                <option value="deepseek-v4-flash">V4 Flash Official</option>
-              </select>
-            </label>
             <label>
               <span>Temp</span>
               <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0.8" />
             </label>
-            <button id="apiKeyButton" class="ghost-button" type="button">API Key</button>
-            <button id="providerTestButton" class="ghost-button" type="button">测试连接</button>
             <button id="directorControlButton" class="ghost-button" type="button">导演控制台</button>
             <button id="resetButton" class="ghost-button" type="button">清空当前故事</button>
           </div>
@@ -136,6 +127,110 @@
           </section>
         </section>
       </main>
+
+      <main id="modelManagementPage" class="model-management-page" hidden>
+        <section class="library-hero">
+          <div>
+            <h2>模型管理</h2>
+            <p>管理 Provider、API Key、默认模型和简化测速。</p>
+          </div>
+          <div class="library-actions">
+            <button id="providerTestButton" class="ghost-button" type="button">连通性测试</button>
+            <button id="providerSpeedTestButton" class="ghost-button" type="button">速度测试</button>
+            <button id="closeModelManagementButton" class="ghost-button" type="button">返回游戏</button>
+          </div>
+          <p id="modelManagementStatus" class="dialog-status">未测试。</p>
+        </section>
+        <section class="model-management-grid">
+          <div class="model-provider-list">
+            <button type="button" class="provider-card" data-provider-model="deepseek-v4-flash">
+              <strong>DeepSeek Official</strong>
+              <span>官方 DeepSeek；仅这里启用 Pro/Flash 分级路由。</span>
+            </button>
+            <button type="button" class="provider-card" data-provider-model="infron/deepseek-v4-flash">
+              <strong>Infron</strong>
+              <span>DeepSeek / Gemini 模型经 Infron；请求按 throughput 排序。</span>
+            </button>
+            <button type="button" class="provider-card" data-provider-model="accounts/fireworks/models/deepseek-v4-pro:priority">
+              <strong>Fireworks</strong>
+              <span>DeepSeek V4 Pro Priority；不做额外分级路由。</span>
+            </button>
+            <button type="button" class="provider-card" data-provider-model="gemini-3.1-flash-lite">
+              <strong>Google AI Studio</strong>
+              <span>Gemini 3.1 Flash Lite；直连 Google AI Studio。</span>
+            </button>
+            <button type="button" class="provider-card" data-provider-model="qwen-3-235b-a22b-instruct-2507">
+              <strong>Cerebras</strong>
+              <span>Qwen 3 235B A22B Instruct 2507；不做额外分级路由。</span>
+            </button>
+          </div>
+          <section class="model-settings-form model-selection-form">
+            <h3>模型选择</h3>
+            <label>
+              <span>当前模型</span>
+              <select id="modelSelect">
+                <option value="accounts/fireworks/models/deepseek-v4-pro:priority">DeepSeek V4 Pro | priority | Fireworks</option>
+                <option value="deepseek-v4-pro">DeepSeek V4 Pro | official | DeepSeek</option>
+                <option value="deepseek-v4-flash">DeepSeek V4 Flash | official | DeepSeek</option>
+                <option value="infron/deepseek-v4-pro">DeepSeek V4 Pro | throughput | Infron</option>
+                <option value="infron/deepseek-v4-flash">DeepSeek V4 Flash | throughput | Infron</option>
+                <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite | throughput | Infron</option>
+                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite | AI Studio | Google</option>
+                <option value="qwen-3-235b-a22b-instruct-2507">Qwen 3 235B A22B Instruct 2507 | fast | Cerebras</option>
+              </select>
+            </label>
+            <label>
+              <span>Prompt 版本</span>
+              <select id="promptProfileSelect">
+                <option value="繁花">繁花</option>
+                <option value="基准">基准</option>
+              </select>
+            </label>
+            <div id="modelTestResults" class="model-test-results"></div>
+          </section>
+          <section class="model-settings-form api-key-form">
+            <h3>API Key</h3>
+            <label>
+              <span id="apiKeyLabel">API Key</span>
+              <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <p id="apiKeyHelp" class="dialog-note">Key 保存在当前浏览器本地。</p>
+            <div class="dialog-actions left-actions">
+              <button id="apiKeyButton" class="ghost-button" type="button">保存 Key</button>
+              <button id="clearApiKeyButton" class="ghost-button" type="button">清除当前 Key</button>
+            </div>
+          </section>
+          <section class="interception-panel">
+            <div>
+              <h3>内容拦截测试</h3>
+              <p class="dialog-note">生成当前 Narrator prompt 快照并落盘，再拼接上传的系统指令文件做一次原始模型调用。</p>
+            </div>
+            <div class="interception-actions">
+              <button id="buildInterceptionPromptButton" class="ghost-button" type="button">生成当前 Narrator Prompt</button>
+              <label class="file-button">
+                选择 Prompt 文件
+                <input id="interceptionPromptFile" type="file" accept=".txt,.md,.json" />
+              </label>
+              <label class="file-button">
+                选择系统指令文件
+                <input id="interceptionInstructionFiles" type="file" multiple accept=".txt,.md,.json" />
+              </label>
+              <button id="runInterceptionTestButton" class="ghost-button" type="button">测试内容拦截</button>
+            </div>
+            <p id="interceptionStatus" class="dialog-status">尚未生成测试 prompt。</p>
+            <div class="interception-grid">
+              <label>
+                <span>系统指令文件内容</span>
+                <textarea id="interceptionSystemInput" rows="10" placeholder="选择文件后会自动拼接；也可以直接编辑。"></textarea>
+              </label>
+              <label>
+                <span>测试结果</span>
+                <textarea id="interceptionResultOutput" rows="10" readonly placeholder="这里显示模型原始返回或拦截错误。"></textarea>
+              </label>
+            </div>
+          </section>
+        </section>
+      </main>
     </div>
 
     <dialog id="newGameDialog" class="app-dialog wide-dialog">
@@ -155,18 +250,14 @@
       </form>
     </dialog>
 
-    <dialog id="apiKeyDialog" class="app-dialog">
-      <form method="dialog" id="apiKeyForm">
-        <h3 id="apiKeyTitle">DeepSeek API Key</h3>
-        <p id="apiKeyHelp" class="dialog-note">Key 保存在当前浏览器本地。</p>
-        <label>
-          <span id="apiKeyLabel">API Key</span>
-          <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-..." />
-        </label>
+    <dialog id="saveSlotsDialog" class="app-dialog wide-dialog">
+      <form method="dialog" id="saveSlotsForm">
+        <h3>存档槽</h3>
+        <p class="dialog-note">手动保存当前故事分支；收藏存档会置顶。</p>
+        <p id="saveSlotsStatus" class="dialog-status">未读取。</p>
+        <div id="saveSlotsList" class="save-slot-list"></div>
         <div class="dialog-actions">
-          <button value="clear" type="button" id="clearApiKeyButton" class="ghost-button">清除</button>
-          <button value="cancel" type="button" id="cancelApiKeyButton" class="ghost-button">取消</button>
-          <button value="default" type="submit">保存</button>
+          <button value="cancel" type="button" id="closeSaveSlotsButton" class="ghost-button">关闭</button>
         </div>
       </form>
     </dialog>
