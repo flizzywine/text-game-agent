@@ -86,13 +86,23 @@ describe('provider routing', () => {
     expect(source).toContain('12_000')
   })
 
+  it('saves official DeepSeek empty responses for diagnosis', () => {
+    const source = readServerSource()
+
+    expect(source).toContain("label: `${label}-deepseek-empty`")
+    expect(source).toContain('finish_reason')
+    expect(source).toContain('DeepSeek returned an empty response${reasonText}；原始返回已保存')
+    expect(source).toContain('const defaultMaxTokens = Number(process.env.LLM_MAX_TOKENS || 8192)')
+    expect(source).toContain("response_format: { type: 'json_object' }")
+  })
+
   it('keeps request types compact through a shared pipeline context', () => {
     const source = readServerSource()
 
     expect(source).toContain('interface PipelineContext')
     expect(source).toContain('interface GenerateRequest extends PipelineContext')
     expect(source).toContain('interface PostprocessRequest extends PipelineContext')
-    expect(source).toContain('interface EvaluationRequest extends PostprocessRequest')
+    expect(source).not.toContain('interface EvaluationRequest')
   })
 
   it('bounds director calls so regeneration cannot hang forever', () => {
@@ -101,11 +111,11 @@ describe('provider routing', () => {
     expect(source).toContain('DIRECTOR_TIMEOUT_MS')
     expect(source).toContain('const directorTimeoutMs = Number(process.env.DIRECTOR_TIMEOUT_MS || 300_000)')
     expect(source).toContain('DIRECTOR_MAX_TOKENS')
-    expect(source).toContain('const directorMaxTokens = Number(process.env.DIRECTOR_MAX_TOKENS || 1200)')
+    expect(source).toContain('const directorMaxTokens = Number(process.env.DIRECTOR_MAX_TOKENS || 2000)')
     expect(source).toContain('const directorTemperature = Math.min(temperature, 0.4)')
     expect(source).toContain('timeoutMs: directorTimeoutMs')
     expect(source).toContain('maxTokens: directorMaxTokens')
-    expect(source).toContain('temperature: directorPayload.temperature')
+    expect(source).toContain('temperature: directorTemperature')
     expect(source).toContain("label: `${label}-timeout`")
     expect(source).toContain('Director')
     expect(source).toContain('超过 ${Math.round(Number(options.timeoutMs) / 1000)} 秒未完成')

@@ -47,13 +47,12 @@
             <button id="apiKeyButton" class="ghost-button" type="button">API Key</button>
             <button id="providerTestButton" class="ghost-button" type="button">测试连接</button>
             <button id="directorControlButton" class="ghost-button" type="button">导演控制台</button>
-            <button id="moduleConfigButton" class="ghost-button" type="button">注入配置</button>
             <button id="resetButton" class="ghost-button" type="button">清空当前故事</button>
           </div>
         </div>
       </header>
 
-      <main class="workspace-grid">
+      <main id="gamePage" class="workspace-grid">
         <aside class="left-rail">
           <section class="panel debug-panel">
             <div class="panel-head">
@@ -72,6 +71,7 @@
           <div id="conversation" class="conversation"></div>
           <div id="optionTray" class="option-tray"></div>
           <form id="playForm" class="composer">
+            <textarea id="playerFeedback" rows="1" placeholder="玩家负反馈，持续广播给所有模块；清空这里即可删除，可留空"></textarea>
             <textarea id="playerInput" rows="2" placeholder="输入你的行动、对话或想法"></textarea>
             <div class="composer-actions">
               <button id="retryStageButton" class="ghost-button" type="button">继续未完成</button>
@@ -99,6 +99,43 @@
           </section>
         </aside>
       </main>
+
+      <main id="storyLibraryPage" class="story-library-page" hidden>
+        <section class="library-hero">
+          <div>
+            <h2>故事库</h2>
+            <p>管理故事书、人物卡、世界书和初始化配置。</p>
+          </div>
+          <div class="library-actions">
+            <button id="importStoryAssetButton" class="ghost-button" type="button">导入故事资料</button>
+            <button id="initializeStoryAssetButton" class="ghost-button" type="button">初始化选中故事</button>
+            <button id="deleteStoryAssetButton" class="ghost-button" type="button">删除选中资料</button>
+            <button id="refreshStoryLibraryButton" class="ghost-button" type="button">刷新</button>
+            <button id="closeStoryLibraryButton" class="ghost-button" type="button">返回游戏</button>
+            <input id="storyLibraryFileInput" type="file" accept=".json,.md,.txt,.png" multiple hidden />
+          </div>
+          <p id="storyLibraryStatus" class="dialog-status">未开始初始化。</p>
+        </section>
+        <section class="story-library-grid">
+          <div class="library-column">
+            <div class="library-column-head">
+              <h3>资料</h3>
+              <span>选择后可预览、初始化或删除</span>
+            </div>
+            <div id="libraryAssetList" class="asset-list"></div>
+          </div>
+          <section id="storySettingsForm" class="story-settings-form" aria-label="故事设定编辑">
+            <div class="story-settings-head">
+              <h4>Program Config JSON</h4>
+              <button id="saveStorySettingsButton" class="ghost-button" type="button">保存 JSON</button>
+            </div>
+            <label>
+              <span>直接编辑完整 JSON</span>
+              <textarea id="storyProgramConfigInput" class="json-editor" rows="28" spellcheck="false"></textarea>
+            </label>
+          </section>
+        </section>
+      </main>
     </div>
 
     <dialog id="newGameDialog" class="app-dialog wide-dialog">
@@ -118,65 +155,6 @@
       </form>
     </dialog>
 
-    <dialog id="storyLibraryDialog" class="app-dialog wide-dialog">
-      <form method="dialog" id="storyLibraryForm">
-        <h3>故事库</h3>
-        <p class="dialog-note">先导入故事书 / 人物卡 / 世界书，再点击“初始化”。初始化完成后才能开始新游戏。</p>
-        <div class="dialog-actions left-actions">
-          <button id="importStoryAssetButton" class="ghost-button" type="button">导入故事资料</button>
-          <button id="initializeStoryAssetButton" class="ghost-button" type="button">初始化选中故事</button>
-          <button id="refreshStoryLibraryButton" class="ghost-button" type="button">刷新</button>
-          <input id="storyLibraryFileInput" type="file" accept=".json,.md,.txt,.png" multiple hidden />
-        </div>
-        <p id="storyLibraryStatus" class="dialog-status">未开始初始化。</p>
-        <div class="story-library-grid">
-          <div id="libraryAssetList" class="asset-list"></div>
-          <section id="storySettingsForm" class="story-settings-form" aria-label="故事设定编辑">
-            <div class="story-settings-head">
-              <h4>故事设定</h4>
-              <button id="saveStorySettingsButton" class="ghost-button" type="button">保存设定</button>
-            </div>
-            <label>
-              <span>世界观</span>
-              <textarea id="storyWorldviewInput" rows="5" placeholder="故事背景、规则、人物关系、知识边界。"></textarea>
-            </label>
-            <label>
-              <span>开场白</span>
-              <textarea id="storyOpeningTextInput" rows="4" placeholder="开始新游戏后展示给玩家的第一段文字。"></textarea>
-            </label>
-            <div class="story-settings-two">
-              <label>
-                <span>导演风格</span>
-                <textarea id="storyDirectorStyleInput" rows="5" placeholder="例如：打脸爽文、悬疑压迫、慢热日常、群像权谋。影响 Director 的剧情推进、矛盾设计和人物关系变化。"></textarea>
-              </label>
-              <label>
-                <span>叙事风格</span>
-                <textarea id="storyNarratorStyleInput" rows="5" placeholder="例如：张扬、克制、冷峻、轻快、细腻。影响 Narrator 的正文语调、句式、描写密度。"></textarea>
-              </label>
-            </div>
-            <div class="story-settings-two">
-            </div>
-            <label>
-              <span>状态字段</span>
-              <textarea id="storyStatusSchemaInput" rows="5"></textarea>
-            </label>
-            <label>
-              <span>初始人物状态 JSON</span>
-              <textarea id="storyStatusPanelInput" rows="5"></textarea>
-            </label>
-            <label>
-              <span>长期上下文种子</span>
-              <textarea id="storyGlobalContextSeedInput" rows="4"></textarea>
-            </label>
-          </section>
-        </div>
-        <div id="libraryPreview" class="asset-preview"></div>
-        <div class="dialog-actions">
-          <button value="cancel" type="button" id="closeStoryLibraryButton" class="ghost-button">关闭</button>
-        </div>
-      </form>
-    </dialog>
-
     <dialog id="apiKeyDialog" class="app-dialog">
       <form method="dialog" id="apiKeyForm">
         <h3 id="apiKeyTitle">DeepSeek API Key</h3>
@@ -189,17 +167,6 @@
           <button value="clear" type="button" id="clearApiKeyButton" class="ghost-button">清除</button>
           <button value="cancel" type="button" id="cancelApiKeyButton" class="ghost-button">取消</button>
           <button value="default" type="submit">保存</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="moduleConfigDialog" class="app-dialog module-config-dialog">
-      <form method="dialog" id="moduleConfigForm">
-        <h3>用户配置模块</h3>
-        <p class="dialog-note">导演风格注入 Director，叙事风格注入 Narrator；Postprocess 使用固定通用规则。展开模块可查看注入内容。</p>
-        <div id="moduleList" class="module-list"></div>
-        <div class="dialog-actions">
-          <button value="cancel" type="button" id="closeModuleConfigButton" class="ghost-button">关闭</button>
         </div>
       </form>
     </dialog>

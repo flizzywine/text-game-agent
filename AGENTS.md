@@ -13,18 +13,17 @@ Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Dire
                                                                ^                         |
                                                                |                         v
                           LongRangeDirector -> 剧情目标 --------+---- feedbackMemory <----+
-                                                               \
-                                                                -> Evaluator（人工触发，不进主链路）
 ```
 
 - Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
 - 用户输入：每轮玩家自由输入，是 Director 和 Narrator 的当前触发点。
-- 闭环反馈：Postprocess 产生三类负反馈，程序保存为 `feedbackMemory`，后续 5 轮注入 Director 和 Narrator。
+- 最近正文：保留最近 5 轮，提供给 Director 和 Narrator；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复。
+- 闭环反馈：Postprocess 只产生拆分后的负反馈，程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。
+- 玩家负反馈：玩家手动维护的持久控制信号，广播给 Director、Narrator、Postprocess、LongRangeDirector；玩家清空输入框才删除，不写入 `feedbackMemory`。
 - Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。
 - Narrator：按导演计划写玩家可见正文；不更新状态。
 - Postprocess：正文显示后运行，只更新事实总结、人物状态补丁、三类负反馈、剧情目标状态和玩家候选项；不改正文。
 - LongRangeDirector：只生成或修订当前剧情目标；剧情目标是 Director 的上层方向输入，用来控制多轮推进，不直接写正文。
-- Evaluator：人工评估上一轮，不自动改 prompt、代码或正文。
 
 ## 当前状态设计
 
@@ -48,13 +47,16 @@ Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Dire
 
 ## 负反馈设计
 
-Postprocess 只输出三类独立负反馈：
+Postprocess 输出拆分反馈：
 
 - `planExecutionFeedback`
 - `narrativeConstraintFeedback`
+- `narrativeRepetitionFeedback`
+- `narrativePacingFeedback`
 - `directorProgressFeedback`
+- `directorPhysicalFeedback`
 
-程序保存为 `feedbackMemory`，TTL 5 轮，下一轮注入 Director 和 Narrator。不要恢复合并版 `qualityFeedback` 状态字段。
+程序保存为 `feedbackMemory`，TTL 1 轮，下一轮注入 Director 和 Narrator。不要恢复合并版 `qualityFeedback` 状态字段。
 
 ## Prompt 规则
 
@@ -65,9 +67,15 @@ Prompt 文件直接在 `prompts/` 上层：
 - `narrator.md`
 - `postprocess.md`
 - `high-level-director.md`
-- `evaluator.md`
 
-用户配置只保留：
+风格绑定在故事配置 JSON 里：
+
+- `directorStyle`
+- `narratorStyle`
+
+要改风格，直接改故事库里的 Program Config JSON。代码层不再动态加载用户配置模块，不提供 `/api/modules`，前端也不再有“注入配置”。
+
+风格 prompt 文件只作为参考模板保留，不参与运行时注入：
 
 - `prompts/导演风格/*.md`
 - `prompts/叙事风格/*.md`
@@ -83,6 +91,7 @@ Prompt 文件直接在 `prompts/` 上层：
 - 应急 Director fallback。
 - 动态加载 prompt 机制。
 - `system-hard-rules`、`story-curator`、`user-config-templates` 旧目录。
+- 运行时用户配置模块、`/api/modules`、`userModules`、`moduleEnabled`、注入配置 UI。
 - 独立伏笔队列。
 - `currentPhysicalEnvironment`、`normalizedEntries`、`statusPanel*`、`qualityFeedback` 等已删状态字段。
 - 复杂物理状态机。
@@ -91,10 +100,10 @@ Prompt 文件直接在 `prompts/` 上层：
 
 - `scripts/web-server.ts`：本地 HTTP 服务、模型调用、流水线、故事导入初始化、存档接口。
 - `web/`：前端页面、状态展示、故事库、配置、生成交互。
-- `prompts/`：固定 prompt 和用户风格模块。
+- `prompts/`：固定 prompt 和风格参考模板。
 - `story/`：故事资料和初始化后的 `program-config`。
 - `save/`：本地存档。
-- `debug/`：LLM 原始请求、返回和评估材料。
+- `debug/`：LLM 原始请求和返回。
 - `src/__tests__/`：当前架构保护测试。
 
 ## 运行
