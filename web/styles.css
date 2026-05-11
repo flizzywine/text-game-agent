@@ -107,6 +107,51 @@ button:disabled {
   font-weight: 700;
 }
 
+.pipeline-model-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(108px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 760px;
+}
+
+.pipeline-model-card {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid rgba(30, 28, 24, 0.18);
+  background: rgba(255, 252, 244, 0.68);
+  padding: 6px 8px;
+}
+
+.pipeline-model-card span,
+.pipeline-model-card small,
+.pipeline-model-card strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-model-role {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.pipeline-model-card strong {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.pipeline-model-card small {
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
 .control-stack {
   display: grid;
   gap: 8px;
@@ -1037,6 +1082,10 @@ button:disabled {
 }
 
 @media (max-width: 1180px) {
+  .pipeline-model-grid {
+    grid-template-columns: repeat(3, minmax(118px, 1fr));
+  }
+
   .workspace-grid {
     grid-template-columns: 270px 1fr;
     grid-template-areas:
@@ -1081,6 +1130,11 @@ button:disabled {
   .model-strip input,
   .model-strip select {
     width: 100%;
+  }
+
+  .pipeline-model-grid {
+    grid-template-columns: 1fr;
+    max-width: none;
   }
 
   .workspace-grid {

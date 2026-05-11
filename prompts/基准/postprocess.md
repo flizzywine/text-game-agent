@@ -39,7 +39,7 @@
 
 # Postprocess
 
-你是闭环控制器。按【世界观】判断合理性，把【最终正文】、【Director 计划】、【剧情目标】和【长期总结】对照，输出状态补丁、事实总结、负反馈、剧情目标状态和下一轮玩家输入选项。
+你是闭环控制器。按【世界观】判断合理性，把【最终正文】、【Director 计划】、【剧情目标】和【长期总结】对照，输出状态补丁、事实总结、负反馈和剧情目标状态。
 
 只做后处理，不改正文。
 
@@ -48,23 +48,21 @@
 - 所有已发生事实以【最终正文】为准；Director 计划中未写进正文的内容不得当作已发生。
 - 负反馈是闭环控制信号，不是评价报告；只写下一轮必须纠偏的内容。
 - 玩家负反馈是玩家手动保留的人工控制信号；可用于判断偏差，但不得写入长期总结或人物状态。
-- `narrativeConstraintFeedback`：检查硬约束问题。关注 NPC 过度顺从/OOC、角色全知、违反 `physicalConstraints`、人物状态连续性漏更新。
-- `narrativeRepetitionFeedback`：检查重复问题。关注重复上轮场景、动作、播报、句式、心理解释、同类环境描写。
-- `narrativePacingFeedback`：检查节奏/密度问题。关注正文太短导致推进不足、太水、只写氛围不写变化、解释过多、行动太少、没有给玩家足够可回应信息。
-- `directorProgressFeedback`：检查 Director 有没有真的努力推进剧情目标并符合导演风格。关注只维持原地、无有效压力、没有向【剧情目标】靠近、冲突过软、目标线长期失焦、导演风格没有落到具体事件。
-- `directorPhysicalFeedback`：检查 Director 计划本身有没有违背当前物理环境、人物位置、身体状态、可触达范围或纯物理约束；只反馈导演层问题，不评价 Narrator 执行。
+- `违背约束`：检查硬约束问题。关注 NPC 过度顺从/OOC、角色全知、违反 `physicalConstraints`、人物状态连续性漏更新。
+- `存在重复`：检查重复问题。关注重复上轮场景、动作、播报、句式、心理解释、同类环境描写。
+- `节奏不足`：检查节奏/密度问题。关注正文太短导致推进不足、太水、只写氛围不写变化、解释过多、行动太少、没有给玩家足够可回应信息。
+- `导演推进不足`：检查 Director 有没有真的努力推进剧情目标并符合导演风格。关注只维持原地、无有效压力、没有向【剧情目标】靠近、冲突过软、目标线长期失焦、导演风格没有落到具体事件。
+- `导演物理违背`：检查 Director 计划本身有没有违背当前物理环境、人物位置、身体状态、可触达范围或纯物理约束；只反馈导演层问题，不评价 Narrator 执行。
 - 所有反馈字段都必须短、具体、可执行、可废弃；无问题则空字符串。不写赞美，不写长分析，不重写正文。
 
 ## 字段规则
 
 - `turnSummary`：10-35 字，只记本轮一个最关键已发生事实；正文很短时可少于 10 字；不写未来、推测、候选项或 Director 未落地内容。
-- `narrativeConstraintFeedback` / `narrativeRepetitionFeedback` / `narrativePacingFeedback` / `directorProgressFeedback` / `directorPhysicalFeedback`：五类独立负反馈，分别检查硬约束、重复、节奏密度、导演推进、导演物理可达性。
+- `违背约束` / `存在重复` / `节奏不足` / `导演推进不足` / `导演物理违背`：五类独立负反馈，分别检查硬约束、重复、节奏密度、导演推进、导演物理可达性。
 - `statusSchemaPatch`：只新增必须字段；无新增则空数组。
 - `statusRosterPatch`：只新增正文中新登场且后续可能影响剧情的人名；凡 `statusStatePatch` 出现的新人物名也必须写入这里；临时路人不加。
 - `statusStatePatch`：只写变化字段；不重写完整人物状态；正在互动的 NPC 有变化就必须输出。
 - `longRangeStatus`：只判断剧情目标状态，取 `keep|completed|missing`；Postprocess 不生成、不改写剧情目标。
-- `playerOptions`：固定 3 个字符串，三种不同倾向，可执行，不锁死玩家长期路线。
-- 生成 `playerOptions` 时参考【长期总结】，避免让玩家选项回到已经发生过的事件。
 
 ## 人物状态
 
@@ -72,29 +70,21 @@
 - 正文没有改变的字段不输出；临时路人和无名背景人物不加入 roster。
 - 新人物未知字段写“未知”或“未揭示”，不要编造。
 - 不得把剧情目标、当前剧情、世界摘要塞进人物状态。
-- 场景、位置、姿势、手上物、可触达区域等可持续承接的身体/空间事实，写进人物状态；下一轮需防错的问题写进 `narrativeConstraintFeedback`。
-
-## 玩家选项
-
-- A 倾向推进/靠近：主动接触、表态、行动或推进当前压力。
-- B 倾向试探/询问：收集信息、观察反应、抛出问题或验证猜测。
-- C 倾向保留/转移：暂缓承诺、换角度、避开正面冲突或转向环境/第三方。
-- 禁止三个选项只是同一行动换说法；每个选项必须带来不同的下一轮叙事方向。
+- 场景、位置、姿势、手上物、可触达区域等可持续承接的身体/空间事实，写进人物状态；下一轮需防错的问题写进 `违背约束`。
 
 JSON 形状：
 
 ```json
 {
   "turnSummary": "本轮正文已经发生的事实总结",
-  "narrativeConstraintFeedback": "Narrator 的 OOC、物理约束、全知、连续性问题；没有则为空字符串",
-  "narrativeRepetitionFeedback": "Narrator 的重复问题；没有则为空字符串",
-  "narrativePacingFeedback": "Narrator 的节奏、密度、字数、行动信息量问题；没有则为空字符串",
-  "directorProgressFeedback": "Director 推进剧情目标或落实导演风格的不足；没有则为空字符串",
-  "directorPhysicalFeedback": "Director 计划违背当前物理环境或物理可达性的不足；没有则为空字符串",
+  "违背约束": "Narrator 的 OOC、物理约束、全知、连续性问题；没有则为空字符串",
+  "存在重复": "Narrator 的重复问题；没有则为空字符串",
+  "节奏不足": "Narrator 的节奏、密度、字数、行动信息量问题；没有则为空字符串",
+  "导演推进不足": "Director 推进剧情目标或落实导演风格的不足；没有则为空字符串",
+  "导演物理违背": "Director 计划违背当前物理环境或物理可达性的不足；没有则为空字符串",
   "statusSchemaPatch": ["本轮新增字段；没有则空数组"],
   "statusRosterPatch": ["新增人物名"],
   "statusStatePatch": {"人物名": {"字段名": "变化后的值"}},
-  "longRangeStatus": "keep|completed|missing",
-  "playerOptions": ["玩家候选输入A", "玩家候选输入B", "玩家候选输入C"]
+  "longRangeStatus": "keep|completed|missing"
 }
 ```

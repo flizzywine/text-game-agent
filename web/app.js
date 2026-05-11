@@ -8,8 +8,8 @@ const googleAiStudioApiKeyStorageKey = 'text-game-agent.google-ai-studio-api-key
 const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
 const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
-const infronDeepSeekV4ProModel = 'infron/deepseek-v4-pro'
-const infronDeepSeekV4FlashModel = 'infron/deepseek-v4-flash'
+const infronDeepSeekV4ProModel = 'deepseek/deepseek-v4-pro'
+const infronDeepSeekV4FlashModel = 'deepseek/deepseek-v4-flash'
 const infronGemini31FlashLiteModel = 'google/gemini-3.1-flash-lite'
 const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'
 const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'
@@ -43,6 +43,7 @@ let config = {
 
 const els = {
   connectionStatus: document.querySelector('#connectionStatus'),
+  pipelineModelGrid: document.querySelector('#pipelineModelGrid'),
   turnStatus: document.querySelector('#turnStatus'),
   modelSelect: document.querySelector('#modelSelect'),
   promptProfileSelect: document.querySelector('#promptProfileSelect'),
@@ -423,11 +424,11 @@ function renderFeedbackMemory(items = state.feedbackMemory) {
   return normalizeFeedbackMemory(items)
     .map(item => {
       const label = {
-        narrativeConstraint: '约束',
-        narrativeRepetition: '重复',
-        narrativePacing: '节奏',
-        directorProgress: '导演',
-        directorPhysical: '物理',
+        narrativeConstraint: '违背约束',
+        narrativeRepetition: '存在重复',
+        narrativePacing: '节奏不足',
+        directorProgress: '导演推进不足',
+        directorPhysical: '导演物理违背',
       }[item.type] || '反馈'
       return `- [${label}｜剩${item.ttl}轮] ${item.text}`
     })
@@ -439,11 +440,11 @@ function mergeFeedbackMemory(existing, payload) {
     .map(item => ({ ...item, ttl: item.ttl - 1 }))
     .filter(item => item.ttl > 0)
   const incoming = [
-    ['narrativeConstraint', payload.narrativeConstraintFeedback],
-    ['narrativeRepetition', payload.narrativeRepetitionFeedback],
-    ['narrativePacing', payload.narrativePacingFeedback],
-    ['directorProgress', payload.directorProgressFeedback],
-    ['directorPhysical', payload.directorPhysicalFeedback],
+    ['narrativeConstraint', payload.违背约束 || payload.narrativeConstraintFeedback],
+    ['narrativeRepetition', payload.存在重复 || payload.narrativeRepetitionFeedback],
+    ['narrativePacing', payload.节奏不足 || payload.narrativePacingFeedback],
+    ['directorProgress', payload.导演推进不足 || payload.directorProgressFeedback],
+    ['directorPhysical', payload.导演物理违背 || payload.directorPhysicalFeedback],
   ]
     .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 1 }))
     .filter(item => item.text)
@@ -1436,6 +1437,7 @@ async function initializeStoryAssetStream(asset, force = true) {
       characters: asset.characters || [],
       model: normalizeModel(state.model || config.model),
       apiKey: getPipelineApiKey(),
+      apiKeys: getPipelineApiKeys(),
       force,
     }),
   })
@@ -1490,18 +1492,15 @@ function characterSeedsFromStatus(config, fallbackCharacters = []) {
 
 function normalizeInitialPlayerOptions(options) {
   if (!Array.isArray(options)) return []
-  return options.slice(0, 3).map((option, index) => {
-    const id = ['A', 'B', 'C'][index]
+  return options.slice(0, 3).map(option => {
     if (typeof option === 'string') {
-      return { id, label: option, description: '', inputText: option }
+      return { inputText: option }
     }
+    const inputText = String(option?.inputText || option?.label || option?.description || '').trim()
     return {
-      id: option.id || id,
-      label: option.label || option.inputText || `选项 ${id}`,
-      description: option.description || '',
-      inputText: option.inputText || option.label || option.description || '',
+      inputText,
     }
-  })
+  }).filter(option => option.inputText)
 }
 
 function extractOpeningText(entries) {
@@ -1657,10 +1656,31 @@ function renderConnection() {
   const keyState = hasRuntimeApiKey(provider) ? 'key ready' : `no ${providerLabel(provider)} key`
   const pipelineModels = pipelineModelsForSelection(model)
   const route = provider === 'infron' ? ' · sort=throughput' : ''
-  const mode = `分级：Director/LongRange/Narrator=${modelLabel(pipelineModels.narrator)} · Postprocess=${modelLabel(pipelineModels.postprocess)}`
-  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 测试模型 ${modelLabel(model)} · ${providerLabel(provider)} · ${mode} · ${keyState}`
-  if (route) els.connectionStatus.textContent += route
+  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 当前选择 ${modelLabel(model)} · ${providerLabel(provider)} · ${keyState}${route}`
+  renderPipelineModelGrid(model, pipelineModels)
   renderTurnStatus()
+}
+
+function renderPipelineModelGrid(selectedModel, pipelineModels) {
+  if (!els.pipelineModelGrid) return
+  const rows = [
+    ['长期导演', 'longRangeDirector'],
+    ['导演', 'director'],
+    ['叙事', 'narrator'],
+    ['后处理', 'postprocess'],
+    ['初始化', 'initializer'],
+  ]
+  els.pipelineModelGrid.innerHTML = rows.map(([label, key]) => {
+    const model = normalizeModel(pipelineModels?.[key] || selectedModel)
+    const tag = model === selectedModel ? '主模型' : '分流'
+    return `
+      <div class="pipeline-model-card">
+        <span class="pipeline-model-role">${escapeHtml(label)}</span>
+        <strong>${escapeHtml(modelLabel(model))}</strong>
+        <small>${escapeHtml(providerLabel(providerForModel(model)))} · ${escapeHtml(tag)}</small>
+      </div>
+    `
+  }).join('')
 }
 
 function pipelineModelsForSelection(model) {
@@ -1960,6 +1980,16 @@ function getPipelineApiKey() {
   return getLocalApiKey(currentProvider())
 }
 
+function getPipelineApiKeys() {
+  return {
+    deepseek: getLocalApiKey('deepseek'),
+    fireworks: getLocalApiKey('fireworks'),
+    infron: getLocalApiKey('infron'),
+    cerebras: getLocalApiKey('cerebras'),
+    'google-ai-studio': getLocalApiKey('google-ai-studio'),
+  }
+}
+
 function hasRuntimeApiKey(provider = currentProvider()) {
   return Boolean(getLocalApiKey(provider) || getProviderConfig(provider).hasApiKey)
 }
@@ -2013,7 +2043,7 @@ async function savePromptProfile() {
 
 function renderStatusPanel() {
   if (!state.statusRoster?.length) {
-    els.statusPanelView.innerHTML = '<p class="meta no-indent">未初始化状态栏</p>'
+    els.statusPanelView.innerHTML = '<p class="meta no-indent">未初始化花色观察</p>'
     return
   }
   els.statusPanelView.innerHTML = `
@@ -2022,7 +2052,7 @@ function renderStatusPanel() {
     </div>
     ${state.statusSchema?.length ? `
       <details class="status-schema">
-        <summary>查看状态字段</summary>
+        <summary>查看花色特性</summary>
         <pre>${escapeHtml(state.statusSchema.join('\\n'))}</pre>
       </details>
     ` : ''}
@@ -2199,9 +2229,8 @@ function renderOptions() {
     return
   }
   els.optionTray.innerHTML = options.map(option => `
-    <button class="option-button" type="button" data-option-input="${escapeAttr(option.inputText || option.label || '')}">
-      <strong>${escapeHtml(option.label || option.id || '选项')}</strong>
-      <span>${escapeHtml(option.description || option.inputText || '')}</span>
+    <button class="option-button" type="button" data-option-input="${escapeAttr(option.inputText || '')}">
+      <span>${escapeHtml(option.inputText || '')}</span>
     </button>
   `).join('')
 
@@ -2311,16 +2340,19 @@ function buildPendingPostprocessFromState() {
   const finalText = String(messages[assistantIndex]?.content || '').trim()
   if (!playerInput || !finalText) return null
   return {
+    storyId: state.id,
+    storyName: state.name,
     playerInput,
     finalText,
     director: state.debug?.director || {},
     recentTurns: messages
-      .slice(Math.max(0, assistantIndex - 12), assistantIndex)
+      .slice(Math.max(0, assistantIndex - 10), assistantIndex)
       .filter(message => message.role === 'user' || message.role === 'assistant'),
     characters: state.characters,
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
+    playerOptions: state.playerOptions,
     longRangeOutline: state.longRangeOutline,
     longRangeOutlineUpdatedTurn: state.longRangeOutlineUpdatedTurn,
     playerFeedback: state.debug?.postprocessRecoveryBase?.playerFeedback || '',
@@ -2339,7 +2371,7 @@ async function retryPendingPostprocess(pending) {
   setBusy(true)
   state.debug.status = '重试 Postprocess'
   state.debug.error = ''
-  state.debug.note = '正在重试上一轮未完成的 Postprocess；完成后会补上状态、总结和候选项。'
+  state.debug.note = '正在重试上一轮未完成的 Postprocess；完成后会补上状态、总结和负反馈。'
   render()
 
   try {
@@ -2349,6 +2381,7 @@ async function retryPendingPostprocess(pending) {
       body: JSON.stringify({
         ...pending,
         apiKey: getPipelineApiKey(),
+        apiKeys: getPipelineApiKeys(),
         model: normalizeModel(state.model || config.model),
       }),
     })
@@ -2360,7 +2393,7 @@ async function retryPendingPostprocess(pending) {
     if (!payload) throw new Error('Postprocess 重试失败：没有收到最终结果。')
 
     removeTrailingErrorMessages()
-    state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : []
+    state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
     state.debug.status = 'done'
     state.debug.postprocessPending = false
     state.debug.pendingPostprocess = null
@@ -2450,7 +2483,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     state.debug.error = error.message
     markRunningPipelineStageError(error.message)
     if (state.debug.visibleTextShown && state.debug.postprocessPending) {
-      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“继续未完成”补上状态、总结和候选项。'
+      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“继续未完成”补上状态、总结和负反馈。'
     } else {
       state.messages.push({ role: 'error', content: error.message })
     }
@@ -2462,6 +2495,8 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
 
 function buildGenerateRequestPayload(playerInput) {
   return {
+    storyId: state.id,
+    storyName: state.name,
     playerInput,
     playerFeedback: state.playerFeedback,
     storyContext: buildStoryContextForRequest(),
@@ -2480,6 +2515,7 @@ function buildGenerateRequestPayload(playerInput) {
     statusState: state.statusState,
     model: normalizeModel(state.model || config.model),
     apiKey: getPipelineApiKey(),
+    apiKeys: getPipelineApiKeys(),
     temperature: Number(els.temperatureInput.value || 0.8),
   }
 }
@@ -2493,7 +2529,7 @@ function buildRecentTurnsForRequest(playerInput) {
     : turns
   const openingRecentTurn = buildOpeningRecentTurn()
   const withOpening = openingRecentTurn ? [openingRecentTurn, ...withoutPendingUser] : withoutPendingUser
-  return withOpening.slice(-15)
+  return withOpening.slice(-11)
 }
 
 function buildOpeningRecentTurn() {

@@ -31,7 +31,7 @@
 - `longRangeOutline`：第一条当前剧情目标，只写目标；必须具体到人物关系和具体事件，不写压力，不写分章大纲，不写完成条件。
 - `directorStyle`：故事专属导演风格，写剧情推进、矛盾来源、人物关系变化和核心体验倾向。
 - `narratorStyle`：故事专属叙事风格，写正文语调、句式、描写密度、情绪表达和语言质感。
-- `initialPlayerOptions`：固定 3 项，`id` 为 `A/B/C`；每项包含 `label/description/inputText`，三项方向不同，`inputText` 可直接发送。
+- `initialPlayerOptions`：固定 3 项，每项只包含 `inputText`，三项方向不同，`inputText` 可直接发送。
 
 ## JSON 形状
 
@@ -67,9 +67,6 @@
   "narratorStyle": "",
   "initialPlayerOptions": [
     {
-      "id": "A",
-      "label": "",
-      "description": "",
       "inputText": ""
     }
   ]

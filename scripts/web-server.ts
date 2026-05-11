@@ -40,6 +40,8 @@ interface ConversationItem {
 }
 
 interface PipelineContext {
+  storyId?: string
+  storyName?: string
   globalContext?: string
   storyContext?: string
   playerFeedback?: string
@@ -56,6 +58,7 @@ interface PipelineContext {
   statusState?: Record<string, Record<string, string>>
   model?: string
   apiKey?: string
+  apiKeys?: Record<string, string>
   temperature?: number
 }
 
@@ -68,6 +71,7 @@ interface PostprocessRequest extends PipelineContext {
   playerInput: string
   finalText: string
   director?: Record<string, unknown>
+  playerOptions?: unknown[]
   turnIndex?: number
 }
 
@@ -120,9 +124,6 @@ interface InitializeStoryRequest {
 }
 
 interface PlayerOption {
-  id: string
-  label: string
-  description: string
   inputText: string
 }
 
@@ -205,6 +206,7 @@ const storyDir = path.join(rootDir, 'story')
 const docsDir = path.join(rootDir, 'docs')
 const saveDir = path.join(rootDir, 'save')
 const saveSlotsDir = path.join(saveDir, 'slots')
+const speedRecordsDir = path.join(saveDir, 'speed-records')
 const debugDir = path.join(rootDir, 'debug')
 const llmDebugDir = path.join(debugDir, 'llm-raw')
 const interceptionDebugDir = path.join(debugDir, 'content-interception')
@@ -212,8 +214,8 @@ const speedTestRecordFile = path.join(docsDir, '模型速度测试记录.md')
 const saveFile = path.join(saveDir, 'current-state.json')
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
 const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
-const infronDeepSeekV4ProModel = 'infron/deepseek-v4-pro'
-const infronDeepSeekV4FlashModel = 'infron/deepseek-v4-flash'
+const infronDeepSeekV4ProModel = 'deepseek/deepseek-v4-pro'
+const infronDeepSeekV4FlashModel = 'deepseek/deepseek-v4-flash'
 const infronGemini31FlashLiteModel = 'google/gemini-3.1-flash-lite'
 const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'
 const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'
@@ -314,8 +316,6 @@ function isGoogleAiStudioModel(model: string): boolean {
 }
 
 function infronRequestModel(model: string): string {
-  if (model === infronDeepSeekV4ProModel) return officialDeepSeekV4ProModel
-  if (model === infronDeepSeekV4FlashModel) return officialDeepSeekV4FlashModel
   return model
 }
 
@@ -348,6 +348,14 @@ function providerApiKey(provider: ModelProvider, explicitKey?: string): string {
             : env('DEEPSEEK_API_KEY') || env('DEEP_SEEK_API_KEY'))
   if (key) return key
   throw new Error(provider === 'fireworks' ? 'missing FIREWORKS_API_KEY' : provider === 'infron' ? 'missing INFRON_API_KEY' : provider === 'cerebras' ? 'missing CEREBRAS_API_KEY' : provider === 'google-ai-studio' ? 'missing GEMINI_API_KEY' : 'missing DEEPSEEK_API_KEY')
+}
+
+function pipelineApiKeyForModel(input: PipelineContext, model: string): string | undefined {
+  const provider = providerForModel(model)
+  const keyed = input.apiKeys?.[provider]
+  if (typeof keyed === 'string' && keyed.trim()) return keyed
+  const selectedProvider = providerForModel(normalizeModel(input.model))
+  return provider === selectedProvider ? input.apiKey : undefined
 }
 
 function providerHasApiKey(provider: ModelProvider): boolean {
@@ -455,6 +463,7 @@ function ensureDataDirs(): void {
   fs.mkdirSync(docsDir, { recursive: true })
   fs.mkdirSync(saveDir, { recursive: true })
   fs.mkdirSync(saveSlotsDir, { recursive: true })
+  fs.mkdirSync(speedRecordsDir, { recursive: true })
   fs.mkdirSync(llmDebugDir, { recursive: true })
   fs.mkdirSync(interceptionDebugDir, { recursive: true })
 }
@@ -491,6 +500,19 @@ function writeDebugTextArtifact(dir: string, suffix: string, content: string): s
   const filePath = path.join(dir, `${stamp}-${safeName(suffix, 'artifact')}.md`)
   fs.writeFileSync(filePath, content, 'utf-8')
   return path.relative(rootDir, filePath)
+}
+
+function looksLikeHtmlResponse(value: string): boolean {
+  const text = value.trim().slice(0, 300).toLowerCase()
+  return text.startsWith('<!doctype html')
+    || text.startsWith('<html')
+    || text.startsWith('<!--[if')
+    || /<title>[^<]*(524|timeout|cloudflare|onerouter)/i.test(value.slice(0, 1000))
+}
+
+function describeHtmlGatewayError(value: string): string {
+  const title = value.match(/<title>([^<]+)<\/title>/i)?.[1]?.trim()
+  return title || '网关返回 HTML 错误页'
 }
 
 function appendSpeedTestRecord(input: {
@@ -540,6 +562,97 @@ function appendSpeedTestRecord(input: {
     '',
   ].join('\n')
   fs.appendFileSync(speedTestRecordFile, record, 'utf-8')
+}
+
+function speedRecordTimestamp(): string {
+  return new Date().toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short',
+  })
+}
+
+function metricOutputTokens(metrics: LlmCallMetrics): number {
+  return metrics.outputTokens || metrics.estimatedOutputTokens || 0
+}
+
+function metricOutputTokensPerSecondEstimate(metrics: LlmCallMetrics): number {
+  const outputTokens = metricOutputTokens(metrics)
+  return Number((outputTokens / Math.max(0.001, metrics.durationMs / 1000)).toFixed(2))
+}
+
+function metricTtftDisplay(metrics: LlmCallMetrics): string {
+  if (!Number.isFinite(metrics.ttftMs) || !metrics.ttftMs || metrics.ttftMs >= metrics.durationMs) return '-'
+  return String(Math.round(metrics.ttftMs))
+}
+
+function speedRecordFileForGame(storyId?: string, storyName?: string): string {
+  const safeId = safeName(String(storyId || 'current-story'), 'current-story')
+  const safeStoryName = safeName(String(storyName || '未命名故事'), 'story')
+  const filePath = path.normalize(path.join(speedRecordsDir, `${safeId}-${safeStoryName}.md`))
+  if (!isInsidePath(speedRecordsDir, filePath)) throw new Error('速度记录路径无效。')
+  return filePath
+}
+
+function appendPipelineSpeedRecord(input: {
+  mode: string
+  turnIndex?: number
+  storyId?: string
+  storyName?: string
+  requestedModel: string
+  pipelineModels: Record<string, string>
+  playerInput?: string
+  metrics: Array<{ stage: string; metrics: LlmCallMetrics }>
+}): string {
+  ensureDataDirs()
+  const recordFile = speedRecordFileForGame(input.storyId, input.storyName)
+  if (!fs.existsSync(recordFile)) {
+    fs.writeFileSync(recordFile, [
+      '# 每轮模型速度记录',
+      '',
+      `- 故事：${String(input.storyName || '未命名故事').trim() || '未命名故事'}`,
+      `- Story ID：${String(input.storyId || 'current-story').trim() || 'current-story'}`,
+      '- 说明：每轮流水线记录。当前主流水线为非流式调用，无法测真实 TTFT/TPS；这里只记录总耗时和按总耗时估算的输出吞吐。',
+      '- 速度测试页的流式 TTFT/TPS 仍写入 docs/模型速度测试记录.md。',
+      '',
+    ].join('\n'), 'utf-8')
+  }
+  const lines = [
+    '',
+    `## ${speedRecordTimestamp()} · 每轮流水线`,
+    '',
+    `- 模式：${input.mode}`,
+    `- 轮次：${Number.isFinite(input.turnIndex) ? input.turnIndex : '未知'}`,
+    `- 选择模型：\`${input.requestedModel}\``,
+    `- 分级模型：\`${JSON.stringify(input.pipelineModels)}\``,
+  ]
+  if (input.playerInput?.trim()) {
+    lines.push(`- 玩家输入：${input.playerInput.replace(/\s+/g, ' ').trim().slice(0, 120)}`)
+  }
+  lines.push('', '| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |', '|---|---|---|---:|---:|---:|---:|---:|---:|')
+  for (const item of input.metrics) {
+    const provider = providerLabel(providerForModel(item.metrics.model))
+    lines.push(`| ${[
+      item.stage,
+      provider,
+      `\`${item.metrics.model}\``,
+      Math.round(item.metrics.durationMs),
+      metricTtftDisplay(item.metrics),
+      metricOutputTokensPerSecondEstimate(item.metrics),
+      item.metrics.inputTokens,
+      metricOutputTokens(item.metrics),
+      item.metrics.totalTokens,
+    ].join(' | ')} |`)
+  }
+  lines.push('')
+  fs.appendFileSync(recordFile, lines.join('\n'), 'utf-8')
+  return path.relative(rootDir, recordFile)
 }
 
 function readJsonFileIfExists(filePath: string): Record<string, unknown> | null {
@@ -1105,9 +1218,9 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
     directorStyle,
     narratorStyle,
     initialPlayerOptions: [
-      { id: 'A', label: '观察', description: '先观察当前局面。', inputText: '我先观察周围和对方的反应。' },
-      { id: 'B', label: '开口', description: '用一句话打开互动。', inputText: '我开口问道：“现在是什么情况？”' },
-      { id: 'C', label: '行动', description: '用一个轻动作试探场景。', inputText: '我向前一步，试探性地接近当前互动对象。' },
+      { inputText: '我先观察周围和对方的反应。' },
+      { inputText: '我开口问道：“现在是什么情况？”' },
+      { inputText: '我向前一步，试探性地接近当前互动对象。' },
     ],
     globalContextSeed: [
       `当前故事资料：${input.sourceName || '未命名故事'}`,
@@ -1209,11 +1322,7 @@ function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
     '',
     '## 初始玩家选项',
     config.initialPlayerOptions.length
-      ? config.initialPlayerOptions.map(option => [
-        `### ${option.id}｜${option.label}`,
-        option.description ? `- 说明：${option.description}` : '',
-        option.inputText ? `- 输入：${option.inputText}` : '',
-      ].filter(Boolean).join('\n')).join('\n\n')
+      ? config.initialPlayerOptions.map(option => `- ${option.inputText}`).join('\n')
       : '（无）',
     '',
   ].join('\n')
@@ -1240,7 +1349,7 @@ function normalizeProgramConfig(raw: Record<string, unknown>, fallback: StoryPro
     statusState: normalizeStatusState(raw.statusState || fallback.statusState, normalizeStatusRoster(raw.statusRoster || fallback.statusRoster, legacyCharacters), legacyCharacters, normalizeStatusSchema(raw.statusSchema || fallback.statusSchema)),
     directorStyle: String(raw.directorStyle || fallback.directorStyle || ''),
     narratorStyle: String(raw.narratorStyle || fallback.narratorStyle || ''),
-    initialPlayerOptions: initialPlayerOptions as PlayerOption[],
+    initialPlayerOptions: normalizePlayerOptions(initialPlayerOptions) as PlayerOption[],
     globalContextSeed: String(raw.globalContextSeed || fallback.globalContextSeed || ''),
     currentSituation: typeof raw.currentSituation === 'string' ? raw.currentSituation : undefined,
     outline: typeof raw.outline === 'string' ? raw.outline : undefined,
@@ -1290,7 +1399,7 @@ async function initializeStory(
     const result = await callModelWithPublicTrace('initializer', 'Initializer', [
       { role: 'system', content: initializerMessages.system },
       { role: 'user', content: initializerMessages.user },
-    ], { temperature: 0.4, apiKey: input.apiKey, model }, emit, [
+    ], { temperature: 0.4, apiKey: pipelineApiKeyForModel(input, model), model }, emit, [
       '公开日志：正在读取故事书、人物卡和世界书，去掉重复噪音。',
       '公开日志：正在抽取世界观、人物介绍和固定设定。',
       '公开日志：正在写第一轮开场交互和 3 个玩家初始选项。',
@@ -1633,6 +1742,16 @@ async function requestInfronContent(
   let response: Response
   const startedAt = Date.now()
 
+  const body: Record<string, unknown> = {
+    model: infronRequestModel(model),
+    messages,
+    temperature,
+    max_tokens: maxTokens,
+    provider: {
+      sort: 'throughput',
+    },
+  }
+
   try {
     response = await fetchWithTransientRetry(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -1641,15 +1760,7 @@ async function requestInfronContent(
         authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model: infronRequestModel(model),
-        messages,
-        temperature,
-        max_tokens: maxTokens,
-        provider: {
-          sort: 'throughput',
-        },
-      }),
+      body: JSON.stringify(body),
     })
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
@@ -1681,7 +1792,17 @@ async function requestInfronContent(
     }
     throw new Error(`Infron ${response.status}: ${text.slice(0, 500)}`)
   }
-  const payload = JSON.parse(text) as {
+  if (looksLikeHtmlResponse(text)) {
+    const detail = describeHtmlGatewayError(text)
+    const file = writeLlmDebugFile({
+      label: `${label}-infron-html`,
+      raw: text,
+      messages,
+      error: new Error(detail),
+    })
+    throw new Error(`Infron 网关返回非 JSON：${detail}；原始返回已保存：${file}`)
+  }
+  let payload: {
     error?: { message?: string; code?: number | string; metadata?: unknown }
     choices?: Array<{ message?: { content?: string } }>
     usage?: {
@@ -1689,6 +1810,17 @@ async function requestInfronContent(
       completion_tokens?: number
       total_tokens?: number
     }
+  }
+  try {
+    payload = JSON.parse(text) as typeof payload
+  } catch (error) {
+    const file = writeLlmDebugFile({
+      label: `${label}-infron-non-json`,
+      raw: text,
+      messages,
+      error: error instanceof Error ? error : new Error(String(error)),
+    })
+    throw new Error(`Infron 返回非 JSON 内容，无法解析；原始返回已保存：${file}`)
   }
   if (payload.error) {
     const detail =
@@ -2437,18 +2569,15 @@ function normalizePlayerOptions(value: unknown): unknown[] {
   if (!Array.isArray(value)) return []
   return value
     .slice(0, 3)
-    .map((option, index) => {
-      const id = ['A', 'B', 'C'][index]
+    .map(option => {
       if (typeof option === 'string') {
         const text = option.trim()
-        return text ? { id, label: text, description: '', inputText: text } : null
+        return text ? { inputText: text } : null
       }
       if (!option || typeof option !== 'object') return null
       const record = option as Record<string, unknown>
       const inputText = String(record.inputText || record.label || record.description || '').trim()
-      const label = String(record.label || inputText || `选项 ${id}`).trim()
-      const description = String(record.description || (record.label ? inputText : '') || '').trim()
-      return { ...record, id, label, description, inputText }
+      return inputText ? { inputText } : null
     })
     .filter(Boolean)
 }
@@ -2586,6 +2715,7 @@ function compactDirectorPlan(value: unknown): Record<string, unknown> {
     beat3: beats[2],
     ending: compactEndingBeat(source.ending || source.endingBeat || source.exitWindow),
     physicalConstraints: compactStringArray(source.physicalConstraints, 3, 80),
+    playerOptions: normalizePlayerOptions(source.playerOptions || source.options || source.choices),
   }) as Record<string, unknown>
 }
 
@@ -2601,17 +2731,17 @@ function normalizeTurnSummary(value: unknown, finalText = ''): string {
 }
 
 function normalizeFeedbackBreakdown(value: Record<string, unknown>): Record<string, string> {
-  const narrativeConstraintFeedback = compactText(value.narrativeConstraintFeedback, 160)
-  const narrativeRepetitionFeedback = compactText(value.narrativeRepetitionFeedback, 160)
-  const narrativePacingFeedback = compactText(value.narrativePacingFeedback, 160)
-  const directorProgressFeedback = compactText(value.directorProgressFeedback, 160)
-  const directorPhysicalFeedback = compactText(value.directorPhysicalFeedback, 160)
+  const constraintViolation = compactText(value.违背约束 || value.narrativeConstraintFeedback, 160)
+  const repetitionIssue = compactText(value.存在重复 || value.narrativeRepetitionFeedback, 160)
+  const pacingIssue = compactText(value.节奏不足 || value.narrativePacingFeedback, 160)
+  const directorProgressIssue = compactText(value.导演推进不足 || value.directorProgressFeedback, 160)
+  const directorPhysicalViolation = compactText(value.导演物理违背 || value.directorPhysicalFeedback, 160)
   return {
-    narrativeConstraintFeedback,
-    narrativeRepetitionFeedback,
-    narrativePacingFeedback,
-    directorProgressFeedback,
-    directorPhysicalFeedback,
+    违背约束: constraintViolation,
+    存在重复: repetitionIssue,
+    节奏不足: pacingIssue,
+    导演推进不足: directorProgressIssue,
+    导演物理违背: directorPhysicalViolation,
   }
 }
 
@@ -2764,8 +2894,11 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
     narratorStyle,
     playerInput,
   })
-  const narratorSystem = narratorMessages.system
-  const narratorUser = narratorMessages.user
+  const narratorSystem = '你是内容拦截测试助手。'
+  const narratorUser = [
+    narratorMessages.system,
+    narratorMessages.user,
+  ].filter(Boolean).join('\n\n')
   return {
     model: options.model,
     temperature: options.temperature,
@@ -2854,7 +2987,7 @@ async function generate(
   const director = await callModelWithPublicTrace('director', 'Director', [
     { role: 'system', content: directorPayload.directorSystem },
     { role: 'user', content: directorPayload.directorUser },
-  ], { temperature: directorTemperature, apiKey: input.apiKey, model: directorModel, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs }, emit, [
+  ], { temperature: directorTemperature, apiKey: pipelineApiKeyForModel(input, directorModel), model: directorModel, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs }, emit, [
     '公开日志：正在拆解玩家输入和当前场景。',
     '公开日志：正在安排剧情模块、推进链和物理约束。',
     '公开日志：正在生成 Narrator 可执行的本轮计划。',
@@ -2876,7 +3009,7 @@ async function generate(
   const narrator = await callModelWithPublicTrace('narrator', 'Narrator', [
     { role: 'system', content: narratorPayload.narratorSystem },
     { role: 'user', content: narratorPayload.narratorUser },
-  ], { temperature, apiKey: input.apiKey, model: narratorModel, maxTokens: narratorMaxTokens, timeoutMs: narratorTimeoutMs }, emit, [
+  ], { temperature, apiKey: pipelineApiKeyForModel(input, narratorModel), model: narratorModel, maxTokens: narratorMaxTokens, timeoutMs: narratorTimeoutMs }, emit, [
     '公开日志：正在根据导演计划组织正文。',
     '公开日志：正在保持人物限知视角和物理约束。',
     '公开日志：正在收束为玩家可继续行动的段落。',
@@ -2896,20 +3029,19 @@ async function generate(
     turnIndex: directorPayload.turnIndex,
     longRangeOutline: directorPayload.longRangeOutline,
   })
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：更新事实总结、人物状态、负反馈、剧情目标状态和玩家选项。' })
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：更新事实总结、花色观察、负反馈和剧情目标状态。' })
   const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', [
     { role: 'system', content: postprocessPayload.postprocessSystem },
     { role: 'user', content: postprocessPayload.postprocessUser },
-  ], { temperature: postprocessPayload.temperature, apiKey: input.apiKey, model: postprocessModel }, emit, [
+  ], { temperature: postprocessPayload.temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel }, emit, [
     '公开日志：正在比对导演计划和正文落差。',
-    '公开日志：正在更新人物状态补丁。',
+    '公开日志：正在更新花色观察补丁。',
     '公开日志：正在生成三类闭环负反馈。',
-    '公开日志：正在生成 3 个玩家候选项。',
     '公开日志：Postprocess 仍在等待模型返回结构化状态。',
   ])
   const postprocessJson = postprocess.json
   const feedback = normalizeFeedbackBreakdown(postprocessJson)
-  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理完成：状态、负反馈和候选项已更新。', json: postprocessJson })
+  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理完成：状态和负反馈已更新。', json: postprocessJson })
 
   let nextLongRangeOutline = directorPayload.longRangeOutline
   let nextLongRangeOutlineUpdatedTurn = directorPayload.longRangeOutlineUpdatedTurn
@@ -2932,7 +3064,7 @@ async function generate(
       longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
         { role: 'system', content: longRangeMessages.system },
         { role: 'user', content: longRangeMessages.user },
-      ], { temperature: 0.6, apiKey: input.apiKey, model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
+      ], { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
         '公开日志：正在判断当前剧情目标是否已完成、缺失或偏离。',
         '公开日志：正在生成可供后续多轮缓慢靠近的具体人物关系和事件目标。',
         '公开日志：高级导演层仍在等待模型返回剧情目标。',
@@ -2953,10 +3085,25 @@ async function generate(
     }
   }
 
-  const playerOptions = normalizePlayerOptions(postprocessJson.playerOptions)
+  const playerOptions = normalizePlayerOptions(directorPlan.playerOptions)
   const nextStatusSchema = mergeStatusSchema(input.statusSchema, postprocessJson.statusSchemaPatch)
   const nextStatusRoster = mergeStatusRoster(input.statusRoster, postprocessJson.statusRosterPatch, input.characters || [], postprocessJson.statusStatePatch)
   const nextStatusState = mergeStatusState(input.statusState, postprocessJson.statusStatePatch, nextStatusRoster, input.characters || [], nextStatusSchema)
+  const speedRecordFile = appendPipelineSpeedRecord({
+    mode: 'generate',
+    turnIndex: directorPayload.turnIndex,
+    storyId: input.storyId,
+    storyName: input.storyName,
+    requestedModel,
+    pipelineModels,
+    playerInput,
+    metrics: [
+      { stage: 'Director', metrics: director.metrics },
+      { stage: 'Narrator', metrics: narrator.metrics },
+      { stage: 'Postprocess', metrics: postprocess.metrics },
+      ...(longRangeDirector ? [{ stage: 'LongRangeDirector', metrics: longRangeDirector.metrics }] : []),
+    ],
+  })
 
   return {
     finalText,
@@ -2968,16 +3115,17 @@ async function generate(
     turnSummary,
     longRangeOutline: nextLongRangeOutline,
     longRangeOutlineUpdatedTurn: nextLongRangeOutlineUpdatedTurn,
-    narrativeConstraintFeedback: feedback.narrativeConstraintFeedback,
-    narrativeRepetitionFeedback: feedback.narrativeRepetitionFeedback,
-    narrativePacingFeedback: feedback.narrativePacingFeedback,
-    directorProgressFeedback: feedback.directorProgressFeedback,
-    directorPhysicalFeedback: feedback.directorPhysicalFeedback,
+    违背约束: feedback.违背约束,
+    存在重复: feedback.存在重复,
+    节奏不足: feedback.节奏不足,
+    导演推进不足: feedback.导演推进不足,
+    导演物理违背: feedback.导演物理违背,
     statusSchema: nextStatusSchema,
     statusRoster: nextStatusRoster,
     statusState: nextStatusState,
     model: requestedModel,
     pipelineModels,
+    speedRecordFile,
   }
 }
 
@@ -3019,19 +3167,18 @@ async function runPostprocess(
     finalText,
   })
 
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写本轮总结、状态栏、写作负反馈、剧情目标判定和玩家选项。' })
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写本轮总结、花色观察、写作负反馈和剧情目标判定。' })
   const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', [
     { role: 'system', content: postprocessMessages.system },
     { role: 'user', content: postprocessMessages.user },
-  ], { temperature, apiKey: input.apiKey, model: postprocessModel }, emit, [
+  ], { temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel }, emit, [
     '公开日志：正在补跑上一轮失败的 Postprocess。',
     '公开日志：正在补写本轮事实总结。',
-    '公开日志：正在按人物状态 Schema 更新人物状态。',
+    '公开日志：正在按花色特性更新花色观察。',
     '公开日志：正在补写写作负反馈和剧情目标判定。',
-    '公开日志：正在生成 3 个玩家候选项。',
     '公开日志：Postprocess 重试仍在等待模型返回结构化状态。',
   ])
-  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理重试完成：状态、负反馈和候选项已更新。', json: postprocess.json })
+  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理重试完成：状态和负反馈已更新。', json: postprocess.json })
   const feedback = normalizeFeedbackBreakdown(postprocess.json)
 
   let nextLongRangeOutline = currentLongRangeOutline
@@ -3055,7 +3202,7 @@ async function runPostprocess(
       longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
         { role: 'system', content: longRangeMessages.system },
         { role: 'user', content: longRangeMessages.user },
-      ], { temperature: 0.6, apiKey: input.apiKey, model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
+      ], { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
         '公开日志：正在补跑剧情目标生成/修订。',
         '公开日志：正在生成可供后续多轮缓慢靠近的具体人物关系和事件目标。',
         '公开日志：高级导演层仍在等待模型返回剧情目标。',
@@ -3078,26 +3225,40 @@ async function runPostprocess(
   const nextStatusSchema = mergeStatusSchema(input.statusSchema, postprocess.json.statusSchemaPatch)
   const nextStatusRoster = mergeStatusRoster(input.statusRoster, postprocess.json.statusRosterPatch, input.characters || [], postprocess.json.statusStatePatch)
   const nextStatusState = mergeStatusState(input.statusState, postprocess.json.statusStatePatch, nextStatusRoster, input.characters || [], nextStatusSchema)
+  const speedRecordFile = appendPipelineSpeedRecord({
+    mode: 'postprocess-retry',
+    turnIndex,
+    storyId: input.storyId,
+    storyName: input.storyName,
+    requestedModel,
+    pipelineModels,
+    playerInput,
+    metrics: [
+      { stage: 'Postprocess', metrics: postprocess.metrics },
+      ...(longRangeDirector ? [{ stage: 'LongRangeDirector', metrics: longRangeDirector.metrics }] : []),
+    ],
+  })
 
   return {
     finalText,
     pipelineMode: 'postprocess-retry',
     director: directorPlan,
     postprocess: postprocess.json,
-    playerOptions: normalizePlayerOptions(postprocess.json.playerOptions),
+    playerOptions: normalizePlayerOptions(input.playerOptions?.length ? input.playerOptions : directorPlan.playerOptions),
     turnSummary,
     longRangeOutline: nextLongRangeOutline,
     longRangeOutlineUpdatedTurn: nextLongRangeOutlineUpdatedTurn,
-    narrativeConstraintFeedback: feedback.narrativeConstraintFeedback,
-    narrativeRepetitionFeedback: feedback.narrativeRepetitionFeedback,
-    narrativePacingFeedback: feedback.narrativePacingFeedback,
-    directorProgressFeedback: feedback.directorProgressFeedback,
-    directorPhysicalFeedback: feedback.directorPhysicalFeedback,
+    违背约束: feedback.违背约束,
+    存在重复: feedback.存在重复,
+    节奏不足: feedback.节奏不足,
+    导演推进不足: feedback.导演推进不足,
+    导演物理违背: feedback.导演物理违背,
     statusSchema: nextStatusSchema,
     statusRoster: nextStatusRoster,
     statusState: nextStatusState,
     model: requestedModel,
     pipelineModels,
+    speedRecordFile,
   }
 }
 
