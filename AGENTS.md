@@ -17,14 +17,14 @@ Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Dire
 
 - Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
 - 用户输入：每轮玩家自由输入，是 Director 和 Narrator 的当前触发点。
-- 最近正文：保留第 0 轮和最近 7 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director 和 Narrator；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复。
+- 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director、Narrator、Postprocess；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复，Postprocess 只用于理解上下文，不能并入本轮总结。
 - 闭环反馈：Postprocess 只产生拆分后的负反馈，程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。
 - 玩家负反馈：玩家手动维护的持久控制信号，广播给 Director、Narrator、Postprocess、LongRangeDirector；玩家清空输入框才删除，不写入 `feedbackMemory`。
-- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。
+- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。`goalStep` 是本轮向剧情目标靠近的显式桥，`beat1/2/3/ending` 是具体执行骨架。
 - Narrator：按导演计划写玩家可见正文；不更新状态。
 - Postprocess：正文显示后运行，只更新事实总结、人物状态补丁、负反馈和剧情目标状态；不改正文，不生成玩家候选项。
 - LongRangeDirector：只生成或修订当前剧情目标；剧情目标是 Director 的上层方向输入，用来控制多轮推进，不直接写正文。
-- 剧情目标年龄：程序记录 `longRangeOutlineUpdatedTurn`。同一剧情目标持续 20 轮后，即使 Postprocess 仍判 `keep`，也强制触发 LongRangeDirector，以免粗目标长期不变。
+- 剧情目标年龄：程序记录 `longRangeOutlineUpdatedTurn`。同一剧情目标持续 8 轮后小概率触发 LongRangeDirector，15 轮后提高概率，20 轮硬触发；触发后生成或修订更具体的当前剧情目标，以免粗目标长期不变。
 
 ## 当前状态设计
 
@@ -95,15 +95,27 @@ Prompt 文件直接在 `prompts/` 上层：
 
 输入变量用 `{{变量名}}`。变量顺序按稳定性排序：越稳定、越不需要每轮重新理解的内容越靠前；当前玩家输入和最终正文靠后。Postprocess 必须接收世界观，因为合理性判断依赖世界观。
 
+当前默认 Prompt profile 是 `基准`。`繁花` 保留为可切换版本和对照实验，不再作为默认策略。
+
+所有实际 LLM 请求都不发送 `system` role。Prompt 模板中的 `# System Message` 段会并入同一条 `user` 消息，避免不同 profile 在 role 层面产生不可控差异。
+
+## 模型策略
+
+当前文游主力模型固定为 Infron 的 `x-ai/grok-4.3`，不是 xAI 官方接口。它在当前实测中同时满足三项要求：
+
+- 速度足够快，能支撑多层流水线和后续修订轮。DeepSeek速度太慢，让体验极差。
+- 能力足够强，能执行 Director / Narrator / Postprocess 的复杂上下文任务。如GPT-120b-oss，能力不足以理解任务指令。
+- 内容通过率最好；在基准 prompt 下也能稳定工作，不需要依赖繁花 prompt 做规避。其他模型即使做了prompt来绕过，仍然不稳定。
+
+其他模型保留在模型管理和测试列表里，只作为连通性、速度和内容拦截对照，不作为默认推荐。不要因为单次成功就把默认模型切回 Gemini、DeepSeek、MiMo、Qwen 或 GLM；必须先用速度记录和内容拦截记录验证。
+
+速度测试和内容拦截测试继续 append 到记录文件，作为后续换模型的依据，避免凭感觉切换模型。
+
 ## 内容过滤规避经验
 
-Gemini TPS 高，适合文字游戏主流水线；主要问题是内容过滤。当前可行经验：
+旧经验：Gemini TPS 高，但内容过滤强；繁花 prompt 可以通过语义改写降低触发概率，但并不稳定。
 
-- `system` 只放低刺激、弱身份、短文本，例如 Narrator 当前固定为“你是内容拦截测试助手。”。
-- 强身份、强使命感、强“必须输出”、繁花世界观、花语隐喻、叙事任务和大段上下文放入 `user`。
-- 同样文本放 `system` 和放 `user` 不是同一个 prompt。`system` 会提高服从性，同时放大安全层对任务意图的识别强度；对敏感设定容易变成风险放大器。
-- 繁花 prompt 的作用不是硬压模型，而是把任务从“直接续写敏感内容”改写成“花店、花语、占卜、预言、虚构叙事、角色职责”的语义路径，降低内容过滤触发概率。
-- 调整 role 结构后，Narrator 和 Postprocess 都已能走 Infron Gemini。不要轻易把繁花 hard rule 重新放回 `system`。
+当前结论：Grok 4.3 + 基准 prompt 更均衡。除非重新实测，不要恢复“把繁花 hard rule 放入 system”或“弱 system + 强 user”的旧规避方案。当前统一 user-only 输入，减少 role 差异带来的排查成本。
 
 ## 不要恢复
 

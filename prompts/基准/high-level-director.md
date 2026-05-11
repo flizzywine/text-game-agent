@@ -1,9 +1,9 @@
 # System Message
 
+# User Message
+
 ## Hard Rule
 {{hardRule}}
-
-# User Message
 
 # 输入变量
 ## 世界观
@@ -21,14 +21,14 @@
 ## 当前人物状态
 {{characterStatus}}
 
+## 玩家负反馈
+{{playerFeedback}}
+
 ## Postprocess 剧情目标判定
 {{longRangeStatus}}
 
 ## 本轮事实总结
 {{turnSummary}}
-
-## 玩家负反馈
-{{playerFeedback}}
 
 # HighLevelDirector
 
@@ -37,6 +37,7 @@
 规则：
 - `missing`：生成第一个剧情目标。
 - `completed`：生成下一个剧情目标。
+- `refresh`：当前剧情目标已持续若干轮，若它仍然有效，就承接它并推进到更具体的新阶段；若已经失焦，就修订为更贴合当前事实的目标。
 - `stale`：当前剧情目标已持续约 20 轮；承接它，生成更具体的新阶段目标，必须有明显变化。
 - 新剧情目标必须承接已发生事实，不能强行重置故事，不能把玩家拉回旧轨道。
 - 剧情目标不是高层方向，也不是按轮数展开的大纲；它必须是未来若干轮缓慢靠近的具体人物关系和事件目标。

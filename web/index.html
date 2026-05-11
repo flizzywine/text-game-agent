@@ -32,6 +32,7 @@
             <button id="loadArchiveButton" class="ghost-button" type="button">读取存档</button>
             <button id="deleteSaveButton" class="ghost-button" type="button">删除存档</button>
             <button id="modelManagementButton" class="ghost-button" type="button">模型管理</button>
+            <button id="promptPreviewButton" class="ghost-button" type="button">Prompt 查看</button>
           </div>
           <div class="model-strip">
             <label>
@@ -67,6 +68,7 @@
             <textarea id="playerInput" rows="2" placeholder="输入你的行动、对话或想法"></textarea>
             <div class="composer-actions">
               <button id="retryStageButton" class="ghost-button" type="button">继续未完成</button>
+              <button id="rollbackTurnButton" class="ghost-button" type="button">回退上一轮</button>
               <button id="regenerateButton" class="ghost-button" type="button">重新生成本次对话</button>
               <button id="sendButton" type="submit">发送</button>
             </div>
@@ -76,7 +78,7 @@
         <aside class="right-rail">
           <section class="panel">
             <div class="panel-head">
-              <h2>花色观察</h2>
+              <h2>人物状态</h2>
             </div>
             <div class="character-panel-body">
               <div id="statusPanelView" class="status-panel-view"></div>
@@ -168,23 +170,49 @@
           <section class="model-settings-form model-selection-form">
             <h3>模型选择</h3>
             <label>
+              <span>供应商</span>
+              <select id="providerSelect">
+                <option value="deepseek">DeepSeek Official</option>
+                <option value="infron">Infron</option>
+                <option value="fireworks">Fireworks</option>
+                <option value="google-ai-studio">Google AI Studio</option>
+                <option value="cerebras">Cerebras</option>
+              </select>
+            </label>
+            <label>
               <span>当前模型</span>
               <select id="modelSelect">
                 <option value="accounts/fireworks/models/deepseek-v4-pro:priority">DeepSeek V4 Pro | priority | Fireworks</option>
+                <option value="accounts/fireworks/models/kimi-k2p5">Kimi K2.5 | Fireworks</option>
+                <option value="accounts/fireworks/models/qwen3-235b-a22b">Qwen3 235B A22B | Fireworks</option>
+                <option value="accounts/fireworks/models/qwen3p6-plus">Qwen3.6 Plus | Fireworks</option>
                 <option value="deepseek-v4-pro">DeepSeek V4 Pro | official | DeepSeek</option>
                 <option value="deepseek-v4-flash">DeepSeek V4 Flash | official | DeepSeek</option>
                 <option value="infron/deepseek-v4-pro">DeepSeek V4 Pro | throughput | Infron</option>
                 <option value="infron/deepseek-v4-flash">DeepSeek V4 Flash | throughput | Infron</option>
                 <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite | throughput | Infron</option>
+                <option value="google/gemini-2.5-flash">Gemini 2.5 Flash | throughput | Infron</option>
+                <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview | throughput | Infron</option>
                 <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite | AI Studio | Google</option>
                 <option value="qwen-3-235b-a22b-instruct-2507">Qwen 3 235B A22B Instruct 2507 | fast | Cerebras</option>
               </select>
             </label>
+            <button id="applyModelSelectionButton" class="primary-button" type="button">确定</button>
             <label>
               <span>Prompt 版本</span>
               <select id="promptProfileSelect">
                 <option value="繁花">繁花</option>
                 <option value="基准">基准</option>
+              </select>
+            </label>
+            <label>
+              <span>Infron 思考强度</span>
+              <select id="infronReasoningSelect">
+                <option value="">默认（不指定）</option>
+                <option value="none">none</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
               </select>
             </label>
             <div id="modelTestResults" class="model-test-results"></div>
@@ -275,6 +303,19 @@
           <button value="cancel" type="button" id="cancelDirectorControlButton" class="ghost-button">取消</button>
           <button value="default" type="submit" id="saveDirectorControlButton">保存</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="promptPreviewDialog" class="app-dialog prompt-preview-dialog">
+      <form method="dialog">
+        <div class="prompt-preview-head">
+          <div>
+            <h3>Prompt 查看</h3>
+            <p id="promptPreviewStatus" class="dialog-note">展示当前存档拼接后的实际发送 prompt。</p>
+          </div>
+          <button value="cancel" type="button" id="closePromptPreviewButton" class="ghost-button">关闭</button>
+        </div>
+        <div id="promptPreviewList" class="prompt-preview-list"></div>
       </form>
     </dialog>
 

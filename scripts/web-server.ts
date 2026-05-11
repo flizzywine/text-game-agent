@@ -4,7 +4,7 @@ import path from 'path'
 import crypto from 'crypto'
 import { parseJsonObject } from '../src/jsonObjectParser'
 
-type ChatRole = 'system' | 'user' | 'assistant'
+type ChatRole = 'user' | 'assistant'
 
 interface ChatMessage {
   role: ChatRole
@@ -46,7 +46,6 @@ interface PipelineContext {
   storyContext?: string
   playerFeedback?: string
   feedbackText?: string
-  feedbackMemory?: Array<Record<string, unknown>>
   longRangeOutline?: string
   longRangeOutlineUpdatedTurn?: number
   directorStyle?: string
@@ -60,10 +59,12 @@ interface PipelineContext {
   apiKey?: string
   apiKeys?: Record<string, string>
   temperature?: number
+  reasoningEffort?: string
 }
 
 interface GenerateRequest extends PipelineContext {
   playerInput: string
+  director?: Record<string, unknown>
   turnIndex?: number
 }
 
@@ -79,11 +80,13 @@ interface PostprocessRequest extends PipelineContext {
 interface ProviderTestRequest {
   model?: string
   apiKey?: string
+  reasoningEffort?: string
 }
 
 interface ProviderSpeedTestRequest {
   model?: string
   apiKey?: string
+  reasoningEffort?: string
 }
 
 interface PromptProfileRequest {
@@ -93,12 +96,14 @@ interface PromptProfileRequest {
 interface InterceptionPromptRequest extends PipelineContext {
   playerInput?: string
   director?: Record<string, unknown>
+  finalText?: string
 }
 
 interface InterceptionTestRequest {
   model?: string
   apiKey?: string
   temperature?: number
+  reasoningEffort?: string
   systemInstruction?: string
   narratorSystem?: string
   narratorUser?: string
@@ -120,6 +125,7 @@ interface InitializeStoryRequest {
   characters?: CharacterState[]
   apiKey?: string
   model?: string
+  reasoningEffort?: string
   force?: boolean
 }
 
@@ -200,8 +206,8 @@ const rootDir = process.cwd()
 const webDir = path.join(rootDir, 'web')
 const promptDir = path.join(rootDir, 'prompts')
 const activePromptProfileFile = path.join(promptDir, 'active-profile.txt')
-const defaultPromptProfile = '繁花'
-const promptProfiles = ['繁花', '基准']
+const defaultPromptProfile = '基准'
+const promptProfiles = ['基准', '繁花']
 const storyDir = path.join(rootDir, 'story')
 const docsDir = path.join(rootDir, 'docs')
 const saveDir = path.join(rootDir, 'save')
@@ -212,16 +218,30 @@ const llmDebugDir = path.join(debugDir, 'llm-raw')
 const interceptionDebugDir = path.join(debugDir, 'content-interception')
 const speedTestRecordFile = path.join(docsDir, '模型速度测试记录.md')
 const saveFile = path.join(saveDir, 'current-state.json')
+const syntheticContentInterceptionInput = '内容拦截测试：使用当前存档状态生成 Narrator prompt。'
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
 const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
 const infronDeepSeekV4ProModel = 'deepseek/deepseek-v4-pro'
 const infronDeepSeekV4FlashModel = 'deepseek/deepseek-v4-flash'
 const infronGemini31FlashLiteModel = 'google/gemini-3.1-flash-lite'
+const infronGemini25FlashModel = 'google/gemini-2.5-flash'
+const infronGemini3FlashPreviewModel = 'google/gemini-3-flash-preview'
+const infronKimiK25Model = 'moonshotai/kimi-k2.5'
+const infronQwen35EaricaModel = 'qwen/qwen3.5-27b-earica-derestricted'
+const infronQwen36FlashModel = 'qwen/qwen3.6-flash'
+const infronQwen36PlusModel = 'qwen/qwen3.6-plus'
+const infronXiaomiMimo25Model = 'xiaomi/mimo-v2.5'
+const infronGlm47FlashxModel = 'z-ai/glm-4.7-flashx'
+const infronGlm51Model = 'z-ai/glm-5.1'
+const infronGrok43Model = 'x-ai/grok-4.3'
 const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'
 const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'
 const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
 const fireworksDeepSeekV4ProRequestModel = 'accounts/fireworks/models/deepseek-v4-pro'
-const defaultModel = infronGemini31FlashLiteModel
+const fireworksKimiK2P5Model = 'accounts/fireworks/models/kimi-k2p5'
+const fireworksQwen3235BA22BModel = 'accounts/fireworks/models/qwen3-235b-a22b'
+const fireworksQwen36PlusModel = 'accounts/fireworks/models/qwen3p6-plus'
+const defaultModel = infronGrok43Model
 const strongLayerModel = officialDeepSeekV4ProModel
 const simpleLayerModel = officialDeepSeekV4FlashModel
 const modelIds = new Set([
@@ -230,19 +250,36 @@ const modelIds = new Set([
   infronDeepSeekV4ProModel,
   infronDeepSeekV4FlashModel,
   infronGemini31FlashLiteModel,
+  infronGemini25FlashModel,
+  infronGemini3FlashPreviewModel,
+  infronKimiK25Model,
+  infronQwen35EaricaModel,
+  infronQwen36FlashModel,
+  infronQwen36PlusModel,
+  infronXiaomiMimo25Model,
+  infronGlm47FlashxModel,
+  infronGlm51Model,
+  infronGrok43Model,
   googleAiStudioGemini31FlashLiteModel,
   cerebrasQwenModel,
   fireworksDeepSeekV4ProPriorityModel,
+  fireworksKimiK2P5Model,
+  fireworksQwen3235BA22BModel,
+  fireworksQwen36PlusModel,
 ])
 const defaultDeepSeekBaseUrl = 'https://api.deepseek.com'
 const defaultFireworksBaseUrl = 'https://api.fireworks.ai/inference/v1'
 const defaultInfronBaseUrl = 'https://llm.onerouter.pro/v1'
 const defaultCerebrasBaseUrl = 'https://api.cerebras.ai/v1'
 const defaultGoogleAiStudioBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/openai'
+const infronReasoningEfforts = new Set(['none', 'low', 'medium', 'high'])
+const infronReasoningHeavyModels = new Set([infronXiaomiMimo25Model])
+const infronReasoningMinMaxTokens = Number(process.env.INFRON_REASONING_MIN_MAX_TOKENS || 6000)
 const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS || 300_000)
 const longRangeDirectorTimeoutMs = Number(process.env.LONG_RANGE_DIRECTOR_TIMEOUT_MS || 45_000)
 const directorTimeoutMs = Number(process.env.DIRECTOR_TIMEOUT_MS || 300_000)
 const narratorTimeoutMs = Number(process.env.NARRATOR_TIMEOUT_MS || 120_000)
+const postprocessTimeoutMs = Number(process.env.POSTPROCESS_TIMEOUT_MS || 120_000)
 const providerFetchRetryCount = Number(process.env.LLM_FETCH_RETRY_COUNT || 2)
 const providerFetchRetryDelayMs = Number(process.env.LLM_FETCH_RETRY_DELAY_MS || 1200)
 const providerConnectivityTimeoutMs = Number(process.env.PROVIDER_CONNECTIVITY_TIMEOUT_MS || 30_000)
@@ -300,11 +337,11 @@ function providerForModel(model: string): ModelProvider {
 }
 
 function isFireworksModel(model: string): boolean {
-  return model === fireworksDeepSeekV4ProPriorityModel
+  return model === fireworksDeepSeekV4ProPriorityModel || model === fireworksKimiK2P5Model || model === fireworksQwen3235BA22BModel || model === fireworksQwen36PlusModel
 }
 
 function isInfronModel(model: string): boolean {
-  return model === infronDeepSeekV4ProModel || model === infronDeepSeekV4FlashModel || model === infronGemini31FlashLiteModel
+  return model === infronDeepSeekV4ProModel || model === infronDeepSeekV4FlashModel || model === infronGemini31FlashLiteModel || model === infronGemini25FlashModel || model === infronGemini3FlashPreviewModel || model === infronKimiK25Model || model === infronQwen35EaricaModel || model === infronQwen36FlashModel || model === infronQwen36PlusModel || model === infronXiaomiMimo25Model || model === infronGlm47FlashxModel || model === infronGlm51Model || model === infronGrok43Model
 }
 
 function isCerebrasModel(model: string): boolean {
@@ -317,6 +354,19 @@ function isGoogleAiStudioModel(model: string): boolean {
 
 function infronRequestModel(model: string): string {
   return model
+}
+
+function fireworksRequestModel(model: string): string {
+  return model === fireworksDeepSeekV4ProPriorityModel ? fireworksDeepSeekV4ProRequestModel : model
+}
+
+function applyFireworksPriority(body: Record<string, unknown>, model: string): void {
+  if (model === fireworksDeepSeekV4ProPriorityModel || model === fireworksKimiK2P5Model) body.service_tier = 'priority'
+}
+
+function withFireworksPriority(body: Record<string, unknown>, model: string): Record<string, unknown> {
+  applyFireworksPriority(body, model)
+  return body
 }
 
 function providerLabel(provider: ModelProvider): string {
@@ -364,6 +414,24 @@ function providerHasApiKey(provider: ModelProvider): boolean {
   if (provider === 'cerebras') return Boolean(env('CEREBRAS_API_KEY'))
   if (provider === 'google-ai-studio') return Boolean(env('GEMINI_API_KEY') || env('GOOGLE_AI_STUDIO_API_KEY'))
   return Boolean(env('DEEPSEEK_API_KEY') || env('DEEP_SEEK_API_KEY'))
+}
+
+function normalizeInfronReasoningEffort(value: unknown): string {
+  const effort = String(value || '').trim()
+  return infronReasoningEfforts.has(effort) ? effort : ''
+}
+
+function applyInfronReasoning(body: Record<string, unknown>, effort: unknown): void {
+  const normalized = normalizeInfronReasoningEffort(effort)
+  if (normalized) body.reasoning = { effort: normalized }
+}
+
+function infronMaxTokensForModel(model: string, maxTokens: number, effort: unknown): number {
+  const normalized = normalizeInfronReasoningEffort(effort)
+  if (infronReasoningHeavyModels.has(model) && normalized && normalized !== 'none' && maxTokens >= 1000) {
+    return Math.max(maxTokens, infronReasoningMinMaxTokens)
+  }
+  return maxTokens
 }
 
 function estimateTokens(text: string): number {
@@ -426,6 +494,20 @@ async function fetchWithTransientRetry(input: string, init: RequestInit): Promis
 
 function delay(ms: number): Promise<null> {
   return new Promise(resolve => setTimeout(() => resolve(null), ms))
+}
+
+async function readResponseTextWithTimeout(
+  response: Response,
+  controller: AbortController,
+  timer: ReturnType<typeof setTimeout>,
+  unlinkAbortSignal: () => void,
+): Promise<string> {
+  try {
+    return await response.text()
+  } finally {
+    unlinkAbortSignal()
+    clearTimeout(timer)
+  }
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -956,24 +1038,33 @@ function readPrompt(name: string): string {
 }
 
 function renderPromptTemplate(name: string, variables: Record<string, string | undefined>, fallback = '（无）'): string {
-  return readPrompt(name).replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
+  const rendered = readPrompt(name).replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
     if (key === 'user') return '{{user}}'
     const value = key === 'hardRule' ? readPrompt('hard-rule.md') : variables[key]
     return value?.trim() || fallback
   }).trim()
+  return rendered.replace(/\n## [^\n]+\n（无）(?=\n## |\n# |$)/g, '').trim()
 }
 
 function renderPromptMessagePair(name: string, variables: Record<string, string | undefined>, fallback = '（无）'): { system: string; user: string } {
   const rendered = renderPromptTemplate(name, variables, fallback)
   const marker = '\n# User Message\n'
   const markerIndex = rendered.indexOf(marker)
+  const cleanTemplateSystem = (system: string): string => system.replace(/^# System Message\s*/i, '').trim()
   if (markerIndex < 0) {
     return { system: '', user: rendered }
   }
+  const templateSystem = cleanTemplateSystem(rendered.slice(0, markerIndex).trim())
+  const templateUser = rendered.slice(markerIndex + marker.length).trim()
   return {
-    system: rendered.slice(0, markerIndex).trim(),
-    user: rendered.slice(markerIndex + marker.length).trim(),
+    system: '',
+    user: [templateSystem, templateUser].filter(Boolean).join('\n\n').trim(),
   }
+}
+
+function promptMessages(systemContent: string, userContent: string): ChatMessage[] {
+  const user = [String(systemContent || '').trim(), String(userContent || '').trim()].filter(Boolean).join('\n\n').trim()
+  return [{ role: 'user', content: user }]
 }
 
 function renderPromptMessagesForDisplay(systemContent: string, userContent: string): string {
@@ -984,6 +1075,10 @@ function renderPromptMessagesForDisplay(systemContent: string, userContent: stri
     '## User',
     userContent,
   ].join('\n').trim()
+}
+
+function isSyntheticPromptInput(value: unknown): boolean {
+  return String(value || '').trim() === syntheticContentInterceptionInput
 }
 
 function readPromptFile(filePath: string): string {
@@ -1047,26 +1142,27 @@ function normalizeStatusState(value: unknown, roster: string[], characters: Char
     const raw = source[name]
     const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
     const character = byName.get(name)
-    const base: Record<string, string> = {
-      性别: String(record.性别 || record.gender || character?.gender || '未揭示'),
-      身份: String(record.身份 || record.role || character?.role || (name === '玩家' ? '玩家操控角色' : '未揭示')),
-      位置: String(record.位置 || record.location || character?.location || '未知'),
-      姿势: String(record.姿势 || '未知'),
-      外显状态: String(record.外显状态 || record.health || character?.health || '未知'),
-      外貌: String(record.外貌 || record.appearance || character?.appearance || '未揭示'),
-      性格: String(record.性格 || record.personality || character?.personality || '未揭示'),
-      情绪: String(record.情绪 || record.mood || character?.mood || '未知'),
-      已知信息: String(record.已知信息 || '未揭示'),
-      对玩家态度: String(record.对玩家态度 || record.trust || (name === '玩家' ? '玩家本人' : character?.trust || '未知')),
-      手上物: String(record.手上物 || '未知'),
-      可触达区域: String(record.可触达区域 || '未知'),
-    }
     output[name] = {}
     for (const field of normalizeStatusSchema(schema)) {
-      output[name][field] = String(record[field] || base[field] || '未知')
+      output[name][field] = statusFieldValue(field, record, character, name)
     }
   }
   return output
+}
+
+function statusFieldValue(field: string, record: Record<string, unknown>, character: CharacterState | undefined, name: string): string {
+  if (record[field] !== undefined && record[field] !== null) return String(record[field])
+  const fallbackByField: Record<string, unknown> = {
+    性别: record.gender || character?.gender,
+    身份: record.role || character?.role || (name === '玩家' ? '玩家操控角色' : ''),
+    位置: record.location || character?.location,
+    外显状态: record.health || character?.health,
+    外貌: record.appearance || character?.appearance,
+    性格: record.personality || character?.personality,
+    情绪: record.mood || character?.mood,
+    对玩家态度: record.trust || character?.trust || (name === '玩家' ? '玩家本人' : ''),
+  }
+  return String(fallbackByField[field] || '')
 }
 
 function buildStatusModel(input: { statusSchema?: unknown; statusRoster?: unknown; statusState?: unknown; characters?: CharacterState[] }): {
@@ -1396,10 +1492,7 @@ async function initializeStory(
 
   try {
     emit({ type: 'stage_start', stage: 'initializer', label: 'Initializer', message: '初始化层：整理故事书，生成世界观、人物介绍、开场交互和人物状态 schema。' })
-    const result = await callModelWithPublicTrace('initializer', 'Initializer', [
-      { role: 'system', content: initializerMessages.system },
-      { role: 'user', content: initializerMessages.user },
-    ], { temperature: 0.4, apiKey: pipelineApiKeyForModel(input, model), model }, emit, [
+    const result = await callModelWithPublicTrace('initializer', 'Initializer', promptMessages(initializerMessages.system, initializerMessages.user), { temperature: 0.4, apiKey: pipelineApiKeyForModel(input, model), model, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
       '公开日志：正在读取故事书、人物卡和世界书，去掉重复噪音。',
       '公开日志：正在抽取世界观、人物介绍和固定设定。',
       '公开日志：正在写第一轮开场交互和 3 个玩家初始选项。',
@@ -1420,11 +1513,11 @@ async function initializeStory(
   }
 }
 
-async function callModel(messages: ChatMessage[], options: { temperature: number; apiKey?: string; debugLabel?: string; model?: string; maxTokens?: number; signal?: AbortSignal }): Promise<LayerResult> {
+async function callModel(messages: ChatMessage[], options: { temperature: number; apiKey?: string; debugLabel?: string; model?: string; maxTokens?: number; signal?: AbortSignal; reasoningEffort?: string }): Promise<LayerResult> {
   const model = normalizeModel(options.model)
   const provider = providerForModel(model)
   const apiKey = providerApiKey(provider, options.apiKey)
-  const response = await requestModelContent(apiKey, messages, options.temperature, model, options.debugLabel || providerLabel(provider), options.maxTokens, options.signal)
+  const response = await requestModelContent(apiKey, messages, options.temperature, model, options.debugLabel || providerLabel(provider), options.maxTokens, options.signal, options.reasoningEffort)
   const raw = response.raw
 
   try {
@@ -1470,13 +1563,14 @@ async function requestModelContent(
   label: string,
   maxTokens = defaultMaxTokens,
   signal?: AbortSignal,
+  reasoningEffort?: string,
 ): Promise<{ raw: string; metrics: LlmCallMetrics }> {
   const provider = providerForModel(model)
   if (provider === 'fireworks') {
     return requestFireworksContent(providerBaseUrl(provider), apiKey, messages, temperature, model, label, maxTokens, signal)
   }
   if (provider === 'infron') {
-    return requestInfronContent(providerBaseUrl(provider), apiKey, messages, temperature, model, label, maxTokens, signal)
+    return requestInfronContent(providerBaseUrl(provider), apiKey, messages, temperature, model, label, maxTokens, signal, reasoningEffort)
   }
   if (provider === 'cerebras') {
     return requestCerebrasContent(providerBaseUrl(provider), apiKey, messages, temperature, model, label, maxTokens, signal)
@@ -1538,12 +1632,9 @@ async function requestDeepSeekContent(
       throw new Error(`DeepSeek 网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
     }
     throw error
-  } finally {
-    unlinkAbortSignal()
-    clearTimeout(timer)
   }
 
-  const text = await response.text()
+  const text = await readResponseTextWithTimeout(response, controller, timer, unlinkAbortSignal)
   const durationMs = Date.now() - startedAt
   if (!response.ok) {
     if (response.status === 401) {
@@ -1632,13 +1723,12 @@ async function requestFireworksContent(
         'content-type': 'application/json',
         'x-session-affinity': env('FIREWORKS_SESSION_AFFINITY') || 'text-game-agent',
       },
-      body: JSON.stringify({
-        model: fireworksDeepSeekV4ProRequestModel,
+      body: JSON.stringify(withFireworksPriority({
+        model: fireworksRequestModel(model),
         messages,
         temperature,
         max_tokens: maxTokens,
-        service_tier: 'priority',
-      }),
+      }, model)),
     })
 
     if (!response.ok) {
@@ -1717,9 +1807,6 @@ async function requestFireworksContent(
       throw new Error(`Fireworks 网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
     }
     throw error
-  } finally {
-    unlinkAbortSignal()
-    clearTimeout(timer)
   }
 }
 
@@ -1732,6 +1819,7 @@ async function requestInfronContent(
   label: string,
   maxTokens: number,
   signal?: AbortSignal,
+  reasoningEffort?: string,
 ): Promise<{ raw: string; metrics: LlmCallMetrics }> {
   const controller = new AbortController()
   let externallyAborted = false
@@ -1746,11 +1834,12 @@ async function requestInfronContent(
     model: infronRequestModel(model),
     messages,
     temperature,
-    max_tokens: maxTokens,
+    max_tokens: infronMaxTokensForModel(model, maxTokens, reasoningEffort),
     provider: {
       sort: 'throughput',
     },
   }
+  applyInfronReasoning(body, reasoningEffort)
 
   try {
     response = await fetchWithTransientRetry(`${baseUrl}/chat/completions`, {
@@ -1779,12 +1868,9 @@ async function requestInfronContent(
       throw new Error(`Infron 网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
     }
     throw error
-  } finally {
-    unlinkAbortSignal()
-    clearTimeout(timer)
   }
 
-  const text = await response.text()
+  const text = await readResponseTextWithTimeout(response, controller, timer, unlinkAbortSignal)
   const durationMs = Date.now() - startedAt
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
@@ -1913,12 +1999,9 @@ async function requestCerebrasContent(
       throw new Error(`Cerebras 网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
     }
     throw error
-  } finally {
-    unlinkAbortSignal()
-    clearTimeout(timer)
   }
 
-  const text = await response.text()
+  const text = await readResponseTextWithTimeout(response, controller, timer, unlinkAbortSignal)
   const durationMs = Date.now() - startedAt
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
@@ -2026,12 +2109,9 @@ async function requestGoogleAiStudioContent(
       throw new Error(`Google AI Studio 网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
     }
     throw error
-  } finally {
-    unlinkAbortSignal()
-    clearTimeout(timer)
   }
 
-  const text = await response.text()
+  const text = await readResponseTextWithTimeout(response, controller, timer, unlinkAbortSignal)
   const durationMs = Date.now() - startedAt
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
@@ -2091,7 +2171,7 @@ async function requestGoogleAiStudioContent(
 async function repairJsonWithModel(apiKey: string, raw: string, model = defaultModel): Promise<{ raw: string; metrics: LlmCallMetrics }> {
   return requestModelContent(apiKey, [
     {
-      role: 'system',
+      role: 'user',
       content: [
         '你是 JSON 修复器。',
         '把用户提供的文本改写成一个合法 JSON object。',
@@ -2099,11 +2179,9 @@ async function repairJsonWithModel(apiKey: string, raw: string, model = defaultM
         '所有 key 和字符串必须使用英文双引号。',
         '禁止尾逗号。',
         '如果文本中已有 JSON-like object，只修复语法，不改写字段含义。',
+        '',
+        raw.slice(0, 80_000),
       ].join('\n'),
-    },
-    {
-      role: 'user',
-      content: raw.slice(0, 80_000),
     },
   ], 0, normalizeModel(model), 'JSON Repair')
 }
@@ -2121,7 +2199,7 @@ async function testProvider(input: ProviderTestRequest): Promise<Record<string, 
         role: 'user',
         content: '连通性测试。只输出：ok',
       },
-    ], 0, model, 'ProviderTest', 20, controller.signal)
+    ], 0, model, 'ProviderTest', 20, controller.signal, normalizeInfronReasoningEffort(input.reasoningEffort))
     return {
       ok: true,
       testType: 'connectivity',
@@ -2152,7 +2230,7 @@ async function testProviderSpeed(input: ProviderSpeedTestRequest): Promise<Recor
         role: 'user',
         content: '速度测试。请直接输出一段约 1200 个汉字的中文散文，主题是城市清晨的普通街景。不要输出标题、列表、JSON、解释或代码块；不要提前结束。',
       },
-    ], 0.7, model, 'ProviderSpeedTest', 1800, controller.signal)
+    ], 0.7, model, 'ProviderSpeedTest', 1800, controller.signal, normalizeInfronReasoningEffort(input.reasoningEffort))
     const generationMs = Math.max(1, result.metrics.durationMs - (result.metrics.ttftMs || 0))
     const outputTokens = result.metrics.outputTokens || result.metrics.estimatedOutputTokens
     const response = {
@@ -2206,6 +2284,7 @@ function buildStreamRequestInit(input: {
   model: string
   maxTokens: number
   signal?: AbortSignal
+  reasoningEffort?: string
 }): { url: string; init: RequestInit } {
   const baseUrl = providerBaseUrl(input.provider)
   const headers: Record<string, string> = {
@@ -2222,12 +2301,13 @@ function buildStreamRequestInit(input: {
     stream: true,
   }
   if (input.provider === 'fireworks') {
-    body.model = fireworksDeepSeekV4ProRequestModel
+    body.model = fireworksRequestModel(input.model)
     body.max_tokens = input.maxTokens
-    body.service_tier = 'priority'
+    applyFireworksPriority(body, input.model)
   } else if (input.provider === 'infron') {
     body.model = infronRequestModel(input.model)
-    body.max_tokens = input.maxTokens
+    body.max_tokens = infronMaxTokensForModel(input.model, input.maxTokens, input.reasoningEffort)
+    applyInfronReasoning(body, input.reasoningEffort)
     body.provider = { sort: 'throughput' }
   } else if (input.provider === 'cerebras') {
     body.max_completion_tokens = input.maxTokens
@@ -2272,10 +2352,11 @@ async function requestModelStreamProbe(
   label: string,
   maxTokens: number,
   signal?: AbortSignal,
+  reasoningEffort?: string,
 ): Promise<{ raw: string; metrics: LlmCallMetrics }> {
   const provider = providerForModel(model)
   const startedAt = Date.now()
-  const request = buildStreamRequestInit({ provider, apiKey, messages, temperature, model, maxTokens, signal })
+  const request = buildStreamRequestInit({ provider, apiKey, messages, temperature, model, maxTokens, signal, reasoningEffort })
   let response: Response
   try {
     response = await fetchWithTransientRetry(request.url, request.init)
@@ -2377,10 +2458,7 @@ function buildInterceptionNarratorPrompt(input: InterceptionPromptRequest): Reco
     playerInput,
     directorPlan: input.director && Object.keys(input.director).length ? input.director : fallbackDirectorPlanForInterception(),
   })
-  const messages: ChatMessage[] = [
-    { role: 'system', content: payload.narratorSystem },
-    { role: 'user', content: payload.narratorUser },
-  ]
+  const messages = promptMessages(payload.narratorSystem, payload.narratorUser)
   const combined = [
     '# Narrator Prompt Snapshot',
     '',
@@ -2420,6 +2498,76 @@ function buildInterceptionNarratorPrompt(input: InterceptionPromptRequest): Reco
   }
 }
 
+function compactPromptPreviewPlan(input: InterceptionPromptRequest): Record<string, unknown> {
+  if (!input.director || typeof input.director !== 'object' || !Object.keys(input.director).length) return {}
+  return compactDirectorPlan(input.director)
+}
+
+function buildPromptPreview(input: InterceptionPromptRequest): Record<string, unknown> {
+  const rawPlayerInput = String(input.playerInput || '').trim()
+  const playerInput = isSyntheticPromptInput(rawPlayerInput) ? '' : rawPlayerInput
+  const temperature = Number.isFinite(input.temperature) ? Number(input.temperature) : 0.8
+  const requestedModel = normalizeModel(input.model)
+  const pipelineModels = buildPipelineModels(requestedModel)
+  const recentTurns = Array.isArray(input.recentTurns)
+    ? input.recentTurns.filter(turn => !isSyntheticPromptInput(turn.content))
+    : []
+  const generateInput = { ...input, playerInput, recentTurns, model: requestedModel } as GenerateRequest
+  const directorPayload = buildDirectorPromptPayload(generateInput, Math.min(temperature, 0.4))
+  const directorPlan = compactPromptPreviewPlan(input)
+  const narratorPayload = buildNarratorPromptPayload(generateInput, {
+    model: pipelineModels.narrator,
+    temperature,
+    context: directorPayload.context,
+    feedbackMemory: directorPayload.feedbackMemory,
+    playerFeedback: directorPayload.playerFeedback,
+    playerInput,
+    directorPlan,
+  })
+  const finalText = String(input.finalText || '').trim()
+  const postprocessPayload = buildPostprocessPromptPayload(generateInput, {
+    model: pipelineModels.postprocess,
+    temperature: 0.5,
+    playerInput,
+    finalText,
+    directorPlan,
+    context: directorPayload.context,
+    turnIndex: directorPayload.turnIndex,
+    longRangeOutline: directorPayload.longRangeOutline,
+  })
+  const longRangeMessages = buildLongRangeDirectorMessages({
+    storyContext: String(input.storyContext || '').trim(),
+    characterStatus: directorPayload.context.characterStatus,
+    globalContext: directorPayload.globalContext,
+    currentLongRangeOutline: directorPayload.longRangeOutline || '（无）',
+    longRangeStatus: '',
+    turnSummary: '',
+    playerFeedback: input.playerFeedback,
+    directorStyle: input.directorStyle,
+  })
+  const initializerMessages = renderPromptMessagePair('initializer.md', {
+    storyMaterial: '（当前游戏运行中没有初始化原始材料；Initializer 真实输入只来自故事库导入的原始材料。）',
+  })
+  return {
+    ok: true,
+    promptProfile: activePromptProfile(),
+    model: requestedModel,
+    pipelineModels,
+    prompts: [
+      { task: 'Initializer', model: pipelineModels.initializer, system: initializerMessages.system, user: initializerMessages.user },
+      { task: 'Director', model: pipelineModels.director, system: directorPayload.directorSystem, user: directorPayload.directorUser },
+      { task: 'Narrator', model: pipelineModels.narrator, system: narratorPayload.narratorSystem, user: narratorPayload.narratorUser },
+      { task: 'Postprocess', model: pipelineModels.postprocess, system: postprocessPayload.postprocessSystem, user: postprocessPayload.postprocessUser },
+      { task: 'LongRangeDirector', model: pipelineModels.longRangeDirector, system: longRangeMessages.system, user: longRangeMessages.user },
+    ].map(item => ({
+      task: item.task,
+      model: item.model,
+      user: item.user,
+      userLength: item.user.length,
+    })),
+  }
+}
+
 async function runInterceptionTest(input: InterceptionTestRequest): Promise<Record<string, unknown>> {
   const model = normalizeModel(input.model)
   const provider = providerForModel(model)
@@ -2428,17 +2576,7 @@ async function runInterceptionTest(input: InterceptionTestRequest): Promise<Reco
   const narratorSystem = String(input.narratorSystem || '').trim()
   const narratorUser = String(input.narratorUser || '').trim()
   if (!narratorUser) throw new Error('缺少测试 Prompt，请先生成快照或选择 Prompt 文件。')
-  const systemContent = [systemInstruction, narratorSystem].filter(Boolean).join('\n\n') || '你是内容拦截测试助手。'
-  const messages: ChatMessage[] = [
-    {
-      role: 'system',
-      content: systemContent,
-    },
-    {
-      role: 'user',
-      content: narratorUser,
-    },
-  ]
+  const messages = promptMessages('', [systemInstruction, narratorSystem, narratorUser].filter(Boolean).join('\n\n'))
   const requestFile = writeDebugArtifact(interceptionDebugDir, 'interception-test-request', {
     artifactType: 'interception-test-request',
     createdAt: new Date().toISOString(),
@@ -2451,7 +2589,7 @@ async function runInterceptionTest(input: InterceptionTestRequest): Promise<Reco
     })),
   }, { latest: true })
   try {
-    const result = await requestModelContent(apiKey, messages, Number.isFinite(input.temperature) ? Number(input.temperature) : 0.8, model, 'ContentInterceptionTest', 4096)
+    const result = await requestModelContent(apiKey, messages, Number.isFinite(input.temperature) ? Number(input.temperature) : 0.8, model, 'ContentInterceptionTest', 4096, undefined, normalizeInfronReasoningEffort(input.reasoningEffort))
     const outputTokens = result.metrics.outputTokens || result.metrics.estimatedOutputTokens
     const responseFile = writeDebugArtifact(interceptionDebugDir, 'interception-test-response', {
       artifactType: 'interception-test-response',
@@ -2507,7 +2645,7 @@ async function callModelWithPublicTrace(
   stage: PipelineEvent['stage'],
   label: string,
   messages: ChatMessage[],
-  options: { temperature: number; apiKey?: string; model?: string; maxTokens?: number; timeoutMs?: number },
+  options: { temperature: number; apiKey?: string; model?: string; maxTokens?: number; timeoutMs?: number; reasoningEffort?: string },
   emit: (event: PipelineEvent) => void,
   traceMessages: string[],
 ): Promise<LayerResult> {
@@ -2710,6 +2848,7 @@ function compactDirectorPlan(value: unknown): Record<string, unknown> {
   const source = compactRecord(value)
   const beats = compactDirectorBeats(source)
   return pruneEmpty({
+    goalStep: compactText(source.goalStep || source.longRangeStep || source.arcStep, 120),
     beat1: beats[0],
     beat2: beats[1],
     beat3: beats[2],
@@ -2750,6 +2889,10 @@ function normalizePlayerFeedback(value: unknown): string {
 }
 
 const longRangeDirectorMaxAgeTurns = Number(process.env.LONG_RANGE_DIRECTOR_MAX_AGE_TURNS || 20)
+const longRangeDirectorSoftStartTurns = Number(process.env.LONG_RANGE_DIRECTOR_SOFT_START_TURNS || 8)
+const longRangeDirectorMediumStartTurns = Number(process.env.LONG_RANGE_DIRECTOR_MEDIUM_START_TURNS || 15)
+const longRangeDirectorSoftProbability = Number(process.env.LONG_RANGE_DIRECTOR_SOFT_PROBABILITY || 0.1)
+const longRangeDirectorMediumProbability = Number(process.env.LONG_RANGE_DIRECTOR_MEDIUM_PROBABILITY || 0.25)
 
 function normalizeLongRangeStatus(value: unknown, currentLongRangeOutline = ''): string {
   const status = String(value || '').trim().toLowerCase()
@@ -2769,17 +2912,32 @@ function longRangeOutlineAgeTurns(turnIndex: number, updatedTurn: number): numbe
 
 function shouldForceLongRangeDirectorByAge(turnIndex: number, updatedTurn: number, currentLongRangeOutline = ''): boolean {
   const age = longRangeOutlineAgeTurns(turnIndex, updatedTurn)
-  return Boolean(currentLongRangeOutline.trim()) && age > 0 && age % longRangeDirectorMaxAgeTurns === 0
+  return Boolean(currentLongRangeOutline.trim()) && age >= longRangeDirectorMaxAgeTurns && age % longRangeDirectorMaxAgeTurns === 0
+}
+
+function longRangeDirectorProbabilityByAge(age: number): number {
+  if (age >= longRangeDirectorMaxAgeTurns) return 1
+  if (age >= longRangeDirectorMediumStartTurns) return longRangeDirectorMediumProbability
+  if (age >= longRangeDirectorSoftStartTurns) return longRangeDirectorSoftProbability
+  return 0
+}
+
+function longRangeDirectorTrigger(value: unknown, currentLongRangeOutline = '', turnIndex = 1, updatedTurn = 0, randomValue = Math.random()): { shouldRun: boolean; status: string; reason: string; age: number } {
+  const status = normalizeLongRangeStatus(value, currentLongRangeOutline)
+  const age = longRangeOutlineAgeTurns(turnIndex, updatedTurn)
+  if (status === 'missing' || status === 'completed' || status === 'stale') return { shouldRun: true, status, reason: status, age }
+  if (shouldForceLongRangeDirectorByAge(turnIndex, updatedTurn, currentLongRangeOutline)) return { shouldRun: true, status: 'stale', reason: 'age-hard-limit', age }
+  const probability = Boolean(currentLongRangeOutline.trim()) ? longRangeDirectorProbabilityByAge(age) : 0
+  if (probability > 0 && randomValue < probability) return { shouldRun: true, status: 'refresh', reason: `age-random-${probability}`, age }
+  return { shouldRun: false, status: 'keep', reason: 'keep', age }
 }
 
 function shouldRunLongRangeDirector(value: unknown, currentLongRangeOutline = '', turnIndex = 1, updatedTurn = 0): boolean {
-  const status = normalizeLongRangeStatus(value, currentLongRangeOutline)
-  return status === 'missing' || status === 'completed' || status === 'stale' || shouldForceLongRangeDirectorByAge(turnIndex, updatedTurn, currentLongRangeOutline)
+  return longRangeDirectorTrigger(value, currentLongRangeOutline, turnIndex, updatedTurn).shouldRun
 }
 
 function longRangeDirectorStatusForRun(value: unknown, currentLongRangeOutline: string, turnIndex: number, updatedTurn: number): string {
-  if (shouldForceLongRangeDirectorByAge(turnIndex, updatedTurn, currentLongRangeOutline)) return 'stale'
-  return normalizeLongRangeStatus(value, currentLongRangeOutline)
+  return longRangeDirectorTrigger(value, currentLongRangeOutline, turnIndex, updatedTurn).status
 }
 
 function normalizeLongRangeDirectorOutline(value: unknown, fallback = ''): string {
@@ -2894,11 +3052,8 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
     narratorStyle,
     playerInput,
   })
-  const narratorSystem = '你是内容拦截测试助手。'
-  const narratorUser = [
-    narratorMessages.system,
-    narratorMessages.user,
-  ].filter(Boolean).join('\n\n')
+  const narratorSystem = narratorMessages.system
+  const narratorUser = narratorMessages.user
   return {
     model: options.model,
     temperature: options.temperature,
@@ -2949,6 +3104,7 @@ function buildPostprocessPromptPayload(input: GenerateRequest, options: {
     statusSchema: JSON.stringify(statusModel.statusSchema),
     statusRoster: JSON.stringify(statusModel.statusRoster),
     statusState: JSON.stringify(statusModel.statusState),
+    recentTurns: options.context.recentTurns,
     directorPlan: JSON.stringify(options.directorPlan),
     playerFeedback: normalizePlayerFeedback(input.playerFeedback),
     finalText: options.finalText,
@@ -2983,18 +3139,22 @@ async function generate(
   const postprocessModel = pipelineModels.postprocess
   const longRangeDirectorModel = pipelineModels.longRangeDirector
 
-  emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：根据玩家输入、当前状态、历史总结和剧情目标，生成本轮计划。' })
-  const director = await callModelWithPublicTrace('director', 'Director', [
-    { role: 'system', content: directorPayload.directorSystem },
-    { role: 'user', content: directorPayload.directorUser },
-  ], { temperature: directorTemperature, apiKey: pipelineApiKeyForModel(input, directorModel), model: directorModel, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs }, emit, [
-    '公开日志：正在拆解玩家输入和当前场景。',
-    '公开日志：正在安排剧情模块、推进链和物理约束。',
-    '公开日志：正在生成 Narrator 可执行的本轮计划。',
-    '公开日志：导演层仍在等待模型返回结构化计划。',
-  ])
-  const directorPlan = compactDirectorPlan(director.json)
-  emit({ type: 'stage_result', stage: 'director', label: 'Director', message: '导演层完成：本轮计划已生成。', json: directorPlan })
+  let director: LayerResult | null = null
+  let directorPlan: Record<string, unknown>
+  if (input.director && typeof input.director === 'object' && Object.keys(input.director).length) {
+    directorPlan = compactDirectorPlan(input.director)
+    emit({ type: 'stage_skip', stage: 'director', label: 'Director', message: '导演层已复用：继续未完成时沿用上一轮计划。', json: directorPlan })
+  } else {
+    emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：根据玩家输入、当前状态、历史总结和剧情目标，生成本轮计划。' })
+    director = await callModelWithPublicTrace('director', 'Director', promptMessages(directorPayload.directorSystem, directorPayload.directorUser), { temperature: directorTemperature, apiKey: pipelineApiKeyForModel(input, directorModel), model: directorModel, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
+      '公开日志：正在拆解玩家输入和当前场景。',
+      '公开日志：正在安排剧情模块、推进链和物理约束。',
+      '公开日志：正在生成 Narrator 可执行的本轮计划。',
+      '公开日志：导演层仍在等待模型返回结构化计划。',
+    ])
+    directorPlan = compactDirectorPlan(director.json)
+    emit({ type: 'stage_result', stage: 'director', label: 'Director', message: '导演层完成：本轮计划已生成。', json: directorPlan })
+  }
 
   const narratorPayload = buildNarratorPromptPayload(input, {
     model: narratorModel,
@@ -3006,10 +3166,7 @@ async function generate(
     directorPlan,
   })
   emit({ type: 'stage_start', stage: 'narrator', label: 'Narrator', message: '叙事层：按导演计划写玩家可见正文。' })
-  const narrator = await callModelWithPublicTrace('narrator', 'Narrator', [
-    { role: 'system', content: narratorPayload.narratorSystem },
-    { role: 'user', content: narratorPayload.narratorUser },
-  ], { temperature, apiKey: pipelineApiKeyForModel(input, narratorModel), model: narratorModel, maxTokens: narratorMaxTokens, timeoutMs: narratorTimeoutMs }, emit, [
+  const narrator = await callModelWithPublicTrace('narrator', 'Narrator', promptMessages(narratorPayload.narratorSystem, narratorPayload.narratorUser), { temperature, apiKey: pipelineApiKeyForModel(input, narratorModel), model: narratorModel, maxTokens: narratorMaxTokens, timeoutMs: narratorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
     '公开日志：正在根据导演计划组织正文。',
     '公开日志：正在保持人物限知视角和物理约束。',
     '公开日志：正在收束为玩家可继续行动的段落。',
@@ -3029,13 +3186,10 @@ async function generate(
     turnIndex: directorPayload.turnIndex,
     longRangeOutline: directorPayload.longRangeOutline,
   })
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：更新事实总结、花色观察、负反馈和剧情目标状态。' })
-  const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', [
-    { role: 'system', content: postprocessPayload.postprocessSystem },
-    { role: 'user', content: postprocessPayload.postprocessUser },
-  ], { temperature: postprocessPayload.temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel }, emit, [
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：更新事实总结、人物状态、负反馈和剧情目标状态。' })
+  const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', promptMessages(postprocessPayload.postprocessSystem, postprocessPayload.postprocessUser), { temperature: postprocessPayload.temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
     '公开日志：正在比对导演计划和正文落差。',
-    '公开日志：正在更新花色观察补丁。',
+    '公开日志：正在更新人物状态补丁。',
     '公开日志：正在生成三类闭环负反馈。',
     '公开日志：Postprocess 仍在等待模型返回结构化状态。',
   ])
@@ -3047,8 +3201,9 @@ async function generate(
   let nextLongRangeOutlineUpdatedTurn = directorPayload.longRangeOutlineUpdatedTurn
   let longRangeDirector: LayerResult | null = null
   const turnSummary = normalizeTurnSummary(postprocessJson.turnSummary, finalText)
-  if (shouldRunLongRangeDirector(postprocessJson.longRangeStatus, directorPayload.longRangeOutline, directorPayload.turnIndex, directorPayload.longRangeOutlineUpdatedTurn)) {
-    const longRangeStatus = longRangeDirectorStatusForRun(postprocessJson.longRangeStatus, directorPayload.longRangeOutline, directorPayload.turnIndex, directorPayload.longRangeOutlineUpdatedTurn)
+  const longRangeTrigger = longRangeDirectorTrigger(postprocessJson.longRangeStatus, directorPayload.longRangeOutline, directorPayload.turnIndex, directorPayload.longRangeOutlineUpdatedTurn)
+  if (longRangeTrigger.shouldRun) {
+    const longRangeStatus = longRangeTrigger.status
     const longRangeMessages = buildLongRangeDirectorMessages({
       storyContext: input.storyContext || '',
       characterStatus: directorPayload.context.characterStatus,
@@ -3059,12 +3214,9 @@ async function generate(
       playerFeedback: input.playerFeedback || '',
       directorStyle: String(input.directorStyle || '').trim(),
     })
-    emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: '高级导演层：生成或修订当前剧情目标。' })
+    emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: `高级导演层：生成或修订当前剧情目标（${longRangeTrigger.reason}，目标年龄 ${longRangeTrigger.age} 轮）。` })
     try {
-      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
-        { role: 'system', content: longRangeMessages.system },
-        { role: 'user', content: longRangeMessages.user },
-      ], { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
+      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', promptMessages(longRangeMessages.system, longRangeMessages.user), { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
         '公开日志：正在判断当前剧情目标是否已完成、缺失或偏离。',
         '公开日志：正在生成可供后续多轮缓慢靠近的具体人物关系和事件目标。',
         '公开日志：高级导演层仍在等待模型返回剧情目标。',
@@ -3098,7 +3250,7 @@ async function generate(
     pipelineModels,
     playerInput,
     metrics: [
-      { stage: 'Director', metrics: director.metrics },
+      ...(director ? [{ stage: 'Director', metrics: director.metrics }] : []),
       { stage: 'Narrator', metrics: narrator.metrics },
       { stage: 'Postprocess', metrics: postprocess.metrics },
       ...(longRangeDirector ? [{ stage: 'LongRangeDirector', metrics: longRangeDirector.metrics }] : []),
@@ -3161,20 +3313,18 @@ async function runPostprocess(
     statusSchema: JSON.stringify(statusModel.statusSchema),
     statusRoster: JSON.stringify(statusModel.statusRoster),
     statusState: JSON.stringify(statusModel.statusState),
+    recentTurns: context.recentTurns,
     directorPlan: JSON.stringify(directorPlan),
     playerFeedback: normalizePlayerFeedback(input.playerFeedback),
     playerInput,
     finalText,
   })
 
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写本轮总结、花色观察、写作负反馈和剧情目标判定。' })
-  const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', [
-    { role: 'system', content: postprocessMessages.system },
-    { role: 'user', content: postprocessMessages.user },
-  ], { temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel }, emit, [
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写本轮总结、人物状态、写作负反馈和剧情目标判定。' })
+  const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', promptMessages(postprocessMessages.system, postprocessMessages.user), { temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
     '公开日志：正在补跑上一轮失败的 Postprocess。',
     '公开日志：正在补写本轮事实总结。',
-    '公开日志：正在按花色特性更新花色观察。',
+    '公开日志：正在按状态字段更新人物状态。',
     '公开日志：正在补写写作负反馈和剧情目标判定。',
     '公开日志：Postprocess 重试仍在等待模型返回结构化状态。',
   ])
@@ -3185,8 +3335,9 @@ async function runPostprocess(
   let nextLongRangeOutlineUpdatedTurn = normalizeLongRangeOutlineUpdatedTurn(input.longRangeOutlineUpdatedTurn)
   let longRangeDirector: LayerResult | null = null
   const turnSummary = normalizeTurnSummary(postprocess.json.turnSummary, finalText)
-  if (shouldRunLongRangeDirector(postprocess.json.longRangeStatus, currentLongRangeOutline, turnIndex, nextLongRangeOutlineUpdatedTurn)) {
-    const longRangeStatus = longRangeDirectorStatusForRun(postprocess.json.longRangeStatus, currentLongRangeOutline, turnIndex, nextLongRangeOutlineUpdatedTurn)
+  const longRangeTrigger = longRangeDirectorTrigger(postprocess.json.longRangeStatus, currentLongRangeOutline, turnIndex, nextLongRangeOutlineUpdatedTurn)
+  if (longRangeTrigger.shouldRun) {
+    const longRangeStatus = longRangeTrigger.status
     const longRangeMessages = buildLongRangeDirectorMessages({
       storyContext: input.storyContext || '',
       characterStatus: context.characterStatus,
@@ -3197,12 +3348,9 @@ async function runPostprocess(
       playerFeedback: input.playerFeedback || '',
       directorStyle: String(input.directorStyle || '').trim(),
     })
-    emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: '高级导演层：生成或修订当前剧情目标。' })
+    emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: `高级导演层：生成或修订当前剧情目标（${longRangeTrigger.reason}，目标年龄 ${longRangeTrigger.age} 轮）。` })
     try {
-      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', [
-        { role: 'system', content: longRangeMessages.system },
-        { role: 'user', content: longRangeMessages.user },
-      ], { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs }, emit, [
+      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', promptMessages(longRangeMessages.system, longRangeMessages.user), { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
         '公开日志：正在补跑剧情目标生成/修订。',
         '公开日志：正在生成可供后续多轮缓慢靠近的具体人物关系和事件目标。',
         '公开日志：高级导演层仍在等待模型返回剧情目标。',
@@ -3296,11 +3444,24 @@ const server = http.createServer(async (req, res) => {
         promptProfiles,
         models: [
           { id: fireworksDeepSeekV4ProPriorityModel, label: 'DeepSeek V4 Pro | priority | Fireworks', provider: 'fireworks' },
+          { id: fireworksKimiK2P5Model, label: 'Kimi K2.5 | Fireworks', provider: 'fireworks' },
+          { id: fireworksQwen3235BA22BModel, label: 'Qwen3 235B A22B | Fireworks', provider: 'fireworks' },
+          { id: fireworksQwen36PlusModel, label: 'Qwen3.6 Plus | Fireworks', provider: 'fireworks' },
           { id: officialDeepSeekV4ProModel, label: 'DeepSeek V4 Pro | official | DeepSeek', provider: 'deepseek' },
           { id: officialDeepSeekV4FlashModel, label: 'DeepSeek V4 Flash | official | DeepSeek', provider: 'deepseek' },
           { id: infronDeepSeekV4ProModel, label: 'DeepSeek V4 Pro | throughput | Infron', provider: 'infron' },
           { id: infronDeepSeekV4FlashModel, label: 'DeepSeek V4 Flash | throughput | Infron', provider: 'infron' },
           { id: infronGemini31FlashLiteModel, label: 'Gemini 3.1 Flash Lite | throughput | Infron', provider: 'infron' },
+          { id: infronGemini25FlashModel, label: 'Gemini 2.5 Flash | throughput | Infron', provider: 'infron' },
+          { id: infronGemini3FlashPreviewModel, label: 'Gemini 3 Flash Preview | throughput | Infron', provider: 'infron' },
+          { id: infronKimiK25Model, label: 'Kimi K2.5 | throughput | Infron', provider: 'infron' },
+          { id: infronQwen35EaricaModel, label: 'Qwen3.5 27B Earica Derestricted | throughput | Infron', provider: 'infron' },
+          { id: infronQwen36FlashModel, label: 'Qwen3.6 Flash | throughput | Infron', provider: 'infron' },
+          { id: infronQwen36PlusModel, label: 'Qwen3.6 Plus | throughput | Infron', provider: 'infron' },
+          { id: infronXiaomiMimo25Model, label: 'Xiaomi MiMo V2.5 | throughput | Infron', provider: 'infron' },
+          { id: infronGlm47FlashxModel, label: 'GLM 4.7 FlashX | throughput | Infron', provider: 'infron' },
+          { id: infronGlm51Model, label: 'GLM 5.1 | throughput | Infron', provider: 'infron' },
+          { id: infronGrok43Model, label: 'Grok 4.3 | throughput | Infron', provider: 'infron' },
           { id: googleAiStudioGemini31FlashLiteModel, label: 'Gemini 3.1 Flash Lite | AI Studio | Google', provider: 'google-ai-studio' },
           { id: cerebrasQwenModel, label: 'Qwen 3 235B A22B Instruct 2507 | fast | Cerebras', provider: 'cerebras' },
         ],
@@ -3317,6 +3478,8 @@ const server = http.createServer(async (req, res) => {
             baseUrl: providerBaseUrl('infron'),
             hasApiKey: providerHasApiKey('infron'),
             providerSort: 'throughput',
+            reasoningEffort: '',
+            reasoningEfforts: ['', ...Array.from(infronReasoningEfforts)],
           },
           cerebras: {
             baseUrl: providerBaseUrl('cerebras'),
@@ -3365,6 +3528,13 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req)
       const input = JSON.parse(body) as InterceptionPromptRequest
       sendJson(res, 200, buildInterceptionNarratorPrompt(input))
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/prompt-preview') {
+      const body = await readBody(req)
+      const input = JSON.parse(body) as InterceptionPromptRequest
+      sendJson(res, 200, buildPromptPreview(input))
       return
     }
 
@@ -3454,13 +3624,6 @@ const server = http.createServer(async (req, res) => {
       return
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/initialize-story') {
-      const body = await readBody(req)
-      const input = JSON.parse(body) as InitializeStoryRequest
-      sendJson(res, 200, await initializeStory(input))
-      return
-    }
-
     if (req.method === 'POST' && url.pathname === '/api/initialize-story-stream') {
       const body = await readBody(req)
       const input = JSON.parse(body) as InitializeStoryRequest
@@ -3487,17 +3650,6 @@ const server = http.createServer(async (req, res) => {
       } finally {
         res.end()
       }
-      return
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/generate') {
-      const body = await readBody(req)
-      const input = JSON.parse(body) as GenerateRequest
-      if (!input.playerInput?.trim()) {
-        sendJson(res, 400, { error: 'playerInput is required' })
-        return
-      }
-      sendJson(res, 200, await generate(input))
       return
     }
 

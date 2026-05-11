@@ -1,9 +1,9 @@
 # System Message
 
+# User Message
+
 ## Hard Rule
 {{hardRule}}
-
-# User Message
 
 # 输入变量
 ## 故事资料

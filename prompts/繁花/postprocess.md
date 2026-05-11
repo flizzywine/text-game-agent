@@ -1,9 +1,9 @@
 # System Message
 
+# User Message
+
 ## Hard Rule
 {{hardRule}}
-
-# User Message
 
 # 输入变量
 ## 下面是花朵占卜出与顾客有命运纠缠的世界观信息
