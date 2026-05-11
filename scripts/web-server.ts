@@ -89,10 +89,6 @@ interface ProviderSpeedTestRequest {
   reasoningEffort?: string
 }
 
-interface PromptProfileRequest {
-  promptProfile?: string
-}
-
 interface InterceptionPromptRequest extends PipelineContext {
   playerInput?: string
   director?: Record<string, unknown>
@@ -205,9 +201,6 @@ type ModelProvider = 'deepseek' | 'fireworks' | 'infron' | 'cerebras' | 'google-
 const rootDir = process.cwd()
 const webDir = path.join(rootDir, 'web')
 const promptDir = path.join(rootDir, 'prompts')
-const activePromptProfileFile = path.join(promptDir, 'active-profile.txt')
-const defaultPromptProfile = '基准'
-const promptProfiles = ['基准', '繁花']
 const storyDir = path.join(rootDir, 'story')
 const docsDir = path.join(rootDir, 'docs')
 const saveDir = path.join(rootDir, 'save')
@@ -1014,26 +1007,7 @@ function renderAssetMarkdown(asset: PersistedStoryAsset): string {
   return `${lines.filter(line => line !== undefined).join('\n')}\n`
 }
 
-function activePromptProfile(): string {
-  const fromEnv = String(process.env.TEXT_GAME_PROMPT_PROFILE || '').trim()
-  if (promptProfiles.includes(fromEnv)) return fromEnv
-  if (!fs.existsSync(activePromptProfileFile)) return defaultPromptProfile
-  return normalizePromptProfile(fs.readFileSync(activePromptProfileFile, 'utf-8'))
-}
-
-function normalizePromptProfile(value: unknown): string {
-  const profile = String(value || '').trim()
-  return promptProfiles.includes(profile) ? profile : defaultPromptProfile
-}
-
-function writeActivePromptProfile(profile: string): void {
-  fs.writeFileSync(activePromptProfileFile, `${normalizePromptProfile(profile)}\n`, 'utf-8')
-}
-
 function readPrompt(name: string): string {
-  const profile = activePromptProfile()
-  const profiledPath = profile ? path.join(promptDir, profile, name) : ''
-  if (profiledPath && fs.existsSync(profiledPath)) return readPromptFile(profiledPath)
   return readPromptFile(path.join(promptDir, name))
 }
 
@@ -2431,10 +2405,11 @@ async function requestModelStreamProbe(
 
 function fallbackDirectorPlanForInterception(): Record<string, unknown> {
   return {
-    beat1: '内容拦截测试占位：复用当前状态，只检查模型是否能返回。',
-    beat2: '内容拦截测试占位：不推进真实剧情。',
-    beat3: '内容拦截测试占位：不改写存档。',
-    ending: '推进模块｜测试结束停在可继续处｜推进｜行为',
+    goalStep: '内容拦截测试占位：复用当前状态，只检查模型是否能返回。',
+    beat1: '推进模块｜内容拦截测试占位：复用当前状态，只检查模型是否能返回｜集中｜行为',
+    beat2: '插入模块｜内容拦截测试占位：不推进真实剧情｜集中｜人物',
+    beat3: '氛围模块｜内容拦截测试占位：不改写存档｜集中｜氛围',
+    ending: '推进模块｜测试结束停在可继续处｜集中｜行为',
     physicalConstraints: [],
   }
 }
@@ -2550,7 +2525,6 @@ function buildPromptPreview(input: InterceptionPromptRequest): Record<string, un
   })
   return {
     ok: true,
-    promptProfile: activePromptProfile(),
     model: requestedModel,
     pipelineModels,
     prompts: [
@@ -3136,8 +3110,6 @@ async function generate(
   const pipelineModels = buildPipelineModels(requestedModel)
   const directorModel = directorPayload.model
   const narratorModel = pipelineModels.narrator
-  const postprocessModel = pipelineModels.postprocess
-  const longRangeDirectorModel = pipelineModels.longRangeDirector
 
   let director: LayerResult | null = null
   let directorPlan: Record<string, unknown>
@@ -3148,7 +3120,7 @@ async function generate(
     emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：根据玩家输入、当前状态、历史总结和剧情目标，生成本轮计划。' })
     director = await callModelWithPublicTrace('director', 'Director', promptMessages(directorPayload.directorSystem, directorPayload.directorUser), { temperature: directorTemperature, apiKey: pipelineApiKeyForModel(input, directorModel), model: directorModel, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
       '公开日志：正在拆解玩家输入和当前场景。',
-      '公开日志：正在安排剧情模块、推进链和物理约束。',
+      '公开日志：正在安排剧情模块、描写链和物理约束。',
       '公开日志：正在生成 Narrator 可执行的本轮计划。',
       '公开日志：导演层仍在等待模型返回结构化计划。',
     ])
@@ -3173,74 +3145,10 @@ async function generate(
     '公开日志：叙事层仍在等待模型返回正文。',
   ])
   const finalText = extractNarratorFinalText(narrator)
-  emit({ type: 'visible_text', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文已显示，后处理继续后台运行。', payload: { finalText, pipelineMode: 'narrator+postprocess' } })
+  emit({ type: 'visible_text', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文已显示，后处理已进入独立队列。', payload: { finalText, pipelineMode: 'narrator+postprocess-queued' } })
   emit({ type: 'stage_result', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文已生成。', json: narrator.json })
 
-  const postprocessPayload = buildPostprocessPromptPayload(input, {
-    model: postprocessModel,
-    temperature: 0.5,
-    playerInput,
-    finalText,
-    directorPlan,
-    context: directorPayload.context,
-    turnIndex: directorPayload.turnIndex,
-    longRangeOutline: directorPayload.longRangeOutline,
-  })
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '后处理层：更新事实总结、人物状态、负反馈和剧情目标状态。' })
-  const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', promptMessages(postprocessPayload.postprocessSystem, postprocessPayload.postprocessUser), { temperature: postprocessPayload.temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
-    '公开日志：正在比对导演计划和正文落差。',
-    '公开日志：正在更新人物状态补丁。',
-    '公开日志：正在生成三类闭环负反馈。',
-    '公开日志：Postprocess 仍在等待模型返回结构化状态。',
-  ])
-  const postprocessJson = postprocess.json
-  const feedback = normalizeFeedbackBreakdown(postprocessJson)
-  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理完成：状态和负反馈已更新。', json: postprocessJson })
-
-  let nextLongRangeOutline = directorPayload.longRangeOutline
-  let nextLongRangeOutlineUpdatedTurn = directorPayload.longRangeOutlineUpdatedTurn
-  let longRangeDirector: LayerResult | null = null
-  const turnSummary = normalizeTurnSummary(postprocessJson.turnSummary, finalText)
-  const longRangeTrigger = longRangeDirectorTrigger(postprocessJson.longRangeStatus, directorPayload.longRangeOutline, directorPayload.turnIndex, directorPayload.longRangeOutlineUpdatedTurn)
-  if (longRangeTrigger.shouldRun) {
-    const longRangeStatus = longRangeTrigger.status
-    const longRangeMessages = buildLongRangeDirectorMessages({
-      storyContext: input.storyContext || '',
-      characterStatus: directorPayload.context.characterStatus,
-      globalContext: directorPayload.globalContext,
-      currentLongRangeOutline: directorPayload.longRangeOutline,
-      longRangeStatus,
-      turnSummary,
-      playerFeedback: input.playerFeedback || '',
-      directorStyle: String(input.directorStyle || '').trim(),
-    })
-    emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: `高级导演层：生成或修订当前剧情目标（${longRangeTrigger.reason}，目标年龄 ${longRangeTrigger.age} 轮）。` })
-    try {
-      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', promptMessages(longRangeMessages.system, longRangeMessages.user), { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
-        '公开日志：正在判断当前剧情目标是否已完成、缺失或偏离。',
-        '公开日志：正在生成可供后续多轮缓慢靠近的具体人物关系和事件目标。',
-        '公开日志：高级导演层仍在等待模型返回剧情目标。',
-      ])
-      nextLongRangeOutline = normalizeLongRangeDirectorOutline(longRangeDirector.json.longRangeOutline || longRangeDirector.json, directorPayload.longRangeOutline)
-      if (nextLongRangeOutline.trim() && nextLongRangeOutline.trim() !== directorPayload.longRangeOutline.trim()) {
-        nextLongRangeOutlineUpdatedTurn = directorPayload.turnIndex
-      }
-      emit({ type: 'stage_result', stage: 'director', label: 'LongRangeDirector', message: '高级导演层完成：当前剧情目标已更新。', json: { longRangeOutline: nextLongRangeOutline } })
-    } catch (error) {
-      longRangeDirector = null
-      emit({
-        type: 'stage_skip',
-        stage: 'director',
-        label: 'LongRangeDirector',
-        message: `高级导演层未返回，已跳过以免阻塞本轮：${error instanceof Error ? error.message : String(error)}`,
-      })
-    }
-  }
-
   const playerOptions = normalizePlayerOptions(directorPlan.playerOptions)
-  const nextStatusSchema = mergeStatusSchema(input.statusSchema, postprocessJson.statusSchemaPatch)
-  const nextStatusRoster = mergeStatusRoster(input.statusRoster, postprocessJson.statusRosterPatch, input.characters || [], postprocessJson.statusStatePatch)
-  const nextStatusState = mergeStatusState(input.statusState, postprocessJson.statusStatePatch, nextStatusRoster, input.characters || [], nextStatusSchema)
   const speedRecordFile = appendPipelineSpeedRecord({
     mode: 'generate',
     turnIndex: directorPayload.turnIndex,
@@ -3252,29 +3160,41 @@ async function generate(
     metrics: [
       ...(director ? [{ stage: 'Director', metrics: director.metrics }] : []),
       { stage: 'Narrator', metrics: narrator.metrics },
-      { stage: 'Postprocess', metrics: postprocess.metrics },
-      ...(longRangeDirector ? [{ stage: 'LongRangeDirector', metrics: longRangeDirector.metrics }] : []),
     ],
   })
 
   return {
     finalText,
-    pipelineMode: 'narrator+postprocess',
+    pipelineMode: 'narrator+postprocess-queued',
     director: directorPlan,
     narrator: narrator.json,
-    postprocess: postprocessJson,
+    postprocess: null,
+    pendingPostprocess: {
+      storyId: input.storyId,
+      storyName: input.storyName,
+      playerInput,
+      finalText,
+      director: directorPlan,
+      recentTurns: input.recentTurns,
+      characters: input.characters,
+      statusSchema: input.statusSchema,
+      statusRoster: input.statusRoster,
+      statusState: input.statusState,
+      playerOptions,
+      longRangeOutline: directorPayload.longRangeOutline,
+      longRangeOutlineUpdatedTurn: directorPayload.longRangeOutlineUpdatedTurn,
+      playerFeedback: input.playerFeedback || '',
+      feedbackText: directorPayload.feedbackMemory,
+      directorStyle: input.directorStyle,
+      narratorStyle: input.narratorStyle,
+      storyContext: input.storyContext,
+      globalContext: input.globalContext,
+      turnIndex: directorPayload.turnIndex,
+      model: requestedModel,
+      temperature: 0.5,
+      createdAt: new Date().toISOString(),
+    },
     playerOptions,
-    turnSummary,
-    longRangeOutline: nextLongRangeOutline,
-    longRangeOutlineUpdatedTurn: nextLongRangeOutlineUpdatedTurn,
-    违背约束: feedback.违背约束,
-    存在重复: feedback.存在重复,
-    节奏不足: feedback.节奏不足,
-    导演推进不足: feedback.导演推进不足,
-    导演物理违背: feedback.导演物理违背,
-    statusSchema: nextStatusSchema,
-    statusRoster: nextStatusRoster,
-    statusState: nextStatusState,
     model: requestedModel,
     pipelineModels,
     speedRecordFile,
@@ -3440,8 +3360,6 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         model: defaultModel,
         pipelineModels: buildPipelineModels(),
-        promptProfile: activePromptProfile(),
-        promptProfiles,
         models: [
           { id: fireworksDeepSeekV4ProPriorityModel, label: 'DeepSeek V4 Pro | priority | Fireworks', provider: 'fireworks' },
           { id: fireworksKimiK2P5Model, label: 'Kimi K2.5 | Fireworks', provider: 'fireworks' },
@@ -3493,15 +3411,6 @@ const server = http.createServer(async (req, res) => {
         baseUrl: providerBaseUrl('deepseek'),
         hasApiKey: providerHasApiKey('deepseek'),
       })
-      return
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/prompt-profile') {
-      const body = await readBody(req)
-      const input = JSON.parse(body) as PromptProfileRequest
-      const promptProfile = normalizePromptProfile(input.promptProfile)
-      writeActivePromptProfile(promptProfile)
-      sendJson(res, 200, { ok: true, promptProfile, promptProfiles })
       return
     }
 

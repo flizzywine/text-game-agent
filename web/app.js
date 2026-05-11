@@ -29,8 +29,6 @@ const infronGrok43Model = 'x-ai/grok-4.3'
 const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'
 const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'
 const defaultModel = infronGrok43Model
-const defaultPromptProfile = '基准'
-const promptProfileOptions = new Set(['基准', '繁花'])
 const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, fireworksKimiK2P5Model, fireworksQwen3235BA22BModel, fireworksQwen36PlusModel, officialDeepSeekV4ProModel, officialDeepSeekV4FlashModel, infronDeepSeekV4ProModel, infronDeepSeekV4FlashModel, infronGemini31FlashLiteModel, infronGemini25FlashModel, infronGemini3FlashPreviewModel, infronKimiK25Model, infronQwen35EaricaModel, infronQwen36FlashModel, infronQwen36PlusModel, infronXiaomiMimo25Model, infronGlm47FlashxModel, infronGlm51Model, infronGrok43Model, googleAiStudioGemini31FlashLiteModel, cerebrasQwenModel])
 const providerOptions = ['deepseek', 'infron', 'fireworks', 'google-ai-studio', 'cerebras']
 const modelCatalog = [
@@ -67,12 +65,10 @@ let generationBusy = false
 let interceptionPromptSnapshot = null
 let persistController = null
 let activeStreamController = null
+let postprocessQueueRunning = false
 let pendingModelSelection = null
-let pendingPromptProfileSelection = null
 let config = {
   model: defaultModel,
-  promptProfile: defaultPromptProfile,
-  promptProfiles: [defaultPromptProfile, '基准'],
   baseUrl: 'https://api.deepseek.com',
   hasApiKey: false,
   providers: {
@@ -91,7 +87,6 @@ const els = {
   providerSelect: document.querySelector('#providerSelect'),
   modelSelect: document.querySelector('#modelSelect'),
   applyModelSelectionButton: document.querySelector('#applyModelSelectionButton'),
-  promptProfileSelect: document.querySelector('#promptProfileSelect'),
   infronReasoningSelect: document.querySelector('#infronReasoningSelect'),
   temperatureInput: document.querySelector('#temperatureInput'),
   apiKeyButton: document.querySelector('#apiKeyButton'),
@@ -183,6 +178,7 @@ async function init() {
   await loadServerState()
   applyLegacyMigrations()
   render()
+  processPostprocessQueue()
 }
 
 function defaultStory(name = '未选择故事') {
@@ -225,6 +221,7 @@ function defaultStory(name = '未选择故事') {
     statusState: {},
     globalContext: '',
     playerOptions: [],
+    postprocessQueue: [],
     model: readPreferredModelFromStorage(),
     lastTurnSnapshot: null,
     debug: {},
@@ -341,6 +338,7 @@ function normalizeStory(raw, fallbackName = '故事') {
     statusState: normalizeStatusState(raw?.statusState, normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []), Array.isArray(raw?.characters) ? raw.characters : [], normalizeStatusSchema(raw?.statusSchema)),
     globalContext,
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
+    postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.filter(item => item && typeof item === 'object') : [],
     model: normalizeModel(raw?.model || base.model),
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
     debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
@@ -729,8 +727,6 @@ async function fetchRuntimeConfig() {
 function normalizeRuntimeConfig(raw) {
   return {
     model: normalizeModel(raw?.model || defaultModel),
-    promptProfile: normalizePromptProfile(raw?.promptProfile || defaultPromptProfile),
-    promptProfiles: Array.isArray(raw?.promptProfiles) && raw.promptProfiles.length ? raw.promptProfiles.map(normalizePromptProfile) : [defaultPromptProfile, '基准'],
     pipelineModels: raw?.pipelineModels || {
       director: officialDeepSeekV4ProModel,
       longRangeDirector: officialDeepSeekV4ProModel,
@@ -765,11 +761,6 @@ function normalizeRuntimeConfig(raw) {
       },
     },
   }
-}
-
-function normalizePromptProfile(value) {
-  const normalized = String(value || '').trim()
-  return promptProfileOptions.has(normalized) ? normalized : defaultPromptProfile
 }
 
 function bindEvents() {
@@ -824,11 +815,6 @@ function bindEvents() {
 
   els.providerSelect.addEventListener('change', event => {
     pendingModelSelection = defaultModelForProvider(event.target.value)
-    renderModelManagementPage()
-  })
-
-  els.promptProfileSelect.addEventListener('change', event => {
-    pendingPromptProfileSelection = normalizePromptProfile(event.target.value)
     renderModelManagementPage()
   })
 
@@ -1860,7 +1846,7 @@ function renderConnection() {
   const keyState = hasRuntimeApiKey(provider) ? 'key ready' : `no ${providerLabel(provider)} key`
   const pipelineModels = pipelineModelsForSelection(model)
   const route = provider === 'infron' ? ' · sort=throughput' : ''
-  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 当前选择 ${modelLabel(model)} · ${providerLabel(provider)} · Prompt ${normalizePromptProfile(config.promptProfile)} · ${keyState}${route}`
+  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 当前选择 ${modelLabel(model)} · ${providerLabel(provider)} · ${keyState}${route}`
   renderPipelineModelGrid(model, pipelineModels)
   renderTurnStatus()
 }
@@ -2089,7 +2075,7 @@ async function openPromptPreview() {
 
 function renderPromptPreview(payload) {
   const prompts = Array.isArray(payload.prompts) ? payload.prompts : []
-  els.promptPreviewStatus.textContent = `Prompt 版本：${payload.promptProfile || config.promptProfile}；模型：${modelLabel(payload.model || state.model)}；共 ${prompts.length} 个任务。`
+  els.promptPreviewStatus.textContent = `模型：${modelLabel(payload.model || state.model)}；共 ${prompts.length} 个任务。`
   els.promptPreviewList.innerHTML = prompts.map(item => `
     <section class="prompt-preview-item">
       <div class="prompt-preview-title">
@@ -2280,29 +2266,22 @@ function selectedModelForManagement() {
   return normalizeModel(pendingModelSelection || getActiveModel())
 }
 
-function selectedPromptProfileForManagement() {
-  return normalizePromptProfile(pendingPromptProfileSelection || config.promptProfile)
-}
-
 function selectedProviderForManagement() {
   return providerForModel(selectedModelForManagement())
 }
 
 async function applyModelSelection() {
   const model = selectedModelForManagement()
-  const promptProfile = selectedPromptProfileForManagement()
   setPreferredModel(model)
   els.applyModelSelectionButton.disabled = true
-  els.modelManagementStatus.textContent = `正在保存：${modelLabel(model)} · Prompt ${promptProfile}`
+  els.modelManagementStatus.textContent = `正在保存：${modelLabel(model)}`
   els.modelManagementStatus.dataset.tone = ''
   try {
-    await savePromptProfile(promptProfile)
     pendingModelSelection = null
-    pendingPromptProfileSelection = null
     saveState()
     renderModelManagementPage()
     renderConnection()
-    els.modelManagementStatus.textContent = `已应用：${modelLabel(model)} · Prompt ${config.promptProfile}`
+    els.modelManagementStatus.textContent = `已应用：${modelLabel(model)}`
     els.modelManagementStatus.dataset.tone = 'done'
   } catch (error) {
     els.modelManagementStatus.textContent = error.message
@@ -2323,13 +2302,9 @@ function renderModelManagementPage() {
   const model = selectedModelForManagement()
   const provider = selectedProviderForManagement()
   const appliedModel = getActiveModel()
-  const promptProfile = selectedPromptProfileForManagement()
-  const appliedPromptProfile = normalizePromptProfile(config.promptProfile)
   els.providerSelect.value = provider
   els.modelSelect.innerHTML = modelsForProvider(provider).map(item => `<option value="${escapeAttr(item.id)}">${escapeHtml(modelLabel(item.id))}</option>`).join('')
   els.modelSelect.value = model
-  els.promptProfileSelect.innerHTML = config.promptProfiles.map(profile => `<option value="${escapeAttr(profile)}">${escapeHtml(profile)}</option>`).join('')
-  els.promptProfileSelect.value = promptProfile
   els.infronReasoningSelect.value = getInfronReasoningEffort()
   els.infronReasoningSelect.disabled = provider !== 'infron'
   const helpByProvider = {
@@ -2346,26 +2321,12 @@ function renderModelManagementPage() {
   document.querySelectorAll('[data-provider-model]').forEach(button => {
     button.classList.toggle('selected', providerForModel(button.dataset.providerModel) === provider)
   })
-  const hasPendingChange = model !== appliedModel || promptProfile !== appliedPromptProfile
+  const hasPendingChange = model !== appliedModel
   els.applyModelSelectionButton.disabled = !hasPendingChange
   const reasoningLabel = provider === 'infron' ? ` · reasoning ${getInfronReasoningEffort() || 'default'}` : ''
   const pendingLabel = hasPendingChange ? '待确定' : '已应用'
-  els.modelManagementStatus.textContent = `${providerLabel(provider)} · ${modelLabel(model)} · ${pendingLabel} · Prompt ${promptProfile}${reasoningLabel} · ${hasRuntimeApiKey(provider) ? 'Key ready' : 'No key'}`
+  els.modelManagementStatus.textContent = `${providerLabel(provider)} · ${modelLabel(model)} · ${pendingLabel}${reasoningLabel} · ${hasRuntimeApiKey(provider) ? 'Key ready' : 'No key'}`
   els.modelManagementStatus.dataset.tone = ''
-}
-
-async function savePromptProfile(promptProfile) {
-  const normalizedPromptProfile = normalizePromptProfile(promptProfile)
-  const response = await fetch('/api/prompt-profile', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ promptProfile: normalizedPromptProfile }),
-  })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok || !payload.ok) throw new Error(payload.error || 'Prompt 版本切换失败')
-  config.promptProfile = normalizePromptProfile(payload.promptProfile)
-  config.promptProfiles = Array.isArray(payload.promptProfiles) ? payload.promptProfiles.map(normalizePromptProfile) : config.promptProfiles
-  interceptionPromptSnapshot = null
 }
 
 function renderStatusPanel() {
@@ -2561,11 +2522,8 @@ function renderOptions() {
 
 function renderRegenerateButton() {
   const hasSnapshot = Boolean(getRegenerationSnapshot())
-  const pending = Boolean(getPendingPostprocess())
-  els.regenerateButton.disabled = generationBusy || pending || !hasSnapshot
-  els.regenerateButton.title = pending
-    ? '先继续未完成阶段，避免丢失上一轮状态。'
-    : hasSnapshot
+  els.regenerateButton.disabled = generationBusy || !hasSnapshot
+  els.regenerateButton.title = hasSnapshot
     ? '删除上次 AI 回复，恢复本轮前状态，并用当前模型重新生成'
     : '发送一轮后才能重新生成'
 }
@@ -2595,6 +2553,27 @@ function nextAssistantTurnIndex() {
 
 function completedAssistantTurnCount() {
   return state.messages.filter(message => message.role === 'assistant').length
+}
+
+function normalizePostprocessJob(value) {
+  if (!value || typeof value !== 'object') return null
+  const playerInput = String(value.playerInput || '').trim()
+  const finalText = String(value.finalText || '').trim()
+  if (!playerInput || !finalText) return null
+  return {
+    ...deepClone(value),
+    id: String(value.id || makeId('postprocess-job')),
+    status: ['queued', 'running', 'error'].includes(value.status) ? value.status : 'queued',
+    createdAt: String(value.createdAt || new Date().toISOString()),
+    updatedAt: String(value.updatedAt || new Date().toISOString()),
+  }
+}
+
+function enqueuePostprocessJob(job) {
+  const normalized = normalizePostprocessJob(job)
+  if (!normalized) return
+  state.postprocessQueue = Array.isArray(state.postprocessQueue) ? state.postprocessQueue : []
+  if (!state.postprocessQueue.some(item => item.id === normalized.id)) state.postprocessQueue.push(normalized)
 }
 
 async function submitTurn() {
@@ -2676,6 +2655,8 @@ function rollbackUnfinishedTurn() {
 }
 
 function getPendingPostprocess() {
+  const queuedError = Array.isArray(state.postprocessQueue) ? state.postprocessQueue.find(item => item?.status === 'error') : null
+  if (queuedError) return queuedError
   const pending = state.debug?.pendingPostprocess
   if (!state.debug?.postprocessPending) return null
   if (!pending || typeof pending !== 'object') return buildPendingPostprocessFromState()
@@ -2748,6 +2729,7 @@ async function retryPendingPostprocess(pending) {
         apiKey: getPipelineApiKey(),
         apiKeys: getPipelineApiKeys(),
         model: getActiveModel(),
+        reasoningEffort: getRequestReasoningEffort(),
       }),
     })
     if (!response.ok) {
@@ -2765,6 +2747,7 @@ async function retryPendingPostprocess(pending) {
     state.debug.postprocessRecoveryBase = null
     state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
     state.debug.postprocess = payload.postprocess
+    if (pending.id) state.postprocessQueue = (state.postprocessQueue || []).filter(item => item.id !== pending.id)
     setPreferredModel(payload.model || getActiveModel())
     applyPostprocess(payload)
     persistPostprocessResult()
@@ -2774,11 +2757,79 @@ async function retryPendingPostprocess(pending) {
     state.debug.postprocessPending = true
     state.debug.error = error.message
     state.debug.note = 'Postprocess 仍未完成。可再次点击“继续未完成”。'
+    if (pending.id) {
+      const queued = (state.postprocessQueue || []).find(item => item.id === pending.id)
+      if (queued) {
+        queued.status = 'error'
+        queued.error = error.message
+        queued.updatedAt = new Date().toISOString()
+      }
+    }
     persistAndRender()
   } finally {
     const shouldClearBusy = activeStreamController === streamController || !activeStreamController
     finishActiveStream(streamController)
     if (shouldClearBusy) setBusy(false)
+  }
+}
+
+async function processPostprocessQueue() {
+  if (postprocessQueueRunning) return
+  state.postprocessQueue = Array.isArray(state.postprocessQueue) ? state.postprocessQueue : []
+  const job = state.postprocessQueue.find(item => item?.status === 'queued' || item?.status === 'error')
+  if (!job) return
+  postprocessQueueRunning = true
+  job.status = 'running'
+  job.updatedAt = new Date().toISOString()
+  state.debug = {
+    ...(state.debug || {}),
+    postprocessPending: false,
+    pendingPostprocess: null,
+    note: 'Postprocess 队列正在后台更新总结、状态和负反馈；不阻塞下一轮输入。',
+  }
+  saveState()
+  renderPostprocessSideEffects()
+
+  try {
+    const response = await fetch('/api/postprocess-stream', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...job,
+        apiKey: getPipelineApiKey(),
+        apiKeys: getPipelineApiKeys(),
+        model: getActiveModel(),
+        reasoningEffort: getRequestReasoningEffort(),
+      }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      throw new Error(payload.error || 'Postprocess 队列任务失败')
+    }
+    const payload = await readNdjsonStream(response, handlePipelineEvent)
+    if (!payload) throw new Error('Postprocess 队列任务失败：没有收到最终结果。')
+    state.postprocessQueue = state.postprocessQueue.filter(item => item.id !== job.id)
+    state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
+    state.debug.postprocess = payload.postprocess
+    state.debug.postprocessPending = false
+    state.debug.pendingPostprocess = null
+    state.debug.note = 'Postprocess 队列已完成一个任务。'
+    setPreferredModel(payload.model || getActiveModel())
+    applyPostprocess(payload)
+    persistPostprocessResult()
+  } catch (error) {
+    job.status = 'error'
+    job.error = error.message
+    job.updatedAt = new Date().toISOString()
+    state.debug.postprocessPending = true
+    state.debug.pendingPostprocess = job
+    state.debug.note = 'Postprocess 队列任务失败；可点击“继续未完成”重试，不影响继续游戏。'
+    state.debug.error = error.message
+    saveState()
+    renderPostprocessSideEffects()
+  } finally {
+    postprocessQueueRunning = false
+    if (state.postprocessQueue?.some(item => item?.status === 'queued')) processPostprocessQueue()
   }
 }
 
@@ -2794,12 +2845,12 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
   state.debug = {
     status: modeLabel,
     startedAt,
-    pipelineMode: 'narrator+postprocess',
+    pipelineMode: 'narrator+postprocess-queued',
     note: modeLabel === 'regenerating'
       ? '正在回滚并重新生成本次对话；会使用当前模型和配置完整重跑。'
       : modeLabel === 'continuing'
         ? '继续未完成：按当前状态重新执行未完成流程。'
-        : 'Narrator 正文会直接显示；Postprocess 继续后台更新状态，完成前不能发送下一轮。',
+        : 'Narrator 正文会直接显示；Postprocess 进入独立队列，不阻塞下一轮输入。',
     visibleTextShown: false,
     postprocessPending: false,
     progress: [],
@@ -2844,10 +2895,12 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     state.debug.pipelineMode = payload.pipelineMode
     state.debug.director = payload.director
     state.debug.narrator = payload.narrator
-    state.debug.postprocess = payload.postprocess
+    state.debug.postprocess = null
     setPreferredModel(payload.model || requestModel)
-    applyPostprocess(payload)
-    persistPostprocessResult()
+    enqueuePostprocessJob(payload.pendingPostprocess)
+    saveState()
+    render()
+    processPostprocessQueue()
   } catch (error) {
     if (streamController.signal.aborted) return
     state.debug.status = 'error'
@@ -3115,16 +3168,11 @@ function applyVisibleTextEvent(event) {
   }
 
   state.debug.visibleTextShown = true
-  state.debug.postprocessPending = true
-  state.debug.pendingPostprocess = {
-    ...(state.debug.postprocessRecoveryBase || {}),
-    finalText,
-    director: state.debug.director || {},
-    createdAt: new Date().toISOString(),
-  }
-  state.debug.status = '状态更新中'
+  state.debug.postprocessPending = false
+  state.debug.pendingPostprocess = null
+  state.debug.status = '生成中'
   state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
-  state.debug.note = '正文已显示；Postprocess 正在后台更新状态，完成前不能发送下一轮。'
+  state.debug.note = '正文已显示；Postprocess 会进入独立队列，不阻塞下一轮输入。'
 
   renderConversation({ scrollTarget: 'latest-assistant-start' })
   renderOptions()
@@ -3133,8 +3181,8 @@ function applyVisibleTextEvent(event) {
   renderRetryStageButton()
   renderRollbackTurnButton()
   renderRegenerateButton()
-  els.sendButton.textContent = '状态更新中'
-  els.regenerateButton.textContent = '状态更新中'
+  els.sendButton.textContent = '发送'
+  els.regenerateButton.textContent = '重新生成本次对话'
 }
 
 function applyPostprocess(payload) {
@@ -3212,17 +3260,17 @@ function setBusy(isBusy) {
   const postprocessPending = Boolean(getPendingPostprocess())
   const canContinueGeneration = state.debug?.status === 'error' && Boolean(getRegenerationSnapshot())
   const canRollback = Boolean(normalizeTurnSnapshot(state.lastTurnSnapshot))
-  els.sendButton.disabled = isBusy || postprocessPending
+  els.sendButton.disabled = isBusy
   els.retryStageButton.disabled = isBusy || (!postprocessPending && !canContinueGeneration)
   els.rollbackTurnButton.disabled = isBusy || !canRollback
-  els.regenerateButton.disabled = isBusy || postprocessPending || !getRegenerationSnapshot()
+  els.regenerateButton.disabled = isBusy || !getRegenerationSnapshot()
   els.sendButton.textContent = isBusy
-    ? (postprocessPending ? '状态更新中' : '生成中')
-    : postprocessPending ? '等待状态更新' : '发送'
+    ? '生成中'
+    : '发送'
   els.retryStageButton.textContent = isBusy && postprocessPending ? '继续中' : '继续未完成'
   els.rollbackTurnButton.textContent = '回退上一轮'
   els.regenerateButton.textContent = isBusy
-    ? (postprocessPending ? '状态更新中' : '生成中')
+    ? '生成中'
     : '重新生成本次对话'
   renderTurnStatus()
 }

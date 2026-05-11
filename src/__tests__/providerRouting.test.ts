@@ -227,9 +227,8 @@ describe('provider routing', () => {
     expect(source).toContain('generationMs = Math.max(1, result.metrics.durationMs - (result.metrics.ttftMs || 0))')
     expect(source).toContain('appendSpeedTestRecord({')
     expect(source).toContain('recordFile: path.relative(rootDir, speedTestRecordFile)')
-    expect(source).toContain("const defaultPromptProfile = '基准'")
-    expect(source).toContain("url.pathname === '/api/prompt-profile'")
-    expect(source).toContain('writeActivePromptProfile(promptProfile)')
+    expect(source).not.toContain("url.pathname === '/api/prompt-profile'")
+    expect(source).not.toContain('writeActivePromptProfile')
   })
 
   it('writes per-game pipeline speed records beside saves', () => {

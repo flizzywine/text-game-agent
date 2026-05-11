@@ -9,10 +9,10 @@
 ## 当前流水线
 
 ```text
-Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Director -> Narrator -> Postprocess
+Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Director -> Narrator -> 返回正文
                                                                ^                         |
                                                                |                         v
-                          LongRangeDirector -> 剧情目标 --------+---- feedbackMemory <----+
+                          LongRangeDirector -> 剧情目标 --------+---- PostprocessQueue -> feedbackMemory / 状态 / 总结
 ```
 
 - Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
@@ -20,9 +20,9 @@ Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Dire
 - 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director、Narrator、Postprocess；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复，Postprocess 只用于理解上下文，不能并入本轮总结。
 - 闭环反馈：Postprocess 只产生拆分后的负反馈，程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。
 - 玩家负反馈：玩家手动维护的持久控制信号，广播给 Director、Narrator、Postprocess、LongRangeDirector；玩家清空输入框才删除，不写入 `feedbackMemory`。
-- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。`goalStep` 是本轮向剧情目标靠近的显式桥，`beat1/2/3/ending` 是具体执行骨架。
+- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。`goalStep` 是本轮向剧情目标靠近的显式桥，`beat1/beat2/beat3/ending` 是具体执行骨架。
 - Narrator：按导演计划写玩家可见正文；不更新状态。
-- Postprocess：正文显示后运行，只更新事实总结、人物状态补丁、负反馈和剧情目标状态；不改正文，不生成玩家候选项。
+- Postprocess：正文显示后进入独立队列，只更新事实总结、人物状态补丁、负反馈和剧情目标状态；不阻塞下一轮输入，不改正文，不生成玩家候选项。
 - LongRangeDirector：只生成或修订当前剧情目标；剧情目标是 Director 的上层方向输入，用来控制多轮推进，不直接写正文。
 - 剧情目标年龄：程序记录 `longRangeOutlineUpdatedTurn`。同一剧情目标持续 8 轮后小概率触发 LongRangeDirector，15 轮后提高概率，20 轮硬触发；触发后生成或修订更具体的当前剧情目标，以免粗目标长期不变。
 
@@ -71,6 +71,42 @@ LongRangeDirector -> Director -> Narrator -> Critic -> Revision -> Memory
 
 当前暂时不做；只把它作为速度提升后的下一阶段架构目标。
 
+总结异步化已经落地为 PostprocessQueue。正文生成完成后立即返回给玩家，同时把本轮正文放入后台总结队列：
+
+```text
+主链路：玩家输入 -> Director -> Narrator -> 返回正文
+后台链路：TurnSummaryQueue -> Memory -> 更新长期总结/人物状态/剧情目标触发信号
+```
+
+- 最近正文作为热记忆同步保存，继续提供给下一轮 Director 和 Narrator。
+- 长期总结和人物状态作为冷记忆异步更新，允许滞后一轮或几轮。
+- Summary 失败只停在队列里等待重试，不阻塞玩家继续游戏。
+- 每轮完成后入队一个 summary job；后台按顺序消费，避免旧总结覆盖新状态。
+- 负反馈是否同步另行判断；总结天然适合异步化。
+
+导演粒度粗化是未来实验，不直接写进当前 prompt。目标是减少无意义的小选择：要求每轮至少产生一个比较明显的局面变化或信息状态变化，并允许 Director 代劳玩家的合理连续行动，直到产生新变化再停。但这次直接写入 Director / Narrator 后质量下降，后续要用更小范围 A/B 测试，不要一次性替换当前稳定 prompt。
+
+滚动剧情链也是未来实验，暂时不做。思路是把 `goalStep` 改名为 `currentStep`，并新增持久 `stepChains`：
+
+```json
+{
+  "currentStep": "本轮要执行的剧情链第一步",
+  "stepChains": [
+    "未来第 1 个剧情推进点",
+    "未来第 2 个剧情推进点",
+    "未来第 3 个剧情推进点"
+  ]
+}
+```
+
+- `stepChains` 长期保存，每轮重新回灌给 Director。
+- Director 每轮取链路第一条作为 `currentStep`，再输出 beat 骨架给 Narrator。
+- 本轮结束后，Director 可根据最近正文新增、删除、重排或修改 `stepChains`，保持 3-5 条短链。
+- 目标是让低级导演不只看抽象剧情目标，而是维护一条可滚动的剧情链路。
+- 如果滚动剧情链验证稳定，可以删除 LongRangeDirector 和剧情目标体系：不再维护 `longRangeOutline`、`longRangeStatus`、`longRangeOutlineUpdatedTurn`，不再保留 8/15/20 轮刷新逻辑，也不再需要 `high-level-director.md`。
+- 前提是 `stepChains` 能承担中期方向，而不只是短动作列表；它必须同时解决目标漂移、重复推进和局面过碎的问题。
+- 风险是变成大纲奴役、降低临场感；后续必须小范围实验，不要直接替换当前稳定结构。
+
 ## Prompt 规则
 
 Prompt 文件直接在 `prompts/` 上层：
@@ -95,7 +131,7 @@ Prompt 文件直接在 `prompts/` 上层：
 
 输入变量用 `{{变量名}}`。变量顺序按稳定性排序：越稳定、越不需要每轮重新理解的内容越靠前；当前玩家输入和最终正文靠后。Postprocess 必须接收世界观，因为合理性判断依赖世界观。
 
-当前默认 Prompt profile 是 `基准`。`繁花` 保留为可切换版本和对照实验，不再作为默认策略。
+运行时只维护根目录 `prompts/*.md` 这一份 prompt。不要恢复 `基准` / `繁花` profile 目录、`active-profile.txt`、prompt 版本切换 API 或前端选择器。
 
 所有实际 LLM 请求都不发送 `system` role。Prompt 模板中的 `# System Message` 段会并入同一条 `user` 消息，避免不同 profile 在 role 层面产生不可控差异。
 
@@ -105,7 +141,7 @@ Prompt 文件直接在 `prompts/` 上层：
 
 - 速度足够快，能支撑多层流水线和后续修订轮。DeepSeek速度太慢，让体验极差。
 - 能力足够强，能执行 Director / Narrator / Postprocess 的复杂上下文任务。如GPT-120b-oss，能力不足以理解任务指令。
-- 内容通过率最好；在基准 prompt 下也能稳定工作，不需要依赖繁花 prompt 做规避。其他模型即使做了prompt来绕过，仍然不稳定。
+- 内容通过率最好；在当前 prompt 下也能稳定工作，不需要依赖 prompt 术语壳做规避。其他模型即使做了 prompt 来绕过，仍然不稳定。
 
 其他模型保留在模型管理和测试列表里，只作为连通性、速度和内容拦截对照，不作为默认推荐。不要因为单次成功就把默认模型切回 Gemini、DeepSeek、MiMo、Qwen 或 GLM；必须先用速度记录和内容拦截记录验证。
 
@@ -113,9 +149,9 @@ Prompt 文件直接在 `prompts/` 上层：
 
 ## 内容过滤规避经验
 
-旧经验：Gemini TPS 高，但内容过滤强；繁花 prompt 可以通过语义改写降低触发概率，但并不稳定。
+旧经验：Gemini TPS 高，但内容过滤强；繁花式 prompt 可以通过语义改写降低触发概率，但并不稳定。
 
-当前结论：Grok 4.3 + 基准 prompt 更均衡。除非重新实测，不要恢复“把繁花 hard rule 放入 system”或“弱 system + 强 user”的旧规避方案。当前统一 user-only 输入，减少 role 差异带来的排查成本。
+当前结论：Grok 4.3 + 单一 prompt 更均衡。除非重新实测，不要恢复“把繁花 hard rule 放入 system”或“弱 system + 强 user”的旧规避方案。当前统一 user-only 输入，减少 role 差异带来的排查成本。
 
 ## 不要恢复
 
@@ -154,6 +190,15 @@ npm run web
 ```text
 http://127.0.0.1:4173
 ```
+
+重启服务时不要用一次性后台命令，例如 `nohup npm run web ... &` 后立刻退出 shell；在当前 Codex 环境里它可能打印了启动地址但进程马上消失，导致浏览器打不开。正确做法是用保持运行的前台会话启动 `npm run web`，再验证：
+
+```bash
+lsof -nP -iTCP:4173 -sTCP:LISTEN
+curl --max-time 5 -s -o /tmp/text-game-agent-index.html -w '%{http_code}\n' http://127.0.0.1:4173/
+```
+
+只有同时看到端口监听和 `200`，才算重启成功。
 
 默认模型是 Infron `google/gemini-3.1-flash-lite`。网页右上角可配置 API Key，保存在当前浏览器本地；也可用环境变量。
 
