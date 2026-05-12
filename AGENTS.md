@@ -9,24 +9,30 @@
 ## 当前流水线
 
 ```text
-Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Director -> Narrator -> 返回正文
-                                                               ^                         |
-                                                               |                         v
-                          LongRangeDirector -> 剧情目标 --------+---- PostprocessQueue -> feedbackMemory / 状态 / 总结
+Initializer -> 初始剧情目标 / 人物状态 / 世界观
+
+主链路：玩家输入 + 最近正文 + 当前状态 + 剧情目标 + 上轮反重复提醒 + 上轮物理约束 -> Director -> Narrator -> 返回正文
+                                                                                              |
+                                                                                              v
+后台链路：PostprocessQueue -> 本轮总结 / 人物状态补丁 / 反重复提醒 / 新剧情方向骨架
 ```
 
 - Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
 - 用户输入：每轮玩家自由输入，是 Director 和 Narrator 的当前触发点。
 - 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director、Narrator、Postprocess；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复，Postprocess 只用于理解上下文，不能并入本轮总结。
-- 闭环反馈：Postprocess 只产生拆分后的负反馈，程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。
-- 玩家负反馈：玩家手动维护的持久控制信号，广播给 Director、Narrator、Postprocess、LongRangeDirector；玩家清空输入框才删除，不写入 `feedbackMemory`。
+- 上轮反重复提醒：Postprocess 只产生少量下一轮参考，程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator；它不是当轮修订闭环。
+- 上轮物理约束：Director 每轮接收上一轮 `physicalConstraints`，继承仍成立的纯物理限制，输出本轮新的 `physicalConstraints` 供下一轮使用。
+- 玩家负反馈：玩家手动维护的持久提醒，广播给 Director、Narrator、Postprocess；玩家清空输入框才删除，不写入 `feedbackMemory`。
 - Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。`goalStep` 是本轮向剧情目标靠近的显式桥，`beat1/beat2/beat3/ending` 是具体执行骨架。
 - Narrator：按导演计划写玩家可见正文；不更新状态。
-- Postprocess：正文显示后进入独立队列，只更新事实总结、人物状态补丁、负反馈和剧情目标状态；不阻塞下一轮输入，不改正文，不生成玩家候选项。
-- LongRangeDirector：只生成或修订当前剧情目标；剧情目标是 Director 的上层方向输入，用来控制多轮推进，不直接写正文。
-- 剧情目标年龄：程序记录 `longRangeOutlineUpdatedTurn`。同一剧情目标持续 8 轮后小概率触发 LongRangeDirector，15 轮后提高概率，20 轮硬触发；触发后生成或修订更具体的当前剧情目标，以免粗目标长期不变。
+- Postprocess：正文显示后进入独立队列，只更新本轮事实总结、人物状态补丁、反重复提醒和 `plotGoal`；不阻塞下一轮输入，不改正文，不生成玩家候选项。
+- 剧情目标：Initializer 生成初始 `plotGoal`。`plotGoal` 不是 if/else 变量，而是连接短期正文和未来几轮方向的骨架；Postprocess 每轮都可以根据正文和当前局面沿用、微调或替换，重点是承前启后，不是判断完成状态。
 
 ## 当前状态设计
+
+长期变量不是程序状态机，也不是 if/else 变量，而是记忆种子和承前启后的骨架。它的作用是让文本流保留前因、接住后果、维持方向，连接短期正文和长期走势；不是让 LLM 像执行代码一样精确服从规则。不要用长期变量管理世界，只用它给下一轮生成提供必要锚点。
+
+程序不是 LLM 的 harness 或 controller，而是 backbone。程序只收集 LLM 的输出，压缩必要部分，再回灌给后续轮次；目标是让文本前后连续、一致、有承接，不是控制 LLM 精确服从。
 
 人物状态只保留三块：
 
@@ -46,66 +52,63 @@ Initializer -> 用户输入 + 当前状态 + 闭环反馈 + 剧情目标 -> Dire
 - 前端人物状态栏直接显示 JSON，不格式化成卡片。
 - 不恢复 `statusPanel`、`statusPanelSchema`、`statusSubject`。
 
-## 负反馈设计
+## 反重复提醒设计
 
-Postprocess 输出拆分反馈：
+Postprocess 只保留一个反重复提醒字段：
 
-- `违背约束`
 - `存在重复`
-- `节奏不足`
-- `导演推进不足`
-- `导演物理违背`
 
-程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。不要恢复合并版 `qualityFeedback` 状态字段。
+`存在重复` 同时承担反复用词和禁用词命中的提醒。程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。不要恢复合并版 `qualityFeedback` 状态字段，也不要恢复 `违背约束`、`节奏不足`、`导演推进不足`、`导演物理违背` 等反馈字段。
 
-未来目标：把负反馈和修订做成每轮必做。当前 Postprocess 同时承担总结归纳、状态维护、负反馈输出，是慢模型下为了压缩调用次数的妥协。模型速度足够快后，拆成更清楚的流水线：
+当前结论：大多数负反馈约束作用很小。约束不住时无效，约束住时会削弱文本灵动感。没有修订轮时，反重复提醒不能立刻改变已经输出的正文；如果要当轮生效，需要额外 Critic + Revision 调用，时间成本暂时不接受。主要连贯性依赖世界观、人物状态、人物性格、最近正文、长期总结和物理约束。只保留 `存在重复`，因为反重复和禁用词提醒成本低、方向清楚。
+
+未来目标：模型速度足够快后，再把质量检查和修订做成每轮必做。当前 Postprocess 同时承担总结归纳、状态维护、反重复提醒输出，是为了压缩调用次数的妥协。更清楚的未来流水线：
 
 ```text
-LongRangeDirector -> Director -> Narrator -> Critic -> Revision -> Memory
+Director -> Narrator -> Critic -> Revision -> Memory
 ```
 
-- `Critic`：只检查质量，输出可执行负反馈；重点看导演是否推进剧情目标、叙事是否违反物理约束或世界状态、是否重复、太短、太水、文风漂移。
-- `Revision`：每轮默认运行，立即吸收 `Critic` 的负反馈，只修正文，不更新状态。
-- `Memory`：只负责长期总结、人物状态补丁、剧情目标触发信号。
-- Postprocess 这个名字后续可以消失，或只保留为内部总称。
+- `Critic`：只检查质量，输出可执行质量提醒；重点看导演是否推进剧情目标、叙事是否违反物理约束或世界状态、是否重复、太短、太水、文风漂移。
+- `Revision`：每轮默认运行，立即吸收 `Critic` 的提醒，只修正文，不更新状态。
+- `Memory`：只负责长期总结、人物状态补丁、剧情方向骨架更新。
+- Postprocess 这个名字后续可以消失，或拆成 `Critic` / `Memory`。
 
 当前暂时不做；只把它作为速度提升后的下一阶段架构目标。
 
-总结异步化已经落地为 PostprocessQueue。正文生成完成后立即返回给玩家，同时把本轮正文放入后台总结队列：
+后处理异步化已经落地为 PostprocessQueue。正文生成完成后立即返回给玩家，同时把本轮正文放入后台队列：
 
 ```text
 主链路：玩家输入 -> Director -> Narrator -> 返回正文
-后台链路：TurnSummaryQueue -> Memory -> 更新长期总结/人物状态/剧情目标触发信号
+后台链路：PostprocessQueue -> 更新长期总结/人物状态/反重复提醒/剧情目标
 ```
 
 - 最近正文作为热记忆同步保存，继续提供给下一轮 Director 和 Narrator。
-- 长期总结和人物状态作为冷记忆异步更新，允许滞后一轮或几轮。
-- Summary 失败只停在队列里等待重试，不阻塞玩家继续游戏。
-- 每轮完成后入队一个 summary job；后台按顺序消费，避免旧总结覆盖新状态。
-- 负反馈是否同步另行判断；总结天然适合异步化。
+- 长期总结、人物状态、反重复提醒和剧情目标作为冷记忆异步更新，允许滞后一轮或几轮。
+- Postprocess 失败只停在队列里等待重试，不阻塞玩家继续游戏。
+- 每轮完成后入队一个 postprocess job；后台按顺序消费，避免旧总结覆盖新状态。
+- 反重复提醒异步后只影响下一轮；这是当前速度和质量之间的明确取舍。
 
 导演粒度粗化是未来实验，不直接写进当前 prompt。目标是减少无意义的小选择：要求每轮至少产生一个比较明显的局面变化或信息状态变化，并允许 Director 代劳玩家的合理连续行动，直到产生新变化再停。但这次直接写入 Director / Narrator 后质量下降，后续要用更小范围 A/B 测试，不要一次性替换当前稳定 prompt。
 
-滚动剧情链也是未来实验，暂时不做。思路是把 `goalStep` 改名为 `currentStep`，并新增持久 `stepChains`：
+世界书召回也是未来实验，暂时不做，因为当前还没有独立世界书模块。思路是让 Director 每轮只输出本轮相关实体名，程序负责检索世界书词条：
 
 ```json
 {
-  "currentStep": "本轮要执行的剧情链第一步",
-  "stepChains": [
-    "未来第 1 个剧情推进点",
-    "未来第 2 个剧情推进点",
-    "未来第 3 个剧情推进点"
-  ]
+  "entities": {
+    "characters": ["人物名"],
+    "items": ["道具名"],
+    "organizations": ["组织名"],
+    "worldTerms": ["世界观术语"]
+  }
 }
 ```
 
-- `stepChains` 长期保存，每轮重新回灌给 Director。
-- Director 每轮取链路第一条作为 `currentStep`，再输出 beat 骨架给 Narrator。
-- 本轮结束后，Director 可根据最近正文新增、删除、重排或修改 `stepChains`，保持 3-5 条短链。
-- 目标是让低级导演不只看抽象剧情目标，而是维护一条可滚动的剧情链路。
-- 如果滚动剧情链验证稳定，可以删除 LongRangeDirector 和剧情目标体系：不再维护 `longRangeOutline`、`longRangeStatus`、`longRangeOutlineUpdatedTurn`，不再保留 8/15/20 轮刷新逻辑，也不再需要 `high-level-director.md`。
-- 前提是 `stepChains` 能承担中期方向，而不只是短动作列表；它必须同时解决目标漂移、重复推进和局面过碎的问题。
-- 风险是变成大纲奴役、降低临场感；后续必须小范围实验，不要直接替换当前稳定结构。
+- Director 只负责提名实体，不解释实体，不生成词条内容。
+- 程序根据实体名精确匹配世界书、别名表或故事资料索引，命中后把短词条灌入 Narrator 和下一轮 Director。
+- 召回结果必须限量：实体每类 3-5 个，词条最多 5 条，每条短摘要，避免上下文膨胀。
+- 初版只做精确匹配和别名匹配，不急着做向量检索或语义搜索。
+- 目标是减少整段世界观常驻输入，让模型只拿到本轮真正相关的设定锚点，降低 OOC 和设定漂移。
+- 风险是 Director 提名漏实体、错实体，或世界书词条过长导致噪音回流；实现前先补世界书数据结构和索引规则。
 
 ## Prompt 规则
 
@@ -115,7 +118,6 @@ Prompt 文件直接在 `prompts/` 上层：
 - `director.md`
 - `narrator.md`
 - `postprocess.md`
-- `high-level-director.md`
 
 风格绑定在故事配置 JSON 里：
 
@@ -137,13 +139,15 @@ Prompt 文件直接在 `prompts/` 上层：
 
 ## 模型策略
 
-当前文游主力模型固定为 Infron 的 `x-ai/grok-4.3`，不是 xAI 官方接口。它在当前实测中同时满足三项要求：
+当前文游默认主模型固定为官方 DeepSeek `deepseek-v4-flash`。当前判断是：去掉/弱化后处理后，速度可接受，文字质量优于 Grok 4.3。
 
-- 速度足够快，能支撑多层流水线和后续修订轮。DeepSeek速度太慢，让体验极差。
-- 能力足够强，能执行 Director / Narrator / Postprocess 的复杂上下文任务。如GPT-120b-oss，能力不足以理解任务指令。
-- 内容通过率最好；在当前 prompt 下也能稳定工作，不需要依赖 prompt 术语壳做规避。其他模型即使做了 prompt 来绕过，仍然不稳定。
+- 速度不如 Grok/Gemini，但在当前流水线下不是不可接受。
+- 文字质量更好，更适合默认游玩。
+- Grok 4.3 保留为备用和测试对照。
 
-其他模型保留在模型管理和测试列表里，只作为连通性、速度和内容拦截对照，不作为默认推荐。不要因为单次成功就把默认模型切回 Gemini、DeepSeek、MiMo、Qwen 或 GLM；必须先用速度记录和内容拦截记录验证。
+模型管理只认一个“当前模型”。不要再恢复 Initializer / Director / Narrator / Postprocess 分层路由；用户在模型管理里保存哪个模型，整条流水线就都用哪个模型。全局流水线展示也必须显示这一点，不能暗中把 Director / Narrator / Initializer 切到 Pro。
+
+其他模型保留在模型管理和测试列表里，只作为连通性、速度和内容拦截对照，不作为默认推荐。后续切换默认模型必须看速度记录、内容拦截记录和实际文字质量，不要只凭单次成功切换。
 
 速度测试和内容拦截测试继续 append 到记录文件，作为后续换模型的依据，避免凭感觉切换模型。
 
@@ -151,7 +155,7 @@ Prompt 文件直接在 `prompts/` 上层：
 
 旧经验：Gemini TPS 高，但内容过滤强；繁花式 prompt 可以通过语义改写降低触发概率，但并不稳定。
 
-当前结论：Grok 4.3 + 单一 prompt 更均衡。除非重新实测，不要恢复“把繁花 hard rule 放入 system”或“弱 system + 强 user”的旧规避方案。当前统一 user-only 输入，减少 role 差异带来的排查成本。
+当前结论：DeepSeek v4 flash + 单一 prompt 是默认策略。除非重新实测，不要恢复“把繁花 hard rule 放入 system”或“弱 system + 强 user”的旧规避方案。当前统一 user-only 输入，减少 role 差异带来的排查成本。
 
 ## 不要恢复
 
@@ -200,7 +204,7 @@ curl --max-time 5 -s -o /tmp/text-game-agent-index.html -w '%{http_code}\n' http
 
 只有同时看到端口监听和 `200`，才算重启成功。
 
-默认模型是 Infron `google/gemini-3.1-flash-lite`。网页右上角可配置 API Key，保存在当前浏览器本地；也可用环境变量。
+默认模型是官方 DeepSeek `deepseek-v4-flash`。网页右上角可配置 API Key，保存在当前浏览器本地；也可用环境变量。
 
 ## 验证
 

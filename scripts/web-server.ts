@@ -46,8 +46,8 @@ interface PipelineContext {
   storyContext?: string
   playerFeedback?: string
   feedbackText?: string
-  longRangeOutline?: string
-  longRangeOutlineUpdatedTurn?: number
+  physicalConstraints?: unknown
+  plotGoal?: string
   directorStyle?: string
   narratorStyle?: string
   recentTurns?: ConversationItem[]
@@ -143,8 +143,8 @@ interface StoryProgramConfig {
   globalContextSeed: string
   currentSituation?: string
   outline?: string
-  longRangeOutline?: string
   plotLines?: unknown[]
+  plotGoal?: string
 }
 
 interface StoryAssetRecord {
@@ -234,9 +234,7 @@ const fireworksDeepSeekV4ProRequestModel = 'accounts/fireworks/models/deepseek-v
 const fireworksKimiK2P5Model = 'accounts/fireworks/models/kimi-k2p5'
 const fireworksQwen3235BA22BModel = 'accounts/fireworks/models/qwen3-235b-a22b'
 const fireworksQwen36PlusModel = 'accounts/fireworks/models/qwen3p6-plus'
-const defaultModel = infronGrok43Model
-const strongLayerModel = officialDeepSeekV4ProModel
-const simpleLayerModel = officialDeepSeekV4FlashModel
+const defaultModel = officialDeepSeekV4FlashModel
 const modelIds = new Set([
   officialDeepSeekV4ProModel,
   officialDeepSeekV4FlashModel,
@@ -266,10 +264,8 @@ const defaultInfronBaseUrl = 'https://llm.onerouter.pro/v1'
 const defaultCerebrasBaseUrl = 'https://api.cerebras.ai/v1'
 const defaultGoogleAiStudioBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/openai'
 const infronReasoningEfforts = new Set(['none', 'low', 'medium', 'high'])
-const infronReasoningHeavyModels = new Set([infronXiaomiMimo25Model])
 const infronReasoningMinMaxTokens = Number(process.env.INFRON_REASONING_MIN_MAX_TOKENS || 6000)
 const llmTimeoutMs = Number(process.env.DEEPSEEK_TIMEOUT_MS || 300_000)
-const longRangeDirectorTimeoutMs = Number(process.env.LONG_RANGE_DIRECTOR_TIMEOUT_MS || 45_000)
 const directorTimeoutMs = Number(process.env.DIRECTOR_TIMEOUT_MS || 300_000)
 const narratorTimeoutMs = Number(process.env.NARRATOR_TIMEOUT_MS || 120_000)
 const postprocessTimeoutMs = Number(process.env.POSTPROCESS_TIMEOUT_MS || 120_000)
@@ -278,8 +274,10 @@ const providerFetchRetryDelayMs = Number(process.env.LLM_FETCH_RETRY_DELAY_MS ||
 const providerConnectivityTimeoutMs = Number(process.env.PROVIDER_CONNECTIVITY_TIMEOUT_MS || 30_000)
 const providerSpeedTestTimeoutMs = Number(process.env.PROVIDER_SPEED_TEST_TIMEOUT_MS || 100_000)
 const defaultMaxTokens = Number(process.env.LLM_MAX_TOKENS || 8192)
+const initializerMaxTokens = Number(process.env.INITIALIZER_MAX_TOKENS || defaultMaxTokens)
 const directorMaxTokens = Number(process.env.DIRECTOR_MAX_TOKENS || 2000)
 const narratorMaxTokens = Number(process.env.NARRATOR_MAX_TOKENS || 12000)
+const postprocessMaxTokens = Number(process.env.POSTPROCESS_MAX_TOKENS || defaultMaxTokens)
 const port = Number(process.env.PORT || 4173)
 const localEnv = readDotEnv(path.join(rootDir, '.env.local'))
 
@@ -308,16 +306,12 @@ function normalizeModel(value: unknown): string {
 }
 
 function buildPipelineModels(requestedModel = defaultModel): Record<string, string> {
-  const provider = providerForModel(normalizeModel(requestedModel))
   const selectedModel = normalizeModel(requestedModel)
-  const strongModel = provider === 'deepseek' ? strongLayerModel : selectedModel
-  const simpleModel = provider === 'deepseek' ? simpleLayerModel : selectedModel
   return {
-    director: strongModel,
-    longRangeDirector: strongModel,
-    narrator: strongModel,
-    postprocess: simpleModel,
-    initializer: strongModel,
+    director: selectedModel,
+    narrator: selectedModel,
+    postprocess: selectedModel,
+    initializer: selectedModel,
   }
 }
 
@@ -343,10 +337,6 @@ function isCerebrasModel(model: string): boolean {
 
 function isGoogleAiStudioModel(model: string): boolean {
   return model === googleAiStudioGemini31FlashLiteModel
-}
-
-function infronRequestModel(model: string): string {
-  return model
 }
 
 function fireworksRequestModel(model: string): string {
@@ -421,7 +411,7 @@ function applyInfronReasoning(body: Record<string, unknown>, effort: unknown): v
 
 function infronMaxTokensForModel(model: string, maxTokens: number, effort: unknown): number {
   const normalized = normalizeInfronReasoningEffort(effort)
-  if (infronReasoningHeavyModels.has(model) && normalized && normalized !== 'none' && maxTokens >= 1000) {
+  if (model === infronXiaomiMimo25Model && normalized && normalized !== 'none' && maxTokens >= 1000) {
     return Math.max(maxTokens, infronReasoningMinMaxTokens)
   }
   return maxTokens
@@ -705,7 +695,7 @@ function appendPipelineSpeedRecord(input: {
     `- 模式：${input.mode}`,
     `- 轮次：${Number.isFinite(input.turnIndex) ? input.turnIndex : '未知'}`,
     `- 选择模型：\`${input.requestedModel}\``,
-    `- 分级模型：\`${JSON.stringify(input.pipelineModels)}\``,
+    `- 流水线模型：\`${JSON.stringify(input.pipelineModels)}\``,
   ]
   if (input.playerInput?.trim()) {
     lines.push(`- 玩家输入：${input.playerInput.replace(/\s+/g, ' ').trim().slice(0, 120)}`)
@@ -1083,8 +1073,8 @@ function renderCharacters(characters: CharacterState[] = []): string {
   ].filter(Boolean).join('\n')).join('\n\n')
 }
 
-const requiredStatusSchema = ['性别', '身份', '外貌', '性格']
-const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '位置']
+const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '姿势']
+const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '姿势', '位置']
 
 function parseStatusSchemaFields(value: unknown): string[] {
   const items = Array.isArray(value)
@@ -1292,6 +1282,7 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
       { inputText: '我开口问道：“现在是什么情况？”' },
       { inputText: '我向前一步，试探性地接近当前互动对象。' },
     ],
+    plotGoal: '当前场景背后的具体阻力或误会被引出，人物关系出现可推进的裂口。',
     globalContextSeed: [
       `当前故事资料：${input.sourceName || '未命名故事'}`,
       worldview ? `世界观：${worldview.slice(0, 300)}` : '',
@@ -1345,7 +1336,7 @@ function updateStoryAssetProgramConfig(assetId: string, patch: Partial<StoryProg
       [],
       normalizeStatusSchema(patch.statusSchema ?? existing.statusSchema),
     ),
-    longRangeOutline: String(patch.longRangeOutline ?? existing.longRangeOutline ?? ''),
+    plotGoal: String(patch.plotGoal ?? existing.plotGoal ?? ''),
     initialPlayerOptions: Array.isArray(patch.initialPlayerOptions) ? patch.initialPlayerOptions : existing.initialPlayerOptions,
     globalContextSeed: String(patch.globalContextSeed ?? existing.globalContextSeed ?? ''),
   }
@@ -1382,7 +1373,7 @@ function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
     JSON.stringify(config.statusState, null, 2),
     '',
     '## 当前剧情目标',
-    config.longRangeOutline || '（无）',
+    config.plotGoal || '（无）',
     '',
     '## 导演风格',
     config.directorStyle || '（无）',
@@ -1423,8 +1414,8 @@ function normalizeProgramConfig(raw: Record<string, unknown>, fallback: StoryPro
     globalContextSeed: String(raw.globalContextSeed || fallback.globalContextSeed || ''),
     currentSituation: typeof raw.currentSituation === 'string' ? raw.currentSituation : undefined,
     outline: typeof raw.outline === 'string' ? raw.outline : undefined,
-    longRangeOutline: typeof raw.longRangeOutline === 'string' ? raw.longRangeOutline : '',
     plotLines: Array.isArray(raw.plotLines) ? raw.plotLines : undefined,
+    plotGoal: String(raw.plotGoal || fallback.plotGoal || ''),
   }
 }
 
@@ -1466,7 +1457,7 @@ async function initializeStory(
 
   try {
     emit({ type: 'stage_start', stage: 'initializer', label: 'Initializer', message: '初始化层：整理故事书，生成世界观、人物介绍、开场交互和人物状态 schema。' })
-    const result = await callModelWithPublicTrace('initializer', 'Initializer', promptMessages(initializerMessages.system, initializerMessages.user), { temperature: 0.4, apiKey: pipelineApiKeyForModel(input, model), model, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
+    const result = await callModelWithPublicTrace('initializer', 'Initializer', promptMessages(initializerMessages.system, initializerMessages.user), { temperature: 0.4, apiKey: pipelineApiKeyForModel(input, model), model, maxTokens: initializerMaxTokens, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
       '公开日志：正在读取故事书、人物卡和世界书，去掉重复噪音。',
       '公开日志：正在抽取世界观、人物介绍和固定设定。',
       '公开日志：正在写第一轮开场交互和 3 个玩家初始选项。',
@@ -1805,7 +1796,7 @@ async function requestInfronContent(
   const startedAt = Date.now()
 
   const body: Record<string, unknown> = {
-    model: infronRequestModel(model),
+    model,
     messages,
     temperature,
     max_tokens: infronMaxTokensForModel(model, maxTokens, reasoningEffort),
@@ -2279,7 +2270,7 @@ function buildStreamRequestInit(input: {
     body.max_tokens = input.maxTokens
     applyFireworksPriority(body, input.model)
   } else if (input.provider === 'infron') {
-    body.model = infronRequestModel(input.model)
+    body.model = input.model
     body.max_tokens = infronMaxTokensForModel(input.model, input.maxTokens, input.reasoningEffort)
     applyInfronReasoning(body, input.reasoningEffort)
     body.provider = { sort: 'throughput' }
@@ -2475,7 +2466,7 @@ function buildInterceptionNarratorPrompt(input: InterceptionPromptRequest): Reco
 
 function compactPromptPreviewPlan(input: InterceptionPromptRequest): Record<string, unknown> {
   if (!input.director || typeof input.director !== 'object' || !Object.keys(input.director).length) return {}
-  return compactDirectorPlan(input.director)
+  return compactDirectorPlan(input.director, { plotGoal: input.plotGoal })
 }
 
 function buildPromptPreview(input: InterceptionPromptRequest): Record<string, unknown> {
@@ -2508,17 +2499,6 @@ function buildPromptPreview(input: InterceptionPromptRequest): Record<string, un
     directorPlan,
     context: directorPayload.context,
     turnIndex: directorPayload.turnIndex,
-    longRangeOutline: directorPayload.longRangeOutline,
-  })
-  const longRangeMessages = buildLongRangeDirectorMessages({
-    storyContext: String(input.storyContext || '').trim(),
-    characterStatus: directorPayload.context.characterStatus,
-    globalContext: directorPayload.globalContext,
-    currentLongRangeOutline: directorPayload.longRangeOutline || '（无）',
-    longRangeStatus: '',
-    turnSummary: '',
-    playerFeedback: input.playerFeedback,
-    directorStyle: input.directorStyle,
   })
   const initializerMessages = renderPromptMessagePair('initializer.md', {
     storyMaterial: '（当前游戏运行中没有初始化原始材料；Initializer 真实输入只来自故事库导入的原始材料。）',
@@ -2532,7 +2512,6 @@ function buildPromptPreview(input: InterceptionPromptRequest): Record<string, un
       { task: 'Director', model: pipelineModels.director, system: directorPayload.directorSystem, user: directorPayload.directorUser },
       { task: 'Narrator', model: pipelineModels.narrator, system: narratorPayload.narratorSystem, user: narratorPayload.narratorUser },
       { task: 'Postprocess', model: pipelineModels.postprocess, system: postprocessPayload.postprocessSystem, user: postprocessPayload.postprocessUser },
-      { task: 'LongRangeDirector', model: pipelineModels.longRangeDirector, system: longRangeMessages.system, user: longRangeMessages.user },
     ].map(item => ({
       task: item.task,
       model: item.model,
@@ -2733,6 +2712,11 @@ function compactStringArray(value: unknown, maxItems = 3, maxLength = 80): strin
     .slice(0, maxItems)
 }
 
+function renderPhysicalConstraints(value: unknown): string {
+  const constraints = compactStringArray(value, 5, 100)
+  return constraints.length ? JSON.stringify(constraints) : '（无）'
+}
+
 function compactRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
@@ -2818,17 +2802,26 @@ function compactDirectorBeats(source: Record<string, unknown>): string[] {
   return arrayBeats.slice(0, 3).map(compactModuleBeat).filter(Boolean)
 }
 
-function compactDirectorPlan(value: unknown): Record<string, unknown> {
+function derivePlotFromBeats(beats: string[], ending: string): string {
+  const source = beats.find(Boolean) || ending
+  if (!source) return ''
+  const parts = source.split('｜').map(part => part.trim()).filter(Boolean)
+  return compactText(parts[1] || parts[0] || source, 120)
+}
+
+function compactDirectorPlan(value: unknown, fallback: { plotGoal?: unknown } = {}): Record<string, unknown> {
   const source = compactRecord(value)
   const beats = compactDirectorBeats(source)
+  const ending = compactEndingBeat(source.ending || source.endingBeat || source.exitWindow)
+  const derivedPlot = derivePlotFromBeats(beats, ending)
+  const goalStep = compactText(source.goalStep || derivedPlot || fallback.plotGoal, 160)
   return pruneEmpty({
-    goalStep: compactText(source.goalStep || source.longRangeStep || source.arcStep, 120),
+    goalStep,
     beat1: beats[0],
     beat2: beats[1],
     beat3: beats[2],
-    ending: compactEndingBeat(source.ending || source.endingBeat || source.exitWindow),
+    ending,
     physicalConstraints: compactStringArray(source.physicalConstraints, 3, 80),
-    playerOptions: normalizePlayerOptions(source.playerOptions || source.options || source.choices),
   }) as Record<string, unknown>
 }
 
@@ -2844,105 +2837,20 @@ function normalizeTurnSummary(value: unknown, finalText = ''): string {
 }
 
 function normalizeFeedbackBreakdown(value: Record<string, unknown>): Record<string, string> {
-  const constraintViolation = compactText(value.违背约束 || value.narrativeConstraintFeedback, 160)
   const repetitionIssue = compactText(value.存在重复 || value.narrativeRepetitionFeedback, 160)
-  const pacingIssue = compactText(value.节奏不足 || value.narrativePacingFeedback, 160)
-  const directorProgressIssue = compactText(value.导演推进不足 || value.directorProgressFeedback, 160)
-  const directorPhysicalViolation = compactText(value.导演物理违背 || value.directorPhysicalFeedback, 160)
   return {
-    违背约束: constraintViolation,
     存在重复: repetitionIssue,
-    节奏不足: pacingIssue,
-    导演推进不足: directorProgressIssue,
-    导演物理违背: directorPhysicalViolation,
   }
+}
+
+function resolvePlotGoalAfterPostprocess(currentGoal: unknown, postprocessJson: Record<string, unknown>): string {
+  const proposed = compactText(postprocessJson.plotGoal, 180)
+  if (proposed) return proposed
+  return compactText(currentGoal, 180)
 }
 
 function normalizePlayerFeedback(value: unknown): string {
   return compactText(value, 240)
-}
-
-const longRangeDirectorMaxAgeTurns = Number(process.env.LONG_RANGE_DIRECTOR_MAX_AGE_TURNS || 20)
-const longRangeDirectorSoftStartTurns = Number(process.env.LONG_RANGE_DIRECTOR_SOFT_START_TURNS || 8)
-const longRangeDirectorMediumStartTurns = Number(process.env.LONG_RANGE_DIRECTOR_MEDIUM_START_TURNS || 15)
-const longRangeDirectorSoftProbability = Number(process.env.LONG_RANGE_DIRECTOR_SOFT_PROBABILITY || 0.1)
-const longRangeDirectorMediumProbability = Number(process.env.LONG_RANGE_DIRECTOR_MEDIUM_PROBABILITY || 0.25)
-
-function normalizeLongRangeStatus(value: unknown, currentLongRangeOutline = ''): string {
-  const status = String(value || '').trim().toLowerCase()
-  if (!currentLongRangeOutline.trim()) return 'missing'
-  if (status === 'completed' || status === 'missing' || status === 'stale') return status
-  return 'keep'
-}
-
-function normalizeLongRangeOutlineUpdatedTurn(value: unknown): number {
-  const numeric = Number(value)
-  return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : 0
-}
-
-function longRangeOutlineAgeTurns(turnIndex: number, updatedTurn: number): number {
-  return Math.max(0, Math.floor(turnIndex) - Math.floor(updatedTurn))
-}
-
-function shouldForceLongRangeDirectorByAge(turnIndex: number, updatedTurn: number, currentLongRangeOutline = ''): boolean {
-  const age = longRangeOutlineAgeTurns(turnIndex, updatedTurn)
-  return Boolean(currentLongRangeOutline.trim()) && age >= longRangeDirectorMaxAgeTurns && age % longRangeDirectorMaxAgeTurns === 0
-}
-
-function longRangeDirectorProbabilityByAge(age: number): number {
-  if (age >= longRangeDirectorMaxAgeTurns) return 1
-  if (age >= longRangeDirectorMediumStartTurns) return longRangeDirectorMediumProbability
-  if (age >= longRangeDirectorSoftStartTurns) return longRangeDirectorSoftProbability
-  return 0
-}
-
-function longRangeDirectorTrigger(value: unknown, currentLongRangeOutline = '', turnIndex = 1, updatedTurn = 0, randomValue = Math.random()): { shouldRun: boolean; status: string; reason: string; age: number } {
-  const status = normalizeLongRangeStatus(value, currentLongRangeOutline)
-  const age = longRangeOutlineAgeTurns(turnIndex, updatedTurn)
-  if (status === 'missing' || status === 'completed' || status === 'stale') return { shouldRun: true, status, reason: status, age }
-  if (shouldForceLongRangeDirectorByAge(turnIndex, updatedTurn, currentLongRangeOutline)) return { shouldRun: true, status: 'stale', reason: 'age-hard-limit', age }
-  const probability = Boolean(currentLongRangeOutline.trim()) ? longRangeDirectorProbabilityByAge(age) : 0
-  if (probability > 0 && randomValue < probability) return { shouldRun: true, status: 'refresh', reason: `age-random-${probability}`, age }
-  return { shouldRun: false, status: 'keep', reason: 'keep', age }
-}
-
-function shouldRunLongRangeDirector(value: unknown, currentLongRangeOutline = '', turnIndex = 1, updatedTurn = 0): boolean {
-  return longRangeDirectorTrigger(value, currentLongRangeOutline, turnIndex, updatedTurn).shouldRun
-}
-
-function longRangeDirectorStatusForRun(value: unknown, currentLongRangeOutline: string, turnIndex: number, updatedTurn: number): string {
-  return longRangeDirectorTrigger(value, currentLongRangeOutline, turnIndex, updatedTurn).status
-}
-
-function normalizeLongRangeDirectorOutline(value: unknown, fallback = ''): string {
-  if (typeof value === 'string') return value.trim() || fallback
-  const record = compactRecord(value)
-  const direct = String(record.longRangeOutline || '').trim().slice(0, 1000)
-  if (direct) return direct
-  const rendered = renderLongArc(record.longArc || record.arc || record)
-  return rendered || fallback
-}
-
-function buildLongRangeDirectorMessages(input: {
-  storyContext: string
-  characterStatus: string
-  globalContext: string
-  currentLongRangeOutline: string
-  longRangeStatus: string
-  turnSummary: string
-  playerFeedback?: string
-  directorStyle?: string
-}): { system: string; user: string } {
-  return renderPromptMessagePair('high-level-director.md', {
-    currentLongRangeOutline: input.currentLongRangeOutline,
-    storyContext: input.storyContext,
-    characterStatus: input.characterStatus,
-    longRangeStatus: input.longRangeStatus,
-    globalContext: input.globalContext,
-    turnSummary: input.turnSummary,
-    playerFeedback: normalizePlayerFeedback(input.playerFeedback),
-    directorStyle: input.directorStyle || '',
-  })
 }
 
 function buildDirectorPromptPayload(input: GenerateRequest, temperature: number): {
@@ -2952,8 +2860,8 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
   globalContext: string
   feedbackMemory: string
   playerFeedback: string
-  longRangeOutline: string
-  longRangeOutlineUpdatedTurn: number
+  previousPhysicalConstraints: string
+  plotGoal: string
   turnIndex: number
   playerInput: string
   directorSystem: string
@@ -2963,8 +2871,8 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
   const globalContext = input.globalContext || ''
   const feedbackMemory = String(input.feedbackText || '').trim()
   const playerFeedback = normalizePlayerFeedback(input.playerFeedback)
-  const longRangeOutline = String(input.longRangeOutline || '').trim()
-  const longRangeOutlineUpdatedTurn = normalizeLongRangeOutlineUpdatedTurn(input.longRangeOutlineUpdatedTurn)
+  const previousPhysicalConstraints = renderPhysicalConstraints(input.physicalConstraints)
+  const plotGoal = String(input.plotGoal || '').trim()
   const directorStyle = String(input.directorStyle || '').trim() || '（无）'
   const turnIndex = normalizeTurnIndex(input.turnIndex, input.recentTurns)
   const playerInput = input.playerInput.trim()
@@ -2974,9 +2882,10 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
     characterStatus: context.characterStatus,
     recentTurns: context.recentTurns,
     globalContext,
+    previousPhysicalConstraints,
     feedbackMemory,
     playerFeedback,
-    longRangeOutline: longRangeOutline || '（无。Director 只能规划本轮，不得生成剧情目标。）',
+    plotGoal: plotGoal || '（无）',
     directorStyle,
     playerInput,
   })
@@ -2989,8 +2898,8 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
     globalContext,
     feedbackMemory,
     playerFeedback,
-    longRangeOutline,
-    longRangeOutlineUpdatedTurn,
+    previousPhysicalConstraints,
+    plotGoal,
     turnIndex,
     playerInput,
     directorSystem,
@@ -3021,7 +2930,6 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
     characterStatus: options.context.characterStatus,
     feedbackMemory: options.feedbackMemory,
     playerFeedback: options.playerFeedback,
-    bannedWords: readPrompt('banned-words.md'),
     recentTurns: options.context.recentTurns,
     narratorStyle,
     playerInput,
@@ -3052,6 +2960,11 @@ function extractNarratorFinalText(entry: LayerResult): string {
   return text.trim()
 }
 
+function extractNarratorPlayerOptions(entry: LayerResult): unknown[] {
+  const json = entry.json || {}
+  return normalizePlayerOptions(json.playerOptions || json.options || json.choices)
+}
+
 function buildPostprocessPromptPayload(input: GenerateRequest, options: {
   model: string
   temperature?: number
@@ -3060,7 +2973,6 @@ function buildPostprocessPromptPayload(input: GenerateRequest, options: {
   directorPlan: Record<string, unknown>
   context: ReturnType<typeof buildRuntimeBlocks>
   turnIndex: number
-  longRangeOutline: string
 }): {
   model: string
   temperature: number
@@ -3074,13 +2986,14 @@ function buildPostprocessPromptPayload(input: GenerateRequest, options: {
   const postprocessMessages = renderPromptMessagePair('postprocess.md', {
     storyContext: String(input.storyContext || '').trim(),
     historicalSummary: String(input.globalContext || '').trim(),
-    longRangeOutline: options.longRangeOutline,
+    plotGoal: String(input.plotGoal || '').trim(),
     statusSchema: JSON.stringify(statusModel.statusSchema),
     statusRoster: JSON.stringify(statusModel.statusRoster),
     statusState: JSON.stringify(statusModel.statusState),
     recentTurns: options.context.recentTurns,
     directorPlan: JSON.stringify(options.directorPlan),
     playerFeedback: normalizePlayerFeedback(input.playerFeedback),
+    bannedWords: readPrompt('banned-words.md'),
     finalText: options.finalText,
     playerInput: options.playerInput,
   })
@@ -3114,17 +3027,17 @@ async function generate(
   let director: LayerResult | null = null
   let directorPlan: Record<string, unknown>
   if (input.director && typeof input.director === 'object' && Object.keys(input.director).length) {
-    directorPlan = compactDirectorPlan(input.director)
+    directorPlan = compactDirectorPlan(input.director, { plotGoal: directorPayload.plotGoal })
     emit({ type: 'stage_skip', stage: 'director', label: 'Director', message: '导演层已复用：继续未完成时沿用上一轮计划。', json: directorPlan })
   } else {
-    emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：根据玩家输入、当前状态、历史总结和剧情目标，生成本轮计划。' })
+    emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：根据玩家输入、当前状态、历史总结和 Plot，生成本轮计划。' })
     director = await callModelWithPublicTrace('director', 'Director', promptMessages(directorPayload.directorSystem, directorPayload.directorUser), { temperature: directorTemperature, apiKey: pipelineApiKeyForModel(input, directorModel), model: directorModel, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
       '公开日志：正在拆解玩家输入和当前场景。',
       '公开日志：正在安排剧情模块、描写链和物理约束。',
       '公开日志：正在生成 Narrator 可执行的本轮计划。',
       '公开日志：导演层仍在等待模型返回结构化计划。',
     ])
-    directorPlan = compactDirectorPlan(director.json)
+    directorPlan = compactDirectorPlan(director.json, { plotGoal: directorPayload.plotGoal })
     emit({ type: 'stage_result', stage: 'director', label: 'Director', message: '导演层完成：本轮计划已生成。', json: directorPlan })
   }
 
@@ -3148,7 +3061,8 @@ async function generate(
   emit({ type: 'visible_text', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文已显示，后处理已进入独立队列。', payload: { finalText, pipelineMode: 'narrator+postprocess-queued' } })
   emit({ type: 'stage_result', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文已生成。', json: narrator.json })
 
-  const playerOptions = normalizePlayerOptions(directorPlan.playerOptions)
+  const playerOptions = extractNarratorPlayerOptions(narrator)
+  const physicalConstraints = compactStringArray(directorPlan.physicalConstraints, 5, 100)
   const speedRecordFile = appendPipelineSpeedRecord({
     mode: 'generate',
     turnIndex: directorPayload.turnIndex,
@@ -3167,6 +3081,7 @@ async function generate(
     finalText,
     pipelineMode: 'narrator+postprocess-queued',
     director: directorPlan,
+    physicalConstraints,
     narrator: narrator.json,
     postprocess: null,
     pendingPostprocess: {
@@ -3181,8 +3096,8 @@ async function generate(
       statusRoster: input.statusRoster,
       statusState: input.statusState,
       playerOptions,
-      longRangeOutline: directorPayload.longRangeOutline,
-      longRangeOutlineUpdatedTurn: directorPayload.longRangeOutlineUpdatedTurn,
+      physicalConstraints,
+      plotGoal: directorPayload.plotGoal,
       playerFeedback: input.playerFeedback || '',
       feedbackText: directorPayload.feedbackMemory,
       directorStyle: input.directorStyle,
@@ -3213,83 +3128,44 @@ async function runPostprocess(
   const requestedModel = normalizeModel(input.model)
   const pipelineModels = buildPipelineModels(requestedModel)
   const postprocessModel = pipelineModels.postprocess
-  const longRangeDirectorModel = pipelineModels.longRangeDirector
   const temperature = Number.isFinite(input.temperature) ? Number(input.temperature) : 0.5
   const turnIndex = normalizeTurnIndex(input.turnIndex, input.recentTurns)
   const director = input.director && typeof input.director === 'object' ? input.director : {}
-  const directorPlan = compactDirectorPlan(director)
+  const directorPlan = compactDirectorPlan(director, { plotGoal: input.plotGoal })
   const context = buildRuntimeBlocks({
     playerInput,
     recentTurns: input.recentTurns,
     characters: input.characters,
     statusState: input.statusState,
   } as GenerateRequest)
-  const currentLongRangeOutline = String(input.longRangeOutline || '').trim()
   const statusModel = buildStatusModel(input)
   const postprocessMessages = renderPromptMessagePair('postprocess.md', {
     storyContext: String(input.storyContext || '').trim(),
     historicalSummary: String(input.globalContext || '').trim(),
-    longRangeOutline: currentLongRangeOutline,
+    plotGoal: String(input.plotGoal || '').trim(),
     statusSchema: JSON.stringify(statusModel.statusSchema),
     statusRoster: JSON.stringify(statusModel.statusRoster),
     statusState: JSON.stringify(statusModel.statusState),
     recentTurns: context.recentTurns,
     directorPlan: JSON.stringify(directorPlan),
     playerFeedback: normalizePlayerFeedback(input.playerFeedback),
+    bannedWords: readPrompt('banned-words.md'),
     playerInput,
     finalText,
   })
 
-  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写本轮总结、人物状态、写作负反馈和剧情目标判定。' })
-  const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', promptMessages(postprocessMessages.system, postprocessMessages.user), { temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
+  emit({ type: 'stage_start', stage: 'postprocess', label: 'Postprocess', message: '重试后处理层：补写本轮总结、人物状态和反重复提醒。' })
+  const postprocess = await callModelWithPublicTrace('postprocess', 'Postprocess', promptMessages(postprocessMessages.system, postprocessMessages.user), { temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel, maxTokens: postprocessMaxTokens, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
     '公开日志：正在补跑上一轮失败的 Postprocess。',
     '公开日志：正在补写本轮事实总结。',
     '公开日志：正在按状态字段更新人物状态。',
-    '公开日志：正在补写写作负反馈和剧情目标判定。',
+    '公开日志：正在补写下一轮反重复提醒。',
     '公开日志：Postprocess 重试仍在等待模型返回结构化状态。',
   ])
-  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理重试完成：状态和负反馈已更新。', json: postprocess.json })
+  emit({ type: 'stage_result', stage: 'postprocess', label: 'Postprocess', message: '后处理重试完成：状态和反重复提醒已更新。', json: postprocess.json })
   const feedback = normalizeFeedbackBreakdown(postprocess.json)
 
-  let nextLongRangeOutline = currentLongRangeOutline
-  let nextLongRangeOutlineUpdatedTurn = normalizeLongRangeOutlineUpdatedTurn(input.longRangeOutlineUpdatedTurn)
-  let longRangeDirector: LayerResult | null = null
   const turnSummary = normalizeTurnSummary(postprocess.json.turnSummary, finalText)
-  const longRangeTrigger = longRangeDirectorTrigger(postprocess.json.longRangeStatus, currentLongRangeOutline, turnIndex, nextLongRangeOutlineUpdatedTurn)
-  if (longRangeTrigger.shouldRun) {
-    const longRangeStatus = longRangeTrigger.status
-    const longRangeMessages = buildLongRangeDirectorMessages({
-      storyContext: input.storyContext || '',
-      characterStatus: context.characterStatus,
-      globalContext: String(input.globalContext || '').trim(),
-      currentLongRangeOutline,
-      longRangeStatus,
-      turnSummary,
-      playerFeedback: input.playerFeedback || '',
-      directorStyle: String(input.directorStyle || '').trim(),
-    })
-    emit({ type: 'stage_start', stage: 'director', label: 'LongRangeDirector', message: `高级导演层：生成或修订当前剧情目标（${longRangeTrigger.reason}，目标年龄 ${longRangeTrigger.age} 轮）。` })
-    try {
-      longRangeDirector = await callModelWithPublicTrace('director', 'LongRangeDirector', promptMessages(longRangeMessages.system, longRangeMessages.user), { temperature: 0.6, apiKey: pipelineApiKeyForModel(input, longRangeDirectorModel), model: longRangeDirectorModel, maxTokens: 1200, timeoutMs: longRangeDirectorTimeoutMs, reasoningEffort: normalizeInfronReasoningEffort(input.reasoningEffort) }, emit, [
-        '公开日志：正在补跑剧情目标生成/修订。',
-        '公开日志：正在生成可供后续多轮缓慢靠近的具体人物关系和事件目标。',
-        '公开日志：高级导演层仍在等待模型返回剧情目标。',
-      ])
-      nextLongRangeOutline = normalizeLongRangeDirectorOutline(longRangeDirector.json.longRangeOutline || longRangeDirector.json, currentLongRangeOutline)
-      if (nextLongRangeOutline.trim() && nextLongRangeOutline.trim() !== currentLongRangeOutline.trim()) {
-        nextLongRangeOutlineUpdatedTurn = turnIndex
-      }
-      emit({ type: 'stage_result', stage: 'director', label: 'LongRangeDirector', message: '高级导演层完成：当前剧情目标已更新。', json: { longRangeOutline: nextLongRangeOutline } })
-    } catch (error) {
-      longRangeDirector = null
-      emit({
-        type: 'stage_skip',
-        stage: 'director',
-        label: 'LongRangeDirector',
-        message: `高级导演层未返回，已跳过以免阻塞本轮：${error instanceof Error ? error.message : String(error)}`,
-      })
-    }
-  }
   const nextStatusSchema = mergeStatusSchema(input.statusSchema, postprocess.json.statusSchemaPatch)
   const nextStatusRoster = mergeStatusRoster(input.statusRoster, postprocess.json.statusRosterPatch, input.characters || [], postprocess.json.statusStatePatch)
   const nextStatusState = mergeStatusState(input.statusState, postprocess.json.statusStatePatch, nextStatusRoster, input.characters || [], nextStatusSchema)
@@ -3303,7 +3179,6 @@ async function runPostprocess(
     playerInput,
     metrics: [
       { stage: 'Postprocess', metrics: postprocess.metrics },
-      ...(longRangeDirector ? [{ stage: 'LongRangeDirector', metrics: longRangeDirector.metrics }] : []),
     ],
   })
 
@@ -3312,15 +3187,11 @@ async function runPostprocess(
     pipelineMode: 'postprocess-retry',
     director: directorPlan,
     postprocess: postprocess.json,
-    playerOptions: normalizePlayerOptions(input.playerOptions?.length ? input.playerOptions : directorPlan.playerOptions),
+    physicalConstraints: compactStringArray(directorPlan.physicalConstraints, 5, 100),
+    playerOptions: normalizePlayerOptions(input.playerOptions),
     turnSummary,
-    longRangeOutline: nextLongRangeOutline,
-    longRangeOutlineUpdatedTurn: nextLongRangeOutlineUpdatedTurn,
-    违背约束: feedback.违背约束,
+    plotGoal: resolvePlotGoalAfterPostprocess(input.plotGoal, postprocess.json),
     存在重复: feedback.存在重复,
-    节奏不足: feedback.节奏不足,
-    导演推进不足: feedback.导演推进不足,
-    导演物理违背: feedback.导演物理违背,
     statusSchema: nextStatusSchema,
     statusRoster: nextStatusRoster,
     statusState: nextStatusState,

@@ -10,7 +10,7 @@ describe('provider routing', () => {
   it('allows official DeepSeek, Infron models, Fireworks Priority, Google AI Studio, and Cerebras Qwen by default', () => {
     const source = readServerSource()
 
-    expect(source).toContain("const defaultModel = infronGrok43Model")
+    expect(source).toContain("const defaultModel = officialDeepSeekV4FlashModel")
     expect(source).toContain("officialDeepSeekV4ProModel")
     expect(source).toContain("officialDeepSeekV4FlashModel")
     expect(source).toContain("infronDeepSeekV4ProModel")
@@ -87,9 +87,9 @@ describe('provider routing', () => {
     expect(source).toContain('function requestInfronContent')
     expect(source).toContain('provider: {')
     expect(source).toContain("sort: 'throughput'")
-    expect(source).toContain('function infronRequestModel')
+    expect(source).not.toContain('function infronRequestModel')
     expect(source).toContain('model === infronGemini31FlashLiteModel')
-    expect(source).toContain("const simpleModel = provider === 'deepseek' ? simpleLayerModel : selectedModel")
+    expect(source).toContain('const selectedModel = normalizeModel(requestedModel)')
     expect(source).toContain('INFRON_API_KEY')
     expect(source).toContain('Infron 上游错误')
     expect(source).toContain('function looksLikeHtmlResponse')
@@ -156,16 +156,12 @@ describe('provider routing', () => {
     expect(source.indexOf('const text = await response.text()')).toBeLessThan(source.indexOf('clearTimeout(timer)', source.indexOf('function requestFireworksContent')))
   })
 
-  it('does not let long range director block a completed turn', () => {
+  it('does not keep a long range director layer', () => {
     const source = readServerSource()
 
-    expect(source).toContain("label: 'LongRangeDirector'")
-    expect(source).toContain('LONG_RANGE_DIRECTOR_TIMEOUT_MS')
-    expect(source).toContain('maxTokens: 1200')
-    expect(source).toContain('timeoutMs: longRangeDirectorTimeoutMs')
-    expect(source).toContain('超过 ${Math.round(Number(options.timeoutMs) / 1000)} 秒未完成')
-    expect(source).toContain("type: 'stage_skip'")
-    expect(source).toContain('高级导演层未返回，已跳过以免阻塞本轮')
+    expect(source).not.toContain("label: 'LongRangeDirector'")
+    expect(source).not.toContain('LONG_RANGE_DIRECTOR_TIMEOUT_MS')
+    expect(source).not.toContain('longRangeDirectorTimeoutMs')
   })
 
   it('bounds foreground narrator calls instead of waiting for the global provider timeout', () => {
@@ -292,8 +288,9 @@ describe('provider routing', () => {
     expect(infronBody).toContain("sort: 'throughput'")
     expect(infronBody).toContain('reasoning')
     expect(infronBody).toContain('applyInfronReasoning(body, reasoningEffort)')
-    expect(source).toContain('const infronReasoningHeavyModels = new Set([infronXiaomiMimo25Model])')
+    expect(source).not.toContain('infronReasoningHeavyModels')
     expect(source).toContain('function infronMaxTokensForModel')
+    expect(source).toContain('model === infronXiaomiMimo25Model')
     expect(source).toContain('return Math.max(maxTokens, infronReasoningMinMaxTokens)')
     expect(source).not.toContain('infronForceNoReasoningModels')
     expect(infronBody).not.toContain('response_format')
@@ -326,24 +323,34 @@ describe('provider routing', () => {
     expect(source).toContain('超过 ${Math.round(Number(options.timeoutMs) / 1000)} 秒未完成')
   })
 
-  it('routes DeepSeek and Infron postprocess through official DeepSeek Flash', () => {
+  it('uses the selected model for every pipeline stage', () => {
     const source = readServerSource()
 
-    expect(source).toContain('const strongLayerModel = officialDeepSeekV4ProModel')
-    expect(source).toContain('const simpleLayerModel = officialDeepSeekV4FlashModel')
-    expect(source).toContain("const provider = providerForModel(normalizeModel(requestedModel))")
-    expect(source).toContain("const strongModel = provider === 'deepseek' ? strongLayerModel : selectedModel")
-    expect(source).toContain("const simpleModel = provider === 'deepseek' ? simpleLayerModel : selectedModel")
+    expect(source).not.toContain('strongLayerModel')
+    expect(source).not.toContain('simpleLayerModel')
+    expect(source).toContain('const selectedModel = normalizeModel(requestedModel)')
+    expect(source).toContain('director: selectedModel')
+    expect(source).toContain('narrator: selectedModel')
+    expect(source).toContain('postprocess: selectedModel')
+    expect(source).toContain('initializer: selectedModel')
     expect(source).toContain('function pipelineApiKeyForModel')
     expect(source).toContain('const keyed = input.apiKeys?.[provider]')
     expect(source).toContain('const pipelineModels = buildPipelineModels(requestedModel)')
     expect(source).toContain('const narratorModel = pipelineModels.narrator')
     expect(source).toContain('const postprocessModel = pipelineModels.postprocess')
-    expect(source).toContain('const longRangeDirectorModel = pipelineModels.longRangeDirector')
     expect(source).toContain('model: directorModel')
     expect(source).toContain('model: narratorModel')
     expect(source).toContain('model: postprocessModel')
-    expect(source).toContain('model: longRangeDirectorModel')
     expect(source).toContain('pipelineModels: buildPipelineModels()')
+  })
+
+  it('sets explicit max-token budgets for initializer and postprocess', () => {
+    const source = readServerSource()
+
+    expect(source).toContain('const initializerMaxTokens = Number(process.env.INITIALIZER_MAX_TOKENS || defaultMaxTokens)')
+    expect(source).toContain('const postprocessMaxTokens = Number(process.env.POSTPROCESS_MAX_TOKENS || defaultMaxTokens)')
+    expect(source).toContain('maxTokens: initializerMaxTokens')
+    expect(source).toContain('maxTokens: postprocessMaxTokens')
+    expect(source).toContain('timeoutMs: postprocessTimeoutMs')
   })
 })

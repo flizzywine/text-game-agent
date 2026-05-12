@@ -7,6 +7,7 @@ const cerebrasApiKeyStorageKey = 'text-game-agent.cerebras-api-key'
 const googleAiStudioApiKeyStorageKey = 'text-game-agent.google-ai-studio-api-key'
 const infronReasoningStorageKey = 'text-game-agent.infron-reasoning-effort'
 const preferredModelStorageKey = 'text-game-agent.preferred-model'
+const preferredModelVersionStorageKey = 'text-game-agent.preferred-model-version'
 const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
 const fireworksKimiK2P5Model = 'accounts/fireworks/models/kimi-k2p5'
 const fireworksQwen3235BA22BModel = 'accounts/fireworks/models/qwen3-235b-a22b'
@@ -28,7 +29,8 @@ const infronGlm51Model = 'z-ai/glm-5.1'
 const infronGrok43Model = 'x-ai/grok-4.3'
 const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'
 const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'
-const defaultModel = infronGrok43Model
+const defaultModel = officialDeepSeekV4FlashModel
+const defaultModelVersion = 'official-deepseek-v4-flash'
 const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, fireworksKimiK2P5Model, fireworksQwen3235BA22BModel, fireworksQwen36PlusModel, officialDeepSeekV4ProModel, officialDeepSeekV4FlashModel, infronDeepSeekV4ProModel, infronDeepSeekV4FlashModel, infronGemini31FlashLiteModel, infronGemini25FlashModel, infronGemini3FlashPreviewModel, infronKimiK25Model, infronQwen35EaricaModel, infronQwen36FlashModel, infronQwen36PlusModel, infronXiaomiMimo25Model, infronGlm47FlashxModel, infronGlm51Model, infronGrok43Model, googleAiStudioGemini31FlashLiteModel, cerebrasQwenModel])
 const providerOptions = ['deepseek', 'infron', 'fireworks', 'google-ai-studio', 'cerebras']
 const modelCatalog = [
@@ -54,8 +56,8 @@ const modelCatalog = [
   { id: googleAiStudioGemini31FlashLiteModel, provider: 'google-ai-studio' },
   { id: cerebrasQwenModel, provider: 'cerebras' },
 ]
-const requiredStatusSchema = ['性别', '身份', '外貌', '性格']
-const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '位置']
+const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '姿势']
+const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '姿势', '位置']
 
 const appState = loadAppState()
 let state = getCurrentStory()
@@ -111,7 +113,7 @@ const els = {
   directorControlButton: document.querySelector('#directorControlButton'),
   directorControlDialog: document.querySelector('#directorControlDialog'),
   directorControlForm: document.querySelector('#directorControlForm'),
-  directorLongRangeInput: document.querySelector('#directorLongRangeInput'),
+  directorPlotGoalInput: document.querySelector('#directorPlotGoalInput'),
   cancelDirectorControlButton: document.querySelector('#cancelDirectorControlButton'),
   resetButton: document.querySelector('#resetButton'),
   storySelect: document.querySelector('#storySelect'),
@@ -207,8 +209,8 @@ function defaultStory(name = '未选择故事') {
     currentSituation: '',
     chapterSummary: '',
     outline: '',
-    longRangeOutline: '',
-    longRangeOutlineUpdatedTurn: 0,
+    plotGoal: '',
+    physicalConstraints: [],
     directorStyle: '',
     narratorStyle: '',
     plotLines: [],
@@ -236,6 +238,7 @@ function buildStoryContextForRequest() {
 function defaultAppState() {
   const story = defaultStory()
   return {
+    defaultModelVersion,
     preferredModel: story.model,
     currentStoryId: story.id,
     stories: [story],
@@ -270,8 +273,9 @@ function loadAppState() {
 
 function normalizeAppState(raw) {
   const base = defaultAppState()
+  const modelVersion = String(raw?.defaultModelVersion || '')
   const stories = Array.isArray(raw?.stories)
-    ? raw.stories.map((story, index) => normalizeStory(story, `故事 ${index + 1}`))
+    ? raw.stories.map((story, index) => normalizeStory(story, `故事 ${index + 1}`, modelVersion))
     : []
   if (stories.length === 0) return base
   const currentStoryId = stories.some(story => story.id === raw.currentStoryId)
@@ -279,7 +283,8 @@ function normalizeAppState(raw) {
     : stories[0].id
   const rawCurrentStory = stories.find(story => story.id === currentStoryId) || stories[0]
   return {
-    preferredModel: normalizeModel(raw?.preferredModel || readStoredPreferredModel() || rawCurrentStory?.model || base.preferredModel || defaultModel),
+    defaultModelVersion,
+    preferredModel: normalizePersistedModel(raw?.preferredModel, modelVersion) || readStoredPreferredModel() || normalizePersistedModel(rawCurrentStory?.model, modelVersion) || base.preferredModel || defaultModel,
     currentStoryId,
     stories,
     multiSpatialMigration: Boolean(raw?.multiSpatialMigration),
@@ -288,7 +293,7 @@ function normalizeAppState(raw) {
   }
 }
 
-function normalizeStory(raw, fallbackName = '故事') {
+function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultModelVersion) {
   const base = defaultStory(fallbackName)
   const rest = { ...(raw || {}) }
   const messages = Array.isArray(raw?.messages) ? raw.messages : []
@@ -324,8 +329,8 @@ function normalizeStory(raw, fallbackName = '故事') {
     currentSituation: String(raw?.currentSituation || openingText || ''),
     chapterSummary,
     outline: String(raw?.outline || openingText || ''),
-    longRangeOutline: String(raw?.longRangeOutline || ''),
-    longRangeOutlineUpdatedTurn: Number.isFinite(Number(raw?.longRangeOutlineUpdatedTurn)) && Number(raw.longRangeOutlineUpdatedTurn) >= 0 ? Math.floor(Number(raw.longRangeOutlineUpdatedTurn)) : 0,
+    plotGoal: String(raw?.plotGoal || ''),
+    physicalConstraints: normalizePhysicalConstraints(raw?.physicalConstraints),
     directorStyle: String(raw?.directorStyle || ''),
     narratorStyle: String(raw?.narratorStyle || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
@@ -339,7 +344,7 @@ function normalizeStory(raw, fallbackName = '故事') {
     globalContext,
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.filter(item => item && typeof item === 'object') : [],
-    model: normalizeModel(raw?.model || base.model),
+    model: normalizePersistedModel(raw?.model, modelVersion) || base.model,
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
     debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
   }
@@ -391,6 +396,14 @@ function normalizeFeedbackMemory(items) {
     })
     .filter(Boolean)
     .slice(-15)
+}
+
+function normalizePhysicalConstraints(value) {
+  const items = Array.isArray(value) ? value : typeof value === 'string' && value.trim() ? [value] : []
+  return items
+    .map(item => String(item || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, 5)
 }
 
 function parseStatusSchemaFields(value) {
@@ -464,25 +477,15 @@ function mergeStatusState(current, patch, roster, characters = [], schema = fall
 
 function normalizeFeedbackType(type) {
   const value = String(type || '').trim()
-  if ([
-    'narrativeConstraint',
-    'narrativeRepetition',
-    'narrativePacing',
-    'directorProgress',
-    'directorPhysical',
-  ].includes(value)) return value
-  return 'quality'
+  if (value === 'narrativeRepetition') return value
+  return 'narrativeRepetition'
 }
 
 function renderFeedbackMemory(items = state.feedbackMemory) {
   return normalizeFeedbackMemory(items)
     .map(item => {
       const label = {
-        narrativeConstraint: '违背约束',
         narrativeRepetition: '存在重复',
-        narrativePacing: '节奏不足',
-        directorProgress: '导演推进不足',
-        directorPhysical: '导演物理违背',
       }[item.type] || '反馈'
       return `- [${label}｜剩${item.ttl}轮] ${baselineLogText(item.text)}`
     })
@@ -494,11 +497,7 @@ function mergeFeedbackMemory(existing, payload) {
     .map(item => ({ ...item, ttl: item.ttl - 1 }))
     .filter(item => item.ttl > 0)
   const incoming = [
-    ['narrativeConstraint', payload.违背约束 || payload.narrativeConstraintFeedback],
     ['narrativeRepetition', payload.存在重复 || payload.narrativeRepetitionFeedback],
-    ['narrativePacing', payload.节奏不足 || payload.narrativePacingFeedback],
-    ['directorProgress', payload.导演推进不足 || payload.directorProgressFeedback],
-    ['directorPhysical', payload.导演物理违背 || payload.directorPhysicalFeedback],
   ]
     .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 1 }))
     .filter(item => item.text)
@@ -545,6 +544,7 @@ function getCurrentStory() {
 function saveState() {
   if (state) state.updatedAt = new Date().toISOString()
   setPreferredModel(appState.preferredModel || state.model || config.model)
+  appState.defaultModelVersion = defaultModelVersion
   appState.currentStoryId = state.id
   localStorage.setItem(storageKey, JSON.stringify(appState))
   persistServerState()
@@ -613,10 +613,18 @@ function readPreferredModelFromStorage() {
 function readStoredPreferredModel() {
   try {
     const model = String(localStorage.getItem(preferredModelStorageKey) || '').trim()
+    const version = String(localStorage.getItem(preferredModelVersionStorageKey) || '').trim()
+    if (version !== defaultModelVersion && model === infronGrok43Model) return ''
     return modelOptions.has(model) ? model : ''
   } catch {
     return ''
   }
+}
+
+function normalizePersistedModel(value, version = defaultModelVersion) {
+  const model = String(value || '').trim()
+  if (version !== defaultModelVersion && model === infronGrok43Model) return ''
+  return modelOptions.has(model) ? model : ''
 }
 
 function getActiveModel() {
@@ -629,6 +637,7 @@ function setPreferredModel(model) {
   if (state) state.model = normalized
   try {
     localStorage.setItem(preferredModelStorageKey, normalized)
+    localStorage.setItem(preferredModelVersionStorageKey, defaultModelVersion)
   } catch {
     // localStorage may be unavailable in private or restricted contexts.
   }
@@ -662,6 +671,7 @@ function modelsForProvider(provider) {
 }
 
 function defaultModelForProvider(provider) {
+  if (normalizeProvider(provider) === providerForModel(defaultModel)) return defaultModel
   return modelsForProvider(provider)[0]?.id || defaultModel
 }
 
@@ -728,11 +738,10 @@ function normalizeRuntimeConfig(raw) {
   return {
     model: normalizeModel(raw?.model || defaultModel),
     pipelineModels: raw?.pipelineModels || {
-      director: officialDeepSeekV4ProModel,
-      longRangeDirector: officialDeepSeekV4ProModel,
-      narrator: officialDeepSeekV4ProModel,
-      postprocess: officialDeepSeekV4FlashModel,
-      initializer: officialDeepSeekV4ProModel,
+      director: defaultModel,
+      narrator: defaultModel,
+      postprocess: defaultModel,
+      initializer: defaultModel,
     },
     baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
     hasApiKey: Boolean(raw?.hasApiKey || raw?.providers?.deepseek?.hasApiKey),
@@ -1110,7 +1119,7 @@ function baselineLogText(value) {
     .replaceAll('花色特性', '状态字段')
     .replaceAll('花语计划', '导演计划')
     .replaceAll('花语校验', '剧情校验')
-    .replaceAll('花神的嘱咐', '写作负反馈')
+    .replaceAll('花神的嘱咐', '上轮反重复提醒')
     .replaceAll('预言故事', '正文')
     .replaceAll('预言方向', '剧情方向')
     .replaceAll('命运分叉', '可选行动')
@@ -1530,8 +1539,8 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.currentSituation = openingSummary
   story.chapterSummary = ''
   story.outline = openingSummary
-  story.longRangeOutline = String(init.longRangeOutline || '')
-  story.longRangeOutlineUpdatedTurn = 0
+  story.plotGoal = String(init.plotGoal || '')
+  story.physicalConstraints = []
   story.directorStyle = String(init.directorStyle || '')
   story.narratorStyle = String(init.narratorStyle || '')
   story.plotLines = []
@@ -1854,7 +1863,6 @@ function renderConnection() {
 function renderPipelineModelGrid(selectedModel, pipelineModels) {
   if (!els.pipelineModelGrid) return
   const rows = [
-    ['长期导演', 'longRangeDirector'],
     ['导演', 'director'],
     ['叙事', 'narrator'],
     ['后处理', 'postprocess'],
@@ -1862,7 +1870,7 @@ function renderPipelineModelGrid(selectedModel, pipelineModels) {
   ]
   els.pipelineModelGrid.innerHTML = rows.map(([label, key]) => {
     const model = normalizeModel(pipelineModels?.[key] || selectedModel)
-    const tag = model === selectedModel ? '主模型' : '分流'
+    const tag = model === selectedModel ? '当前模型' : '旧配置'
     return `
       <div class="pipeline-model-card">
         <span class="pipeline-model-role">${escapeHtml(label)}</span>
@@ -1874,23 +1882,12 @@ function renderPipelineModelGrid(selectedModel, pipelineModels) {
 }
 
 function pipelineModelsForSelection(model) {
-  const provider = providerForModel(model)
   const normalized = normalizeModel(model)
-  if (provider !== 'deepseek') {
-    return {
-      director: normalized,
-      longRangeDirector: normalized,
-      narrator: normalized,
-      postprocess: normalized,
-      initializer: normalized,
-    }
-  }
-  return config.pipelineModels || {
-    director: officialDeepSeekV4ProModel,
-    longRangeDirector: officialDeepSeekV4ProModel,
-    narrator: officialDeepSeekV4ProModel,
-    postprocess: officialDeepSeekV4FlashModel,
-    initializer: officialDeepSeekV4ProModel,
+  return {
+    director: normalized,
+    narrator: normalized,
+    postprocess: normalized,
+    initializer: normalized,
   }
 }
 
@@ -2203,12 +2200,12 @@ function renderModelTestResult(result) {
 }
 
 function openDirectorControl() {
-  els.directorLongRangeInput.value = state.longRangeOutline || ''
+  els.directorPlotGoalInput.value = state.plotGoal || ''
   els.directorControlDialog.showModal()
 }
 
 function saveDirectorControl() {
-  state.longRangeOutline = els.directorLongRangeInput.value.trim()
+  state.plotGoal = els.directorPlotGoalInput.value.trim()
   saveState()
   renderStoryTracking()
   els.directorControlDialog.close()
@@ -2339,12 +2336,11 @@ function renderStatusPanel() {
 
 function renderStoryTracking() {
   const summary = state.chapterSummary || deriveGlobalContextBlock('summary')
-  const longRangeOutline = state.longRangeOutline || ''
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', formatHistoricalSummaryForTracker(summary) || '暂无历史总结。')}
     ${renderTrackerSection('故事风格', formatStoryStyleForTracker() || '暂无故事风格。')}
-    ${renderTrackerSection('当前剧情目标', longRangeOutline || '暂无当前剧情目标。')}
-    ${renderFeedbackMemory() ? renderTrackerSection('写作负反馈', renderFeedbackMemory()) : ''}
+    ${renderTrackerSection('当前剧情目标', state.plotGoal || '暂无当前剧情目标。')}
+    ${renderFeedbackMemory() ? renderTrackerSection('上轮反重复提醒', renderFeedbackMemory()) : ''}
   `
 }
 
@@ -2698,8 +2694,8 @@ function buildPendingPostprocessFromState() {
     statusRoster: state.statusRoster,
     statusState: state.statusState,
     playerOptions: state.playerOptions,
-    longRangeOutline: state.longRangeOutline,
-    longRangeOutlineUpdatedTurn: state.longRangeOutlineUpdatedTurn,
+    physicalConstraints: state.physicalConstraints,
+    plotGoal: state.plotGoal,
     playerFeedback: state.debug?.postprocessRecoveryBase?.playerFeedback || '',
     feedbackText: renderFeedbackMemory(),
     directorStyle: state.directorStyle,
@@ -2716,7 +2712,7 @@ async function retryPendingPostprocess(pending) {
   setBusy(true)
   state.debug.status = '重试 Postprocess'
   state.debug.error = ''
-  state.debug.note = '正在重试上一轮未完成的 Postprocess；完成后会补上状态、总结和负反馈。'
+  state.debug.note = '正在重试上一轮未完成的 Postprocess；完成后会补上状态、总结和反重复提醒。'
   render()
 
   try {
@@ -2785,7 +2781,7 @@ async function processPostprocessQueue() {
     ...(state.debug || {}),
     postprocessPending: false,
     pendingPostprocess: null,
-    note: 'Postprocess 队列正在后台更新总结、状态和负反馈；不阻塞下一轮输入。',
+    note: 'Postprocess 队列正在后台更新总结、状态和反重复提醒；不阻塞下一轮输入。',
   }
   saveState()
   renderPostprocessSideEffects()
@@ -2888,6 +2884,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
       state.messages.push({ role: 'assistant', content: payload.finalText || '' })
     }
     state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : []
+    state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
     state.debug.status = 'done'
     state.debug.postprocessPending = false
     state.debug.pendingPostprocess = null
@@ -2907,7 +2904,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     state.debug.error = error.message
     markRunningPipelineStageError(error.message)
     if (state.debug.visibleTextShown && state.debug.postprocessPending) {
-      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“继续未完成”补上状态、总结和负反馈。'
+      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“继续未完成”补上状态、总结和反重复提醒。'
     } else {
       state.messages.push({ role: 'error', content: error.message })
     }
@@ -2928,8 +2925,8 @@ function buildGenerateRequestPayload(playerInput) {
     storyContext: buildStoryContextForRequest(),
     globalContext: state.globalContext,
     feedbackText: renderFeedbackMemory(),
-    longRangeOutline: state.longRangeOutline,
-    longRangeOutlineUpdatedTurn: state.longRangeOutlineUpdatedTurn,
+    physicalConstraints: state.physicalConstraints,
+    plotGoal: state.plotGoal,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: nextAssistantTurnIndex(),
@@ -3037,7 +3034,8 @@ function pickRegenerableStoryState(story) {
     'currentSituation',
     'chapterSummary',
     'outline',
-    'longRangeOutline',
+    'plotGoal',
+    'physicalConstraints',
     'directorStyle',
     'narratorStyle',
     'plotLines',
@@ -3198,16 +3196,8 @@ function applyPostprocess(payload) {
     state.currentSituation = turnSummary
     state.outline = turnSummary
   }
-  if (typeof payload.longRangeOutline === 'string' && payload.longRangeOutline.trim()) {
-    const nextLongRangeOutline = payload.longRangeOutline.trim()
-    const changed = nextLongRangeOutline !== String(state.longRangeOutline || '').trim()
-    state.longRangeOutline = nextLongRangeOutline
-    if (Number.isFinite(Number(payload.longRangeOutlineUpdatedTurn))) {
-      state.longRangeOutlineUpdatedTurn = Math.max(0, Math.floor(Number(payload.longRangeOutlineUpdatedTurn)))
-    } else if (changed) {
-      state.longRangeOutlineUpdatedTurn = completedAssistantTurnCount()
-    }
-  }
+  if (typeof payload.plotGoal === 'string') state.plotGoal = payload.plotGoal.trim()
+  state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
   state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
   const statusPatch = payload.postprocess && typeof payload.postprocess === 'object' ? payload.postprocess : payload
   if (Array.isArray(payload.statusSchema)) {
