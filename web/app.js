@@ -56,8 +56,8 @@ const modelCatalog = [
   { id: googleAiStudioGemini31FlashLiteModel, provider: 'google-ai-studio' },
   { id: cerebrasQwenModel, provider: 'cerebras' },
 ]
-const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '姿势']
-const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '姿势', '位置']
+const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势']
+const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势', '位置']
 
 const appState = loadAppState()
 let state = getCurrentStory()
@@ -80,6 +80,7 @@ let config = {
     cerebras: { baseUrl: 'https://api.cerebras.ai/v1', hasApiKey: false },
     googleAiStudio: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', hasApiKey: false },
   },
+  sceneModules: [],
 }
 
 const els = {
@@ -167,6 +168,12 @@ const els = {
   sendButton: document.querySelector('#sendButton'),
   statusPanelView: document.querySelector('#statusPanelView'),
   storyTrackingView: document.querySelector('#storyTrackingView'),
+  sceneModuleButton: document.querySelector('#sceneModuleButton'),
+  sceneModuleDialog: document.querySelector('#sceneModuleDialog'),
+  sceneModuleForm: document.querySelector('#sceneModuleForm'),
+  sceneModuleDialogList: document.querySelector('#sceneModuleDialogList'),
+  cancelSceneModuleButton: document.querySelector('#cancelSceneModuleButton'),
+  sceneModuleList: document.querySelector('#sceneModuleList'),
   toggleDebugButton: document.querySelector('#toggleDebugButton'),
   debugOutput: document.querySelector('#debugOutput'),
   emptyConversationTemplate: document.querySelector('#emptyConversationTemplate'),
@@ -216,6 +223,7 @@ function defaultStory(name = '未选择故事') {
     plotLines: [],
     feedbackMemory: [],
     playerFeedback: '',
+    directorHistory: [],
     storyAssetId: '',
     programConfigFile: '',
     statusSchema: fallbackStatusSchema,
@@ -224,6 +232,8 @@ function defaultStory(name = '未选择故事') {
     globalContext: '',
     playerOptions: [],
     postprocessQueue: [],
+    enabledSceneModules: [],
+    lastSelectedSceneModules: [],
     model: readPreferredModelFromStorage(),
     lastTurnSnapshot: null,
     debug: {},
@@ -336,6 +346,7 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
     feedbackMemory: normalizeFeedbackMemory(raw?.feedbackMemory),
     playerFeedback: String(raw?.playerFeedback || ''),
+    directorHistory: normalizeDirectorHistory(raw?.directorHistory),
     storyAssetId: String(raw?.storyAssetId || ''),
     programConfigFile: String(raw?.programConfigFile || ''),
     statusSchema: normalizeStatusSchema(raw?.statusSchema),
@@ -344,6 +355,8 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     globalContext,
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.filter(item => item && typeof item === 'object') : [],
+    enabledSceneModules: normalizeSceneModuleNames(raw?.enabledSceneModules),
+    lastSelectedSceneModules: normalizeSceneModuleNames(raw?.lastSelectedSceneModules).slice(0, 2),
     model: normalizePersistedModel(raw?.model, modelVersion) || base.model,
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
     debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
@@ -387,11 +400,11 @@ function normalizeFeedbackMemory(items) {
       if (!item || typeof item !== 'object') return null
       const text = String(item.text || '').trim()
       if (!text) return null
-      const ttl = Number.isFinite(Number(item.ttl)) ? Number(item.ttl) : 1
+      const ttl = Number.isFinite(Number(item.ttl)) ? Number(item.ttl) : 3
       return {
         type: normalizeFeedbackType(item.type),
         text,
-        ttl: Math.max(1, Math.min(1, Math.floor(ttl))),
+        ttl: Math.max(1, Math.min(3, Math.floor(ttl))),
       }
     })
     .filter(Boolean)
@@ -421,9 +434,16 @@ function normalizeStatusRoster(value, characters = []) {
   const names = (Array.isArray(value) ? value : [])
     .map(item => typeof item === 'string' ? item : item?.name)
     .map(item => String(item || '').trim())
-    .filter(Boolean)
-  const characterNames = characters.map(character => String(character.name || '').trim()).filter(Boolean)
+    .filter(isValidStatusSubjectName)
+  const characterNames = characters.map(character => String(character.name || '').trim()).filter(isValidStatusSubjectName)
   return [...new Set(['玩家', ...names, ...characterNames])]
+}
+
+function isValidStatusSubjectName(name) {
+  const text = String(name || '').trim()
+  if (!text) return false
+  if (text.startsWith('_')) return false
+  return !/^(环境|场景|候选项|选项|旁白|系统|剧情|总结|世界观|状态|未知|其他)$/i.test(text)
 }
 
 function normalizeStatusState(value, roster, characters = [], schema = fallbackStatusSchema) {
@@ -461,7 +481,7 @@ function mergeStatusSchema(current, patch) {
 }
 
 function mergeStatusRoster(current, patch, characters = [], statePatch = {}) {
-  const patchNames = statePatch && typeof statePatch === 'object' && !Array.isArray(statePatch) ? Object.keys(statePatch) : []
+  const patchNames = statePatch && typeof statePatch === 'object' && !Array.isArray(statePatch) ? Object.keys(statePatch).filter(isValidStatusSubjectName) : []
   return normalizeStatusRoster([...(Array.isArray(current) ? current : []), ...(Array.isArray(patch) ? patch : []), ...patchNames], characters)
 }
 
@@ -469,6 +489,7 @@ function mergeStatusState(current, patch, roster, characters = [], schema = fall
   const base = normalizeStatusState(current, roster, characters, schema)
   const delta = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}
   for (const [name, record] of Object.entries(delta)) {
+    if (!isValidStatusSubjectName(name)) continue
     if (!roster.includes(name) || !record || typeof record !== 'object') continue
     base[name] = { ...(base[name] || {}), ...Object.fromEntries(Object.entries(record).map(([key, value]) => [key, String(value ?? '').trim()]).filter(([, value]) => value)) }
   }
@@ -478,14 +499,22 @@ function mergeStatusState(current, patch, roster, characters = [], schema = fall
 function normalizeFeedbackType(type) {
   const value = String(type || '').trim()
   if (value === 'narrativeRepetition') return value
+  if (value === 'plotDesignRepetition') return value
+  if (value === 'optionalDisturbance') return value
   return 'narrativeRepetition'
 }
 
-function renderFeedbackMemory(items = state.feedbackMemory) {
+function renderFeedbackMemory(items = state.feedbackMemory, target = 'all') {
   return normalizeFeedbackMemory(items)
+    .filter(item => {
+      if (target !== 'narrator') return true
+      return item.type === 'narrativeRepetition'
+    })
     .map(item => {
       const label = {
-        narrativeRepetition: '存在重复',
+        narrativeRepetition: '文字细节重复',
+        plotDesignRepetition: '剧情设计重复',
+        optionalDisturbance: '可选扰动源',
       }[item.type] || '反馈'
       return `- [${label}｜剩${item.ttl}轮] ${baselineLogText(item.text)}`
     })
@@ -497,20 +526,37 @@ function mergeFeedbackMemory(existing, payload) {
     .map(item => ({ ...item, ttl: item.ttl - 1 }))
     .filter(item => item.ttl > 0)
   const incoming = [
-    ['narrativeRepetition', payload.存在重复 || payload.narrativeRepetitionFeedback],
+    ['narrativeRepetition', payload.文字细节重复 || payload.存在重复 || payload.narrativeRepetitionFeedback],
+    ['plotDesignRepetition', payload.剧情设计重复 || payload.plotDesignRepetitionFeedback],
+    ['optionalDisturbance', payload.可选扰动源 || payload.optionalDisturbance],
   ]
-    .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 1 }))
+    .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 3 }))
     .filter(item => item.text)
   const merged = [...aged]
   for (const item of incoming) {
     const index = merged.findIndex(old => old.type === item.type && old.text === item.text)
     if (index >= 0) {
-      merged[index] = { ...merged[index], ttl: 1 }
+      merged[index] = { ...merged[index], ttl: 3 }
     } else {
       merged.push(item)
     }
   }
   return normalizeFeedbackMemory(merged)
+}
+
+function normalizeDirectorHistory(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(item => item && typeof item === 'object' && !Array.isArray(item))
+    .map(item => deepClone(item))
+    .slice(-5)
+}
+
+function appendDirectorHistory(history, directorPlan) {
+  const plan = directorPlan && typeof directorPlan === 'object' && !Array.isArray(directorPlan) ? directorPlan : null
+  const normalized = normalizeDirectorHistory(history)
+  if (!plan || Object.keys(plan).length === 0) return normalized
+  return [...normalized, deepClone(plan)].slice(-5)
 }
 
 function applyLegacyMigrations() {
@@ -745,6 +791,7 @@ function normalizeRuntimeConfig(raw) {
     },
     baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
     hasApiKey: Boolean(raw?.hasApiKey || raw?.providers?.deepseek?.hasApiKey),
+    sceneModules: normalizeAvailableSceneModules(raw?.sceneModules),
     providers: {
       deepseek: {
         baseUrl: String(raw?.providers?.deepseek?.baseUrl || raw?.baseUrl || 'https://api.deepseek.com'),
@@ -770,6 +817,29 @@ function normalizeRuntimeConfig(raw) {
       },
     },
   }
+}
+
+function normalizeAvailableSceneModules(value) {
+  if (!Array.isArray(value)) return []
+  return value.map(module => {
+    if (!module || typeof module !== 'object') return null
+    const name = String(module.name || module.id || '').trim()
+    if (!name) return null
+    return {
+      name,
+      description: String(module.description || '').trim(),
+    }
+  }).filter(Boolean)
+}
+
+function normalizeSceneModuleNames(value) {
+  const items = Array.isArray(value) ? value : []
+  const output = []
+  for (const item of items) {
+    const name = String(item || '').trim()
+    if (name && !output.includes(name)) output.push(name)
+  }
+  return output
 }
 
 function bindEvents() {
@@ -804,6 +874,19 @@ function bindEvents() {
 
   els.promptPreviewButton.addEventListener('click', () => {
     openPromptPreview()
+  })
+
+  els.sceneModuleButton.addEventListener('click', () => {
+    openSceneModuleDialog()
+  })
+
+  els.cancelSceneModuleButton.addEventListener('click', () => {
+    els.sceneModuleDialog.close()
+  })
+
+  els.sceneModuleForm.addEventListener('submit', event => {
+    event.preventDefault()
+    saveSceneModuleSelection()
   })
 
   els.closePromptPreviewButton.addEventListener('click', () => {
@@ -1061,6 +1144,7 @@ function render() {
   renderPlayerFeedback()
   renderStatusPanel()
   renderStoryTracking()
+  renderSceneModules()
   renderConversation()
   renderOptions()
   renderReadingJumpControls()
@@ -1105,7 +1189,8 @@ function renderDebug() {
     initializer: debug.initializer,
     director: debug.director,
     narrator: debug.narrator,
-    postprocess: debug.postprocess,
+    postprocessSummary: debug.postprocessSummary,
+    postprocessFeedback: debug.postprocessFeedback,
   }
   if (Object.values(payload).some(Boolean)) {
     lines.push('', 'stages:', baselineLogText(JSON.stringify(payload, null, 2)))
@@ -1553,6 +1638,7 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.globalContext = ''
   story.messages = []
   story.playerOptions = normalizeInitialPlayerOptions(init.initialPlayerOptions || init.playerOptions)
+  story.lastSelectedSceneModules = []
   story.debug = {}
   appState.stories.push(story)
   appState.currentStoryId = story.id
@@ -2344,6 +2430,64 @@ function renderStoryTracking() {
   `
 }
 
+function renderSceneModules() {
+  if (!els.sceneModuleList) return
+  const modules = Array.isArray(config.sceneModules) ? config.sceneModules : []
+  if (!modules.length) {
+    els.sceneModuleList.innerHTML = '<p class="meta no-indent">没有场景模块。</p>'
+    return
+  }
+  const enabled = normalizeSceneModuleNames(state.enabledSceneModules)
+  const selected = normalizeSceneModuleNames(state.lastSelectedSceneModules)
+  els.sceneModuleList.innerHTML = `
+    <div class="scene-module-summary">
+      <strong>已启用</strong>
+      <span>${escapeHtml(enabled.length ? enabled.join('、') : '未启用')}</span>
+    </div>
+    <div class="scene-module-summary">
+      <strong>上轮选中</strong>
+      <span>${escapeHtml(selected.length ? selected.join('、') : '无')}</span>
+    </div>
+  `
+}
+
+function openSceneModuleDialog() {
+  renderSceneModuleDialog()
+  els.sceneModuleDialog.showModal()
+}
+
+function renderSceneModuleDialog() {
+  const modules = Array.isArray(config.sceneModules) ? config.sceneModules : []
+  if (!modules.length) {
+    els.sceneModuleDialogList.innerHTML = '<p class="meta no-indent">没有场景模块。</p>'
+    return
+  }
+  const enabled = new Set(normalizeSceneModuleNames(state.enabledSceneModules))
+  const selected = new Set(normalizeSceneModuleNames(state.lastSelectedSceneModules))
+  els.sceneModuleDialogList.innerHTML = modules.map(module => {
+    const checked = enabled.has(module.name) ? 'checked' : ''
+    const active = selected.has(module.name) ? '<em>上轮选中</em>' : ''
+    return `
+      <label class="scene-module-choice">
+        <input type="checkbox" value="${escapeAttr(module.name)}" ${checked} />
+        <span>
+          <strong>${escapeHtml(module.name)} ${active}</strong>
+          <small>${escapeHtml(module.description || module.name)}</small>
+        </span>
+      </label>
+    `
+  }).join('')
+}
+
+function saveSceneModuleSelection() {
+  const checkedNames = Array.from(els.sceneModuleDialogList.querySelectorAll('input[type="checkbox"]:checked')).map(item => item.value)
+  state.enabledSceneModules = normalizeSceneModuleNames(checkedNames)
+  state.lastSelectedSceneModules = normalizeSceneModuleNames(state.lastSelectedSceneModules).filter(name => state.enabledSceneModules.includes(name)).slice(0, 2)
+  saveState()
+  els.sceneModuleDialog.close()
+  renderSceneModules()
+}
+
 function formatHistoricalSummaryForTracker(value) {
   const lines = String(value || '')
     .split('\n')
@@ -2686,6 +2830,7 @@ function buildPendingPostprocessFromState() {
     playerInput,
     finalText,
     director: state.debug?.director || {},
+    recentDirectorPlans: state.directorHistory,
     recentTurns: messages
       .slice(Math.max(0, assistantIndex - 10), assistantIndex)
       .filter(message => message.role === 'user' || message.role === 'assistant'),
@@ -2695,9 +2840,12 @@ function buildPendingPostprocessFromState() {
     statusState: state.statusState,
     playerOptions: state.playerOptions,
     physicalConstraints: state.physicalConstraints,
+    enabledSceneModules: state.enabledSceneModules,
+    lastSelectedSceneModules: state.lastSelectedSceneModules,
     plotGoal: state.plotGoal,
     playerFeedback: state.debug?.postprocessRecoveryBase?.playerFeedback || '',
-    feedbackText: renderFeedbackMemory(),
+    feedbackText: renderFeedbackMemory(state.feedbackMemory, 'director'),
+    narratorFeedbackText: renderFeedbackMemory(state.feedbackMemory, 'narrator'),
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: completedAssistantTurnCount(),
@@ -2742,7 +2890,8 @@ async function retryPendingPostprocess(pending) {
     state.debug.pendingPostprocess = null
     state.debug.postprocessRecoveryBase = null
     state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
-    state.debug.postprocess = payload.postprocess
+    if (payload.postprocessSummary) state.debug.postprocessSummary = payload.postprocessSummary
+    if (payload.postprocessFeedback) state.debug.postprocessFeedback = payload.postprocessFeedback
     if (pending.id) state.postprocessQueue = (state.postprocessQueue || []).filter(item => item.id !== pending.id)
     setPreferredModel(payload.model || getActiveModel())
     applyPostprocess(payload)
@@ -2806,7 +2955,8 @@ async function processPostprocessQueue() {
     if (!payload) throw new Error('Postprocess 队列任务失败：没有收到最终结果。')
     state.postprocessQueue = state.postprocessQueue.filter(item => item.id !== job.id)
     state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
-    state.debug.postprocess = payload.postprocess
+    if (payload.postprocessSummary) state.debug.postprocessSummary = payload.postprocessSummary
+    if (payload.postprocessFeedback) state.debug.postprocessFeedback = payload.postprocessFeedback
     state.debug.postprocessPending = false
     state.debug.pendingPostprocess = null
     state.debug.note = 'Postprocess 队列已完成一个任务。'
@@ -2893,6 +3043,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     state.debug.director = payload.director
     state.debug.narrator = payload.narrator
     state.debug.postprocess = null
+    state.directorHistory = appendDirectorHistory(state.directorHistory, payload.director)
     setPreferredModel(payload.model || requestModel)
     enqueuePostprocessJob(payload.pendingPostprocess)
     saveState()
@@ -2924,17 +3075,21 @@ function buildGenerateRequestPayload(playerInput) {
     playerFeedback: state.playerFeedback,
     storyContext: buildStoryContextForRequest(),
     globalContext: state.globalContext,
-    feedbackText: renderFeedbackMemory(),
+    feedbackText: renderFeedbackMemory(state.feedbackMemory, 'director'),
+    narratorFeedbackText: renderFeedbackMemory(state.feedbackMemory, 'narrator'),
     physicalConstraints: state.physicalConstraints,
     plotGoal: state.plotGoal,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: nextAssistantTurnIndex(),
     recentTurns: buildRecentTurnsForRequest(playerInput),
+    recentDirectorPlans: state.directorHistory,
     characters: state.characters,
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
+    enabledSceneModules: state.enabledSceneModules,
+    lastSelectedSceneModules: state.lastSelectedSceneModules,
     model: getActiveModel(),
     apiKey: getPipelineApiKey(),
     apiKeys: getPipelineApiKeys(),
@@ -3041,6 +3196,7 @@ function pickRegenerableStoryState(story) {
     'plotLines',
     'feedbackMemory',
     'playerFeedback',
+    'directorHistory',
     'storyAssetId',
     'programConfigFile',
     'statusSchema',
@@ -3048,6 +3204,8 @@ function pickRegenerableStoryState(story) {
     'statusState',
     'globalContext',
     'playerOptions',
+    'enabledSceneModules',
+    'lastSelectedSceneModules',
     'debug',
   ]
   const snapshot = {}
@@ -3197,6 +3355,7 @@ function applyPostprocess(payload) {
     state.outline = turnSummary
   }
   if (typeof payload.plotGoal === 'string') state.plotGoal = payload.plotGoal.trim()
+  if (Array.isArray(payload.selectedSceneModules)) state.lastSelectedSceneModules = normalizeSceneModuleNames(payload.selectedSceneModules).slice(0, 2)
   state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
   state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
   const statusPatch = payload.postprocess && typeof payload.postprocess === 'object' ? payload.postprocess : payload

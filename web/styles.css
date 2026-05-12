@@ -1079,6 +1079,76 @@ button:disabled {
   line-height: 1.35;
 }
 
+.scene-module-list {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.scene-module-summary {
+  display: grid;
+  gap: 3px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.scene-module-summary strong {
+  font-size: 12px;
+}
+
+.scene-module-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.scene-module-dialog-list {
+  display: grid;
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.scene-module-choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 9px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.scene-module-choice input {
+  margin-top: 3px;
+  accent-color: var(--black);
+}
+
+.scene-module-choice strong,
+.scene-module-choice small {
+  display: block;
+}
+
+.scene-module-choice strong {
+  font-size: 13px;
+}
+
+.scene-module-choice strong em {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--blue);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.scene-module-choice small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .asset-preview {
   display: grid;
   grid-template-columns: 1fr;

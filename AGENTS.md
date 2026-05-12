@@ -14,19 +14,20 @@ Initializer -> 初始剧情目标 / 人物状态 / 世界观
 主链路：玩家输入 + 最近正文 + 当前状态 + 剧情目标 + 上轮反重复提醒 + 上轮物理约束 -> Director -> Narrator -> 返回正文
                                                                                               |
                                                                                               v
-后台链路：PostprocessQueue -> 本轮总结 / 人物状态补丁 / 反重复提醒 / 新剧情方向骨架
+后台链路：PostprocessQueue -> PostprocessSummary / PostprocessFeedback
 ```
 
 - Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
 - 用户输入：每轮玩家自由输入，是 Director 和 Narrator 的当前触发点。
-- 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director、Narrator、Postprocess；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复，Postprocess 只用于理解上下文，不能并入本轮总结。
-- 上轮反重复提醒：Postprocess 只产生少量下一轮参考，程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator；它不是当轮修订闭环。
+- 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director、Narrator、PostprocessFeedback；Director 用于判断已发生细节和阶段顺序，Narrator 用于反重复，PostprocessFeedback 只用于理解上下文，不能并入本轮总结。
+- 上轮反重复提醒：PostprocessFeedback 只产生少量下一轮参考，程序保存为 `feedbackMemory`，注入下一轮 Director / Narrator；它不是当轮修订闭环。
 - 上轮物理约束：Director 每轮接收上一轮 `physicalConstraints`，继承仍成立的纯物理限制，输出本轮新的 `physicalConstraints` 供下一轮使用。
 - 玩家负反馈：玩家手动维护的持久提醒，广播给 Director、Narrator、Postprocess；玩家清空输入框才删除，不写入 `feedbackMemory`。
 - Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。`goalStep` 是本轮向剧情目标靠近的显式桥，`beat1/beat2/beat3/ending` 是具体执行骨架。
 - Narrator：按导演计划写玩家可见正文；不更新状态。
-- Postprocess：正文显示后进入独立队列，只更新本轮事实总结、人物状态补丁、反重复提醒和 `plotGoal`；不阻塞下一轮输入，不改正文，不生成玩家候选项。
-- 剧情目标：Initializer 生成初始 `plotGoal`。`plotGoal` 不是 if/else 变量，而是连接短期正文和未来几轮方向的骨架；Postprocess 每轮都可以根据正文和当前局面沿用、微调或替换，重点是承前启后，不是判断完成状态。
+- PostprocessSummary：正文显示后进入独立队列，只看最终正文、玩家输入和当前人物状态，更新本轮事实总结、人物状态字段补丁、人物名单补丁、人物状态补丁；不做反馈，不改正文。
+- PostprocessFeedback：在 Summary 之后运行，接收世界观、长期总结、剧情目标、最近正文、最近 5 轮 Director 计划、本轮 Director 计划和玩家负反馈，只更新 `plotGoal`、`文字细节重复`、`剧情设计重复`、`可选扰动源`；不维护人物状态，不改正文。
+- 剧情目标：Initializer 生成初始 `plotGoal`。`plotGoal` 不是 if/else 变量，而是连接短期正文和未来几轮方向的骨架；PostprocessFeedback 必须尽可能保持不变，只有正文已经明显完成、偏离、打断或使当前目标无法继续时才微调或替换。
 
 ## 当前状态设计
 
@@ -48,21 +49,23 @@ Initializer -> 初始剧情目标 / 人物状态 / 世界观
 
 - `statusRoster` 只保存名字，不保存 `id/name/active` 对象。
 - 默认 roster 内人物都 active。
-- Postprocess 只输出 `statusSchemaPatch`、`statusRosterPatch`、`statusStatePatch`。
+- PostprocessSummary 只输出 `statusSchemaPatch`、`statusRosterPatch`、`statusStatePatch`。
 - 前端人物状态栏直接显示 JSON，不格式化成卡片。
 - 不恢复 `statusPanel`、`statusPanelSchema`、`statusSubject`。
 
 ## 反重复提醒设计
 
-Postprocess 只保留一个反重复提醒字段：
+PostprocessFeedback 只保留两个反重复提醒字段：
 
-- `存在重复`
+- `文字细节重复`
+- `剧情设计重复`
+- `可选扰动源`
 
-`存在重复` 同时承担反复用词和禁用词命中的提醒。程序保存为 `feedbackMemory`，只注入下一轮 Director 和 Narrator。不要恢复合并版 `qualityFeedback` 状态字段，也不要恢复 `违背约束`、`节奏不足`、`导演推进不足`、`导演物理违背` 等反馈字段。
+`文字细节重复` 只承担文面、句式、动作、感官词和同类描写的反重复提醒，注入下一轮 Director 和 Narrator。禁词表直接注入 Narrator，当轮约束正文，不再交给 PostprocessFeedback 延迟处理。`剧情设计重复` 对照最近 5 轮 Director 计划，提醒 Director 避免反复使用同类剧情装置，只注入下一轮 Director。`可选扰动源` 默认必须为空，只有剧情变钝、重复或缺少入口时才给 Director 一个低频变化种子，Narrator 不接收。不要恢复合并版 `qualityFeedback` 状态字段，也不要恢复 `违背约束`、`节奏不足`、`导演推进不足`、`导演物理违背` 等反馈字段。
 
-当前结论：大多数负反馈约束作用很小。约束不住时无效，约束住时会削弱文本灵动感。没有修订轮时，反重复提醒不能立刻改变已经输出的正文；如果要当轮生效，需要额外 Critic + Revision 调用，时间成本暂时不接受。主要连贯性依赖世界观、人物状态、人物性格、最近正文、长期总结和物理约束。只保留 `存在重复`，因为反重复和禁用词提醒成本低、方向清楚。
+当前结论：大多数负反馈约束作用很小。约束不住时无效，约束住时会削弱文本灵动感。没有修订轮时，反重复提醒不能立刻改变已经输出的正文；如果要当轮生效，需要额外 Critic + Revision 调用，时间成本暂时不接受。主要连贯性依赖世界观、人物状态、人物性格、最近正文、长期总结和物理约束。只保留反重复相关反馈，因为成本低、方向清楚。
 
-未来目标：模型速度足够快后，再把质量检查和修订做成每轮必做。当前 Postprocess 同时承担总结归纳、状态维护、反重复提醒输出，是为了压缩调用次数的妥协。更清楚的未来流水线：
+未来目标：模型速度足够快后，再把质量检查和修订做成每轮必做。当前已经把后处理拆成 Summary / Feedback，但 Feedback 仍只影响下一轮；更清楚的未来流水线：
 
 ```text
 Director -> Narrator -> Critic -> Revision -> Memory
@@ -75,40 +78,46 @@ Director -> Narrator -> Critic -> Revision -> Memory
 
 当前暂时不做；只把它作为速度提升后的下一阶段架构目标。
 
+剧情目标跳变是未来实验，暂时不做。思路是程序随轮数增加逐步提高触发概率；一旦触发，只给当轮 PostprocessFeedback 追加一条临时指令：通过引入外部事件、合乎逻辑的角色诉求改变，或放大前文细微线索，引发较大程度的 `plotGoal` 改变。目的不是随机毁线，而是在已有正文、人物状态和世界观允许的范围内，引入低频惊喜或惊吓，打破长期目标过稳导致的路径依赖。触发后由 PostprocessFeedback 输出新的 `plotGoal`，下一轮 Director 再自然靠近新目标。
+
+导演 beat 改造是未来实验，暂时不做。当前 Director 已能稳定给出剧情骨架，但 beat 容易偏动作、外在反应和环境描写，导致 Narrator 即使被要求补充对话和心理，也会被 beat 框住。后续可把 beat 的“描写对象”从 `氛围 / 人物 / 行为` 改成更接近写法的展开方式，例如 `动作推进 / 对话推进 / 心理承压 / 环境压迫 / 人物反应 / 玩家描写`，让 Director 不写正文，只给 Narrator 留出对话、心理和玩家状态描写的展开口。
+
+## 场景模块
+
+场景模块是可开关的 skill 式场景增强包，用来按场景加载少量知识、写法和连续性提醒，不承担剧情控制。模块文件放在 `prompts/scene-modules/*.md`，用 frontmatter 声明 `name`、`description`，正文只写短场景细节和连续性提醒。
+
+运行方式：
+
+```text
+前端弹窗勾选并确认启用模块 -> 启用模块索引注入 PostprocessFeedback -> PostprocessFeedback 输出 selectedSceneModules -> selectedSceneModules 保存为下一轮 Director 和 Narrator 的本轮场景模块
+```
+
+- 前端未启用的模块不进入 Director 候选列表；选择必须在弹窗中点“确定”才保存。
+- 场景模块对外只使用中文名，不维护额外 id；PostprocessFeedback 每轮最多选择 2 个 `selectedSceneModules`，无相关场景时必须空数组。
+- PostprocessFeedback 本轮选中的模块影响下一轮 Director 和 Narrator；Director 不负责选择场景模块，只接收已选模块作为场景参考。
+- 下一轮 PostprocessFeedback 会重新选择，不自动沿用。
+- 程序丢弃无效名称，并强制最多 2 个，避免模块系统变成 prompt 堆积。
+
 后处理异步化已经落地为 PostprocessQueue。正文生成完成后立即返回给玩家，同时把本轮正文放入后台队列：
 
 ```text
 主链路：玩家输入 -> Director -> Narrator -> 返回正文
-后台链路：PostprocessQueue -> 更新长期总结/人物状态/反重复提醒/剧情目标
+后台链路：PostprocessQueue -> PostprocessSummary 更新长期总结/人物状态 -> PostprocessFeedback 更新反重复提醒/剧情目标
 ```
 
 - 最近正文作为热记忆同步保存，继续提供给下一轮 Director 和 Narrator。
 - 长期总结、人物状态、反重复提醒和剧情目标作为冷记忆异步更新，允许滞后一轮或几轮。
 - Postprocess 失败只停在队列里等待重试，不阻塞玩家继续游戏。
-- 每轮完成后入队一个 postprocess job；后台按顺序消费，避免旧总结覆盖新状态。
-- 反重复提醒异步后只影响下一轮；这是当前速度和质量之间的明确取舍。
+- 每轮完成后入队一个 postprocess job；后台按顺序消费，每个 job 内部分成 Summary 和 Feedback 两次调用，避免旧总结覆盖新状态。
+- 反重复提醒异步后最多持续 3 轮；这是当前速度和质量之间的明确取舍。
 
 导演粒度粗化是未来实验，不直接写进当前 prompt。目标是减少无意义的小选择：要求每轮至少产生一个比较明显的局面变化或信息状态变化，并允许 Director 代劳玩家的合理连续行动，直到产生新变化再停。但这次直接写入 Director / Narrator 后质量下降，后续要用更小范围 A/B 测试，不要一次性替换当前稳定 prompt。
 
-世界书召回也是未来实验，暂时不做，因为当前还没有独立世界书模块。思路是让 Director 每轮只输出本轮相关实体名，程序负责检索世界书词条：
+世界书召回暂时不做，优先用 skill 式场景模块替代。世界书召回会把问题变成实体提名、别名匹配、词条限量和噪音控制；场景模块更简单：用户先勾选允许使用的模块，PostprocessFeedback 每轮按当前局面挑选最多 2 个，下一轮注入 Director 和 Narrator。
 
-```json
-{
-  "entities": {
-    "characters": ["人物名"],
-    "items": ["道具名"],
-    "organizations": ["组织名"],
-    "worldTerms": ["世界观术语"]
-  }
-}
-```
-
-- Director 只负责提名实体，不解释实体，不生成词条内容。
-- 程序根据实体名精确匹配世界书、别名表或故事资料索引，命中后把短词条灌入 Narrator 和下一轮 Director。
-- 召回结果必须限量：实体每类 3-5 个，词条最多 5 条，每条短摘要，避免上下文膨胀。
-- 初版只做精确匹配和别名匹配，不急着做向量检索或语义搜索。
-- 目标是减少整段世界观常驻输入，让模型只拿到本轮真正相关的设定锚点，降低 OOC 和设定漂移。
-- 风险是 Director 提名漏实体、错实体，或世界书词条过长导致噪音回流；实现前先补世界书数据结构和索引规则。
+- 目标是减少整段世界观常驻输入，让模型只拿到本轮真正相关的场景锚点。
+- 模块内容可以承载局部世界观、地点规则、组织氛围、道具用法、场景写法和禁用套路。
+- 不让 Director 输出实体列表，不做向量检索，不维护独立世界书索引，除非后续场景模块无法覆盖需求。
 
 ## Prompt 规则
 
@@ -117,7 +126,8 @@ Prompt 文件直接在 `prompts/` 上层：
 - `initializer.md`
 - `director.md`
 - `narrator.md`
-- `postprocess.md`
+- `postprocess-summary.md`
+- `postprocess-feedback.md`
 
 风格绑定在故事配置 JSON 里：
 

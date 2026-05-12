@@ -279,3 +279,105 @@
 | 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | Postprocess | DeepSeek | `deepseek-v4-flash` | 16339 | - | 49.45 | 7054 | 808 | 7862 |
+
+## 2026/05/12 GMT+8 17:41:52 · 每轮流水线
+
+- 模式：generate
+- 轮次：11
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：在气流到来前的最后时刻，加快抽插速度，带她一起进入高潮释放
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Director | DeepSeek | `deepseek-v4-flash` | 30309 | - | 42.23 | 6721 | 1280 | 8001 |
+| Narrator | DeepSeek | `deepseek-v4-flash` | 35121 | - | 42.91 | 6468 | 1507 | 7975 |
+
+## 2026/05/12 GMT+8 17:42:10 · 每轮流水线
+
+- 模式：postprocess-retry
+- 轮次：11
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：在气流到来前的最后时刻，加快抽插速度，带她一起进入高潮释放
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Postprocess | DeepSeek | `deepseek-v4-flash` | 18067 | - | 48.71 | 7540 | 880 | 8420 |
+
+## 2026/05/12 GMT+8 17:54:38 · 每轮流水线
+
+- 模式：generate
+- 轮次：11
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：在气流到来前的最后时刻，加快抽插速度，带她一起进入高潮释放
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Director | DeepSeek | `deepseek-v4-flash` | 35423 | - | 41.39 | 6709 | 1466 | 8175 |
+| Narrator | DeepSeek | `deepseek-v4-flash` | 34491 | - | 46.27 | 6276 | 1596 | 7872 |
+
+## 2026/05/12 GMT+8 17:54:52 · 每轮流水线
+
+- 模式：postprocess-retry
+- 轮次：11
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：在气流到来前的最后时刻，加快抽插速度，带她一起进入高潮释放
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Postprocess | DeepSeek | `deepseek-v4-flash` | 13799 | - | 48.12 | 7466 | 664 | 8130 |
+
+## 2026/05/12 GMT+8 18:51:36 · 每轮流水线
+
+- 模式：generate
+- 轮次：12
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：我停留在她体内，感受高潮余韵中阴道壁的持续轻颤，手指沿着她脊柱向下滑入旗袍下摆，抚摸她汗湿的后腰。
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Director | DeepSeek | `deepseek-v4-flash` | 27267 | - | 45.29 | 7233 | 1235 | 8468 |
+| Narrator | DeepSeek | `deepseek-v4-flash` | 24435 | - | 49.93 | 7140 | 1220 | 8360 |
+
+## 2026/05/12 GMT+8 18:52:04 · 每轮流水线
+
+- 模式：postprocess-retry
+- 轮次：12
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：我停留在她体内，感受高潮余韵中阴道壁的持续轻颤，手指沿着她脊柱向下滑入旗袍下摆，抚摸她汗湿的后腰。
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| PostprocessSummary | DeepSeek | `deepseek-v4-flash` | 10909 | - | 49.96 | 1411 | 545 | 1956 |
+| PostprocessFeedback | DeepSeek | `deepseek-v4-flash` | 16781 | - | 53.93 | 7182 | 905 | 8087 |
+
+## 2026/05/12 GMT+8 19:12:18 · 每轮流水线
+
+- 模式：generate
+- 轮次：13
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：我把手掌从她后腰滑向她臀缝边缘，指尖隔着丝袜的破口触到阴蒂，轻轻画圈
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Director | DeepSeek | `deepseek-v4-flash` | 26953 | - | 54.87 | 7148 | 1479 | 8627 |
+| Narrator | DeepSeek | `deepseek-v4-flash` | 29201 | - | 63.56 | 7247 | 1856 | 9103 |
+
+## 2026/05/12 GMT+8 19:12:45 · 每轮流水线
+
+- 模式：postprocess-retry
+- 轮次：13
+- 选择模型：`deepseek-v4-flash`
+- 流水线模型：`{"director":"deepseek-v4-flash","narrator":"deepseek-v4-flash","postprocess":"deepseek-v4-flash","initializer":"deepseek-v4-flash"}`
+- 玩家输入：我把手掌从她后腰滑向她臀缝边缘，指尖隔着丝袜的破口触到阴蒂，轻轻画圈
+
+| 模块 | Provider | 模型 | 总耗时(ms) | TTFT(ms) | 输出tokens/秒(总耗时估算) | 输入tokens | 输出tokens | 总tokens |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| PostprocessSummary | DeepSeek | `deepseek-v4-flash` | 13777 | - | 53.13 | 5966 | 732 | 6698 |
+| PostprocessFeedback | DeepSeek | `deepseek-v4-flash` | 12674 | - | 48.84 | 7563 | 619 | 8182 |

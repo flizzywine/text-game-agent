@@ -91,6 +91,14 @@
             </div>
             <div id="storyTrackingView" class="story-tracking-view"></div>
           </section>
+
+          <section class="panel scene-module-panel">
+            <div class="panel-head">
+              <h2>场景模块</h2>
+              <button id="sceneModuleButton" class="ghost-button" type="button">选择</button>
+            </div>
+            <div id="sceneModuleList" class="scene-module-list"></div>
+          </section>
         </aside>
       </main>
 
@@ -148,7 +156,7 @@
           <div class="model-provider-list">
             <button type="button" class="provider-card" data-provider-model="deepseek-v4-flash">
               <strong>DeepSeek Official</strong>
-              <span>官方 DeepSeek；仅这里启用 Pro/Flash 分级路由。</span>
+              <span>官方 DeepSeek；当前模型全局用于所有流水线阶段。</span>
             </button>
             <button type="button" class="provider-card" data-provider-model="infron/deepseek-v4-flash">
               <strong>Infron</strong>
@@ -309,6 +317,18 @@
           <button value="cancel" type="button" id="closePromptPreviewButton" class="ghost-button">关闭</button>
         </div>
         <div id="promptPreviewList" class="prompt-preview-list"></div>
+      </form>
+    </dialog>
+
+    <dialog id="sceneModuleDialog" class="app-dialog wide-dialog">
+      <form method="dialog" id="sceneModuleForm">
+        <h3>场景模块</h3>
+        <p class="dialog-note">只勾选允许 Director 选择的场景模块；每轮最多实际加载 2 个。</p>
+        <div id="sceneModuleDialogList" class="scene-module-dialog-list"></div>
+        <div class="dialog-actions">
+          <button value="cancel" type="button" id="cancelSceneModuleButton" class="ghost-button">取消</button>
+          <button value="default" type="submit" id="confirmSceneModuleButton">确定</button>
+        </div>
       </form>
     </dialog>
 
