@@ -3,7 +3,10 @@ dist/
 .DS_Store
 .env.local
 debug/
-save/current-state.json
-save/*-cache.json
+save/*
+!save/README.md
 story/*
 !story/README.md
+.env
+.env.*
+!.env.example

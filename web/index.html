@@ -11,7 +11,7 @@
       <header class="topbar">
         <div>
           <h1>Text Game Agent</h1>
-          <p id="connectionStatus">Fireworks V4 Pro Priority</p>
+            <p id="connectionStatus">DeepSeek Official</p>
           <div id="pipelineModelGrid" class="pipeline-model-grid" aria-label="流水线模型"></div>
           <p id="turnStatus" class="turn-status">当前第 0 轮</p>
         </div>
@@ -39,7 +39,6 @@
               <span>Temp</span>
               <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0.8" />
             </label>
-            <button id="directorControlButton" class="ghost-button" type="button">导演控制台</button>
             <button id="resetButton" class="ghost-button" type="button">清空当前故事</button>
           </div>
         </div>
@@ -92,13 +91,6 @@
             <div id="storyTrackingView" class="story-tracking-view"></div>
           </section>
 
-          <section class="panel scene-module-panel">
-            <div class="panel-head">
-              <h2>场景模块</h2>
-              <button id="sceneModuleButton" class="ghost-button" type="button">选择</button>
-            </div>
-            <div id="sceneModuleList" class="scene-module-list"></div>
-          </section>
         </aside>
       </main>
 
@@ -143,7 +135,7 @@
         <section class="library-hero">
           <div>
             <h2>模型管理</h2>
-            <p>管理 Provider、API Key、默认模型和简化测速。</p>
+            <p>管理 DeepSeek Official API Key、默认模型和简化测速。</p>
           </div>
           <div class="library-actions">
             <button id="providerTestButton" class="ghost-button" type="button">连通性测试</button>
@@ -158,22 +150,6 @@
               <strong>DeepSeek Official</strong>
               <span>官方 DeepSeek；当前模型全局用于所有流水线阶段。</span>
             </button>
-            <button type="button" class="provider-card" data-provider-model="infron/deepseek-v4-flash">
-              <strong>Infron</strong>
-              <span>DeepSeek / Gemini 模型经 Infron；请求按 throughput 排序。</span>
-            </button>
-            <button type="button" class="provider-card" data-provider-model="accounts/fireworks/models/deepseek-v4-pro:priority">
-              <strong>Fireworks</strong>
-              <span>DeepSeek V4 Pro Priority；不做额外分级路由。</span>
-            </button>
-            <button type="button" class="provider-card" data-provider-model="gemini-3.1-flash-lite">
-              <strong>Google AI Studio</strong>
-              <span>Gemini 3.1 Flash Lite；直连 Google AI Studio。</span>
-            </button>
-            <button type="button" class="provider-card" data-provider-model="qwen-3-235b-a22b-instruct-2507">
-              <strong>Cerebras</strong>
-              <span>Qwen 3 235B A22B Instruct 2507；不做额外分级路由。</span>
-            </button>
           </div>
           <section class="model-settings-form model-selection-form">
             <h3>模型选择</h3>
@@ -181,41 +157,16 @@
               <span>供应商</span>
               <select id="providerSelect">
                 <option value="deepseek">DeepSeek Official</option>
-                <option value="infron">Infron</option>
-                <option value="fireworks">Fireworks</option>
-                <option value="google-ai-studio">Google AI Studio</option>
-                <option value="cerebras">Cerebras</option>
               </select>
             </label>
             <label>
               <span>当前模型</span>
               <select id="modelSelect">
-                <option value="accounts/fireworks/models/deepseek-v4-pro:priority">DeepSeek V4 Pro | priority | Fireworks</option>
-                <option value="accounts/fireworks/models/kimi-k2p5">Kimi K2.5 | Fireworks</option>
-                <option value="accounts/fireworks/models/qwen3-235b-a22b">Qwen3 235B A22B | Fireworks</option>
-                <option value="accounts/fireworks/models/qwen3p6-plus">Qwen3.6 Plus | Fireworks</option>
-                <option value="deepseek-v4-pro">DeepSeek V4 Pro | official | DeepSeek</option>
                 <option value="deepseek-v4-flash">DeepSeek V4 Flash | official | DeepSeek</option>
-                <option value="infron/deepseek-v4-pro">DeepSeek V4 Pro | throughput | Infron</option>
-                <option value="infron/deepseek-v4-flash">DeepSeek V4 Flash | throughput | Infron</option>
-                <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite | throughput | Infron</option>
-                <option value="google/gemini-2.5-flash">Gemini 2.5 Flash | throughput | Infron</option>
-                <option value="google/gemini-3-flash-preview">Gemini 3 Flash Preview | throughput | Infron</option>
-                <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite | AI Studio | Google</option>
-                <option value="qwen-3-235b-a22b-instruct-2507">Qwen 3 235B A22B Instruct 2507 | fast | Cerebras</option>
+                <option value="deepseek-v4-pro">DeepSeek V4 Pro | official | DeepSeek</option>
               </select>
             </label>
             <button id="applyModelSelectionButton" class="primary-button" type="button">确定</button>
-            <label>
-              <span>Infron 思考强度</span>
-              <select id="infronReasoningSelect">
-                <option value="">默认（不指定）</option>
-                <option value="none">none</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-              </select>
-            </label>
             <div id="modelTestResults" class="model-test-results"></div>
           </section>
           <section class="model-settings-form api-key-form">
@@ -292,21 +243,6 @@
       </form>
     </dialog>
 
-    <dialog id="directorControlDialog" class="app-dialog wide-dialog">
-      <form method="dialog" id="directorControlForm">
-        <h3>导演控制台</h3>
-        <p class="dialog-note">只修改当前剧情目标。</p>
-        <label>
-          <span>当前剧情目标</span>
-          <textarea id="directorPlotGoalInput" rows="8" placeholder="未来若干轮要靠近的具体人物关系或事件结果。"></textarea>
-        </label>
-        <div class="dialog-actions">
-          <button value="cancel" type="button" id="cancelDirectorControlButton" class="ghost-button">取消</button>
-          <button value="default" type="submit" id="saveDirectorControlButton">保存</button>
-        </div>
-      </form>
-    </dialog>
-
     <dialog id="promptPreviewDialog" class="app-dialog prompt-preview-dialog">
       <form method="dialog">
         <div class="prompt-preview-head">
@@ -317,18 +253,6 @@
           <button value="cancel" type="button" id="closePromptPreviewButton" class="ghost-button">关闭</button>
         </div>
         <div id="promptPreviewList" class="prompt-preview-list"></div>
-      </form>
-    </dialog>
-
-    <dialog id="sceneModuleDialog" class="app-dialog wide-dialog">
-      <form method="dialog" id="sceneModuleForm">
-        <h3>场景模块</h3>
-        <p class="dialog-note">只勾选允许 Director 选择的场景模块；每轮最多实际加载 2 个。</p>
-        <div id="sceneModuleDialogList" class="scene-module-dialog-list"></div>
-        <div class="dialog-actions">
-          <button value="cancel" type="button" id="cancelSceneModuleButton" class="ghost-button">取消</button>
-          <button value="default" type="submit" id="confirmSceneModuleButton">确定</button>
-        </div>
       </form>
     </dialog>
 

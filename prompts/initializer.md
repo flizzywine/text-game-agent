@@ -16,8 +16,6 @@
 
 缺少原始信息时，用合理、克制、可继续游戏的默认值补齐。
 
-初始化阶段生成第一条 `plotGoal`。
-
 `{{user}}` 是玩家操控角色的占位符，不是独立 NPC。故事资料同时出现“玩家”和 `{{user}}` 时，只能合并成同一个玩家角色；不要在 `statusRoster/statusState` 中同时输出“玩家”和 `{{user}}` 两个人。若故事资料没有给出玩家姓名，人物名写“玩家”。
 
 ## 输出字段
@@ -28,7 +26,6 @@
 - `statusRoster`：你认为需要追踪的重要人物名数组，包含玩家角色和若干重要 NPC；不要只写“玩家”，也不要放太多 NPC。
 - `statusState`：以人物名为 key 的初始状态对象，人物名来自`statusRoster` ，具体字段来自 `statusSchema`。
 - `openingText`：玩家进入游戏看到的第一段正文；建立场景，引入至少一个 NPC 或环境压力，留下可说话、行动或观察的入口；不替玩家做关键选择。
-- `plotGoal`：未来若干轮要靠近的具体人物关系或事件结果；不是下一步动作，不写章节大纲。
 - `directorStyle`：故事专属导演风格，写剧情推进、矛盾来源、人物关系变化和核心体验倾向。
 - `narratorStyle`：故事专属叙事风格，写正文语调、句式、描写密度、情绪表达和语言质感。
 - `initialPlayerOptions`：固定 3 项，每项只包含 `inputText`，三项方向不同，`inputText` 可直接发送。
@@ -66,7 +63,6 @@
       "...": ""
     }
   },
-  "plotGoal": "未来若干轮要靠近的具体人物关系或事件结果",
   "directorStyle": "",
   "narratorStyle": "",
   "initialPlayerOptions": [

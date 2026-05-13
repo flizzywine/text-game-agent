@@ -9,11 +9,11 @@
 ## 当前流水线
 
 ```text
-Initializer -> 初始剧情目标 / 人物状态 / 世界观
+Initializer -> 人物状态 / 世界观 / 开场正文 / 初始选项
 
-主链路：玩家输入 + 最近正文 + 当前状态 + 剧情目标 + 上轮反重复提醒 + 上轮物理约束 -> Director -> Narrator -> 返回正文
-                                                                                              |
-                                                                                              v
+主链路：玩家输入 + 最近正文 + 当前状态 + 上轮反馈提醒 + 上轮物理约束 -> Director -> Narrator -> 返回正文
+                                                                                       |
+                                                                                       v
 后台链路：PostprocessQueue -> PostprocessSummary / PostprocessFeedback
 ```
 
@@ -23,11 +23,11 @@ Initializer -> 初始剧情目标 / 人物状态 / 世界观
 - 上轮反重复提醒：PostprocessFeedback 只产生少量下一轮参考，程序保存为 `feedbackMemory`，注入下一轮 Director / Narrator；它不是当轮修订闭环。
 - 上轮物理约束：Director 每轮接收上一轮 `physicalConstraints`，继承仍成立的纯物理限制，输出本轮新的 `physicalConstraints` 供下一轮使用。
 - 玩家负反馈：玩家手动维护的持久提醒，广播给 Director、Narrator、Postprocess；玩家清空输入框才删除，不写入 `feedbackMemory`。
-- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。`goalStep` 是本轮向剧情目标靠近的显式桥，`beat1/beat2/beat3/ending` 是具体执行骨架。
-- Narrator：按导演计划写玩家可见正文；不更新状态。
+- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。当前核心字段是 `plotDrive / mainPresentation / supportingPresentation / narrativeStyle / physicalConstraints`。不要恢复 `plotGoal`、`plotStep`、`plotFrame`、`writingPlan`、`beat1/beat2/beat3/ending`。
+- Narrator：按导演计划写玩家可见正文；不更新状态。正文生成后前端定位到最新一轮正文开头，不跳到全文末尾。
 - PostprocessSummary：正文显示后进入独立队列，只看最终正文、玩家输入和当前人物状态，更新本轮事实总结、人物状态字段补丁、人物名单补丁、人物状态补丁；不做反馈，不改正文。
-- PostprocessFeedback：在 Summary 之后运行，接收世界观、长期总结、剧情目标、最近正文、最近 5 轮 Director 计划、本轮 Director 计划和玩家负反馈，只更新 `plotGoal`、`文字细节重复`、`剧情设计重复`、`可选扰动源`；不维护人物状态，不改正文。
-- 剧情目标：Initializer 生成初始 `plotGoal`。`plotGoal` 不是 if/else 变量，而是连接短期正文和未来几轮方向的骨架；PostprocessFeedback 必须尽可能保持不变，只有正文已经明显完成、偏离、打断或使当前目标无法继续时才微调或替换。
+- PostprocessFeedback：在 Summary 之后运行，接收世界观、长期总结、最近正文、最近 5 轮 Director 计划、本轮 Director 计划和玩家负反馈，只更新 `文字细节重复`、`剧情设计重复`、`剧情速度拖沓`、`可选扰动源`；不维护人物状态，不改正文。
+- `plotDrive` 是当前唯一剧情推动字段。它同时承担“剧情为什么会动”和“如何推动”的作用。可选值包括：`欲望追求`、`阻力碰撞`、`信息落差`、`关系张力`、`外部压力`、`价值抉择`、`因果回响`、`身份错位`、`危机逼近`、`资源争夺`、`快速跳跃`。不要恢复独立 `plotGoal`。
 
 ## 当前状态设计
 
@@ -53,15 +53,18 @@ Initializer -> 初始剧情目标 / 人物状态 / 世界观
 - 前端人物状态栏直接显示 JSON，不格式化成卡片。
 - 不恢复 `statusPanel`、`statusPanelSchema`、`statusSubject`。
 
-## 反重复提醒设计
+## 反馈提醒设计
 
-PostprocessFeedback 只保留两个反重复提醒字段：
+PostprocessFeedback 只保留三个反馈字段，外加一个独立扰动字段：
 
 - `文字细节重复`
 - `剧情设计重复`
+- `剧情速度拖沓`
 - `可选扰动源`
 
-`文字细节重复` 只承担文面、句式、动作、感官词和同类描写的反重复提醒，注入下一轮 Director 和 Narrator。禁词表直接注入 Narrator，当轮约束正文，不再交给 PostprocessFeedback 延迟处理。`剧情设计重复` 对照最近 5 轮 Director 计划，提醒 Director 避免反复使用同类剧情装置，只注入下一轮 Director。`可选扰动源` 默认必须为空，只有剧情变钝、重复或缺少入口时才给 Director 一个低频变化种子，Narrator 不接收。不要恢复合并版 `qualityFeedback` 状态字段，也不要恢复 `违背约束`、`节奏不足`、`导演推进不足`、`导演物理违背` 等反馈字段。
+`文字细节重复` 只承担文面、句式、动作、感官词和同类描写的反重复提醒，注入下一轮 Director 和 Narrator。`剧情设计重复` 对照最近 5 轮 Director 计划，提醒 Director 避免反复使用同类剧情装置，只注入下一轮 Director。`剧情速度拖沓` 检查最近正文是否连续停留在低价值过渡、寒暄、等待、移动、解释、重复反应，缺少新信息、新压力、新关系变化或可行动的新局面；拖沓时提示下一轮加快剧情速度，必要时使用 `快速跳跃`。
+
+反馈提醒存入 `feedbackMemory`，最多 6 条，超过后顶掉最早的一条。禁词表直接注入 Narrator，当轮约束正文，不再交给 PostprocessFeedback 延迟处理。`可选扰动源` 是独立字段，不进入 `feedbackMemory`；它只由 PostprocessFeedback 在 `剧情速度拖沓` 非空时产生。轻微拖沓给小/中扰动，非常拖沓可以给较大扰动，用来彻底扭转剧情走向，但不得破坏物理约束、人物性格和已发生事实。Director 不输出 `optionalDisturbance`，只从上轮反馈文本里接收它作为可用可不用的低频加速种子；Narrator 不把它当 Director 字段读取。不要恢复合并版 `qualityFeedback` 状态字段，也不要恢复 `违背约束`、`节奏不足`、`导演推进不足`、`导演物理违背` 等反馈字段。
 
 当前结论：大多数负反馈约束作用很小。约束不住时无效，约束住时会削弱文本灵动感。没有修订轮时，反重复提醒不能立刻改变已经输出的正文；如果要当轮生效，需要额外 Critic + Revision 调用，时间成本暂时不接受。主要连贯性依赖世界观、人物状态、人物性格、最近正文、长期总结和物理约束。只保留反重复相关反馈，因为成本低、方向清楚。
 
@@ -71,53 +74,56 @@ PostprocessFeedback 只保留两个反重复提醒字段：
 Director -> Narrator -> Critic -> Revision -> Memory
 ```
 
-- `Critic`：只检查质量，输出可执行质量提醒；重点看导演是否推进剧情目标、叙事是否违反物理约束或世界状态、是否重复、太短、太水、文风漂移。
+- `Critic`：只检查质量，输出可执行质量提醒；重点看导演是否通过 `plotDrive` 推动局面、叙事是否违反物理约束或世界状态、是否重复、太短、太水、文风漂移。
 - `Revision`：每轮默认运行，立即吸收 `Critic` 的提醒，只修正文，不更新状态。
 - `Memory`：只负责长期总结、人物状态补丁、剧情方向骨架更新。
 - Postprocess 这个名字后续可以消失，或拆成 `Critic` / `Memory`。
 
 当前暂时不做；只把它作为速度提升后的下一阶段架构目标。
 
-剧情目标跳变是未来实验，暂时不做。思路是程序随轮数增加逐步提高触发概率；一旦触发，只给当轮 PostprocessFeedback 追加一条临时指令：通过引入外部事件、合乎逻辑的角色诉求改变，或放大前文细微线索，引发较大程度的 `plotGoal` 改变。目的不是随机毁线，而是在已有正文、人物状态和世界观允许的范围内，引入低频惊喜或惊吓，打破长期目标过稳导致的路径依赖。触发后由 PostprocessFeedback 输出新的 `plotGoal`，下一轮 Director 再自然靠近新目标。
+当前结论：`plotGoal` 和 `plotDrive` 实测重复，已删除 `plotGoal`。剧情大幅跳变不再通过 `plotGoal` 管理，而是通过 `plotDrive=快速跳跃`、`剧情速度拖沓` 反馈和 `可选扰动源` 低频介入。
 
-导演 beat 改造是未来实验，暂时不做。当前 Director 已能稳定给出剧情骨架，但 beat 容易偏动作、外在反应和环境描写，导致 Narrator 即使被要求补充对话和心理，也会被 beat 框住。后续可把 beat 的“描写对象”从 `氛围 / 人物 / 行为` 改成更接近写法的展开方式，例如 `动作推进 / 对话推进 / 心理承压 / 环境压迫 / 人物反应 / 玩家描写`，让 Director 不写正文，只给 Narrator 留出对话、心理和玩家状态描写的展开口。
+Director beat 已废弃。当前思路是：长期连贯性由世界观、人物状态、最近正文、长期总结、物理约束提供；短期推动由 `plotDrive` 提供；表现方式由 `mainPresentation / supportingPresentation / narrativeStyle` 提供。具体情节、细节、节奏落点交给 Narrator 自由组织，避免 Director 重新变成细纲生成器。
 
-## 场景模块
+## 故事库与配置
 
-场景模块是可开关的 skill 式场景增强包，用来按场景加载少量知识、写法和连续性提醒，不承担剧情控制。模块文件放在 `prompts/scene-modules/*.md`，用 frontmatter 声明 `name`、`description`，正文只写短场景细节和连续性提醒。
+故事库里的 Program Config JSON 是“新游戏初始化模板”，不是当前游玩状态。编辑故事卡 JSON 只影响 `story/<asset>/program-config.json` 和后续新开局/重新初始化，不得修改当前正在游玩的故事。
 
-运行方式：
+严禁在保存故事卡 JSON 后同步覆盖当前游戏的：
 
-```text
-前端弹窗勾选并确认启用模块 -> 启用模块索引注入 PostprocessFeedback -> PostprocessFeedback 输出 selectedSceneModules -> selectedSceneModules 保存为下一轮 Director 和 Narrator 的本轮场景模块
-```
+- `statusSchema`
+- `statusRoster`
+- `statusState`
+- `worldview`
+- `openingText`
+- `directorStyle`
+- `narratorStyle`
 
-- 前端未启用的模块不进入 Director 候选列表；选择必须在弹窗中点“确定”才保存。
-- 场景模块对外只使用中文名，不维护额外 id；PostprocessFeedback 每轮最多选择 2 个 `selectedSceneModules`，无相关场景时必须空数组。
-- PostprocessFeedback 本轮选中的模块影响下一轮 Director 和 Narrator；Director 不负责选择场景模块，只接收已选模块作为场景参考。
-- 下一轮 PostprocessFeedback 会重新选择，不自动沿用。
-- 程序丢弃无效名称，并强制最多 2 个，避免模块系统变成 prompt 堆积。
+当前游玩状态只能通过开始新游戏、玩家输入后的 PostprocessSummary、存档读取或明确的状态编辑功能改变。不要恢复 `applyProgramConfigToCurrentStory` 这类同步函数。
 
 后处理异步化已经落地为 PostprocessQueue。正文生成完成后立即返回给玩家，同时把本轮正文放入后台队列：
 
 ```text
 主链路：玩家输入 -> Director -> Narrator -> 返回正文
-后台链路：PostprocessQueue -> PostprocessSummary 更新长期总结/人物状态 -> PostprocessFeedback 更新反重复提醒/剧情目标
+后台链路：PostprocessQueue -> PostprocessSummary 更新长期总结/人物状态 -> PostprocessFeedback 更新反馈提醒/扰动源
 ```
 
 - 最近正文作为热记忆同步保存，继续提供给下一轮 Director 和 Narrator。
-- 长期总结、人物状态、反重复提醒和剧情目标作为冷记忆异步更新，允许滞后一轮或几轮。
+- 长期总结、人物状态、反馈提醒和扰动源作为冷记忆异步更新，允许滞后一轮或几轮。
 - Postprocess 失败只停在队列里等待重试，不阻塞玩家继续游戏。
 - 每轮完成后入队一个 postprocess job；后台按顺序消费，每个 job 内部分成 Summary 和 Feedback 两次调用，避免旧总结覆盖新状态。
-- 反重复提醒异步后最多持续 3 轮；这是当前速度和质量之间的明确取舍。
+- 反馈提醒异步后最多持续 3 轮；这是当前速度和质量之间的明确取舍。
+
+长期总结压缩规则：最近 5 轮不进入历史总结上下文。历史总结达到 20 条时触发压缩，但只压缩第 1-10 条为 2 条摘要；第 11-20 条原样保留。压缩后结构为：`2 条摘要 + 原第 11-20 条`。
 
 导演粒度粗化是未来实验，不直接写进当前 prompt。目标是减少无意义的小选择：要求每轮至少产生一个比较明显的局面变化或信息状态变化，并允许 Director 代劳玩家的合理连续行动，直到产生新变化再停。但这次直接写入 Director / Narrator 后质量下降，后续要用更小范围 A/B 测试，不要一次性替换当前稳定 prompt。
 
-世界书召回暂时不做，优先用 skill 式场景模块替代。世界书召回会把问题变成实体提名、别名匹配、词条限量和噪音控制；场景模块更简单：用户先勾选允许使用的模块，PostprocessFeedback 每轮按当前局面挑选最多 2 个，下一轮注入 Director 和 Narrator。
+世界书召回暂时不做。场景模块也已删除，不要恢复。
 
-- 目标是减少整段世界观常驻输入，让模型只拿到本轮真正相关的场景锚点。
-- 模块内容可以承载局部世界观、地点规则、组织氛围、道具用法、场景写法和禁用套路。
-- 不让 Director 输出实体列表，不做向量检索，不维护独立世界书索引，除非后续场景模块无法覆盖需求。
+- 不做实体提名、别名匹配、词条限量、向量检索或独立世界书索引。
+- 不维护 `prompts/scene-modules`，不提供场景模块 UI，不让 PostprocessFeedback 选择 `selectedSceneModules`。
+
+情节库是未来路线图，当前不做。思路是从完整小说中抽取可复用的情节单元，形成情节库，再用类似 skill 的机制按当前局面动态加载少量剧情参考，引导后续剧情推进。它提供事件结构、冲突推进、角色关系变化和阶段性转折。当前不要实现抽取器、情节索引、向量检索、剧情召回接口，也不要让 Director 直接输出情节库条目；先保留为后续剧情驱动能力的路线图。
 
 ## Prompt 规则
 
@@ -149,21 +155,17 @@ Prompt 文件直接在 `prompts/` 上层：
 
 ## 模型策略
 
-当前文游默认主模型固定为官方 DeepSeek `deepseek-v4-flash`。当前判断是：去掉/弱化后处理后，速度可接受，文字质量优于 Grok 4.3。
+当前文游只保留官方 DeepSeek。默认主模型固定为 `deepseek-v4-flash`。
 
-- 速度不如 Grok/Gemini，但在当前流水线下不是不可接受。
-- 文字质量更好，更适合默认游玩。
-- Grok 4.3 保留为备用和测试对照。
+- 可选模型只允许官方 `deepseek-v4-flash` 和 `deepseek-v4-pro`。
+- 不恢复 Infron、Fireworks、Cerebras、Google AI Studio 或其他模型供应商。
+- API Key 只接受 DeepSeek 官方 Key；Key 只保存在浏览器本地或本机 `.env.local`，不提交到 Git。
 
 模型管理只认一个“当前模型”。不要再恢复 Initializer / Director / Narrator / Postprocess 分层路由；用户在模型管理里保存哪个模型，整条流水线就都用哪个模型。全局流水线展示也必须显示这一点，不能暗中把 Director / Narrator / Initializer 切到 Pro。
 
-其他模型保留在模型管理和测试列表里，只作为连通性、速度和内容拦截对照，不作为默认推荐。后续切换默认模型必须看速度记录、内容拦截记录和实际文字质量，不要只凭单次成功切换。
-
-速度测试和内容拦截测试继续 append 到记录文件，作为后续换模型的依据，避免凭感觉切换模型。
+速度测试和内容拦截测试继续 append 到记录文件，作为后续判断 `deepseek-v4-flash` / `deepseek-v4-pro` 的依据，避免凭感觉切换模型。
 
 ## 内容过滤规避经验
-
-旧经验：Gemini TPS 高，但内容过滤强；繁花式 prompt 可以通过语义改写降低触发概率，但并不稳定。
 
 当前结论：DeepSeek v4 flash + 单一 prompt 是默认策略。除非重新实测，不要恢复“把繁花 hard rule 放入 system”或“弱 system + 强 user”的旧规避方案。当前统一 user-only 输入，减少 role 差异带来的排查成本。
 

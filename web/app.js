@@ -1,60 +1,17 @@
 const storageKey = 'text-game-agent.web-state.v2'
 const legacyStorageKey = 'text-game-agent.web-state.v1'
 const deepSeekApiKeyStorageKey = 'text-game-agent.deepseek-api-key'
-const fireworksApiKeyStorageKey = 'text-game-agent.fireworks-api-key'
-const infronApiKeyStorageKey = 'text-game-agent.infron-api-key'
-const cerebrasApiKeyStorageKey = 'text-game-agent.cerebras-api-key'
-const googleAiStudioApiKeyStorageKey = 'text-game-agent.google-ai-studio-api-key'
-const infronReasoningStorageKey = 'text-game-agent.infron-reasoning-effort'
 const preferredModelStorageKey = 'text-game-agent.preferred-model'
 const preferredModelVersionStorageKey = 'text-game-agent.preferred-model-version'
-const fireworksDeepSeekV4ProPriorityModel = 'accounts/fireworks/models/deepseek-v4-pro:priority'
-const fireworksKimiK2P5Model = 'accounts/fireworks/models/kimi-k2p5'
-const fireworksQwen3235BA22BModel = 'accounts/fireworks/models/qwen3-235b-a22b'
-const fireworksQwen36PlusModel = 'accounts/fireworks/models/qwen3p6-plus'
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
 const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
-const infronDeepSeekV4ProModel = 'deepseek/deepseek-v4-pro'
-const infronDeepSeekV4FlashModel = 'deepseek/deepseek-v4-flash'
-const infronGemini31FlashLiteModel = 'google/gemini-3.1-flash-lite'
-const infronGemini25FlashModel = 'google/gemini-2.5-flash'
-const infronGemini3FlashPreviewModel = 'google/gemini-3-flash-preview'
-const infronKimiK25Model = 'moonshotai/kimi-k2.5'
-const infronQwen35EaricaModel = 'qwen/qwen3.5-27b-earica-derestricted'
-const infronQwen36FlashModel = 'qwen/qwen3.6-flash'
-const infronQwen36PlusModel = 'qwen/qwen3.6-plus'
-const infronXiaomiMimo25Model = 'xiaomi/mimo-v2.5'
-const infronGlm47FlashxModel = 'z-ai/glm-4.7-flashx'
-const infronGlm51Model = 'z-ai/glm-5.1'
-const infronGrok43Model = 'x-ai/grok-4.3'
-const googleAiStudioGemini31FlashLiteModel = 'gemini-3.1-flash-lite'
-const cerebrasQwenModel = 'qwen-3-235b-a22b-instruct-2507'
 const defaultModel = officialDeepSeekV4FlashModel
 const defaultModelVersion = 'official-deepseek-v4-flash'
-const modelOptions = new Set([fireworksDeepSeekV4ProPriorityModel, fireworksKimiK2P5Model, fireworksQwen3235BA22BModel, fireworksQwen36PlusModel, officialDeepSeekV4ProModel, officialDeepSeekV4FlashModel, infronDeepSeekV4ProModel, infronDeepSeekV4FlashModel, infronGemini31FlashLiteModel, infronGemini25FlashModel, infronGemini3FlashPreviewModel, infronKimiK25Model, infronQwen35EaricaModel, infronQwen36FlashModel, infronQwen36PlusModel, infronXiaomiMimo25Model, infronGlm47FlashxModel, infronGlm51Model, infronGrok43Model, googleAiStudioGemini31FlashLiteModel, cerebrasQwenModel])
-const providerOptions = ['deepseek', 'infron', 'fireworks', 'google-ai-studio', 'cerebras']
+const modelOptions = new Set([officialDeepSeekV4FlashModel, officialDeepSeekV4ProModel])
+const providerOptions = ['deepseek']
 const modelCatalog = [
-  { id: officialDeepSeekV4ProModel, provider: 'deepseek' },
   { id: officialDeepSeekV4FlashModel, provider: 'deepseek' },
-  { id: infronDeepSeekV4ProModel, provider: 'infron' },
-  { id: infronDeepSeekV4FlashModel, provider: 'infron' },
-  { id: infronGemini31FlashLiteModel, provider: 'infron' },
-  { id: infronGemini25FlashModel, provider: 'infron' },
-  { id: infronGemini3FlashPreviewModel, provider: 'infron' },
-  { id: infronKimiK25Model, provider: 'infron' },
-  { id: infronQwen35EaricaModel, provider: 'infron' },
-  { id: infronQwen36FlashModel, provider: 'infron' },
-  { id: infronQwen36PlusModel, provider: 'infron' },
-  { id: infronXiaomiMimo25Model, provider: 'infron' },
-  { id: infronGlm47FlashxModel, provider: 'infron' },
-  { id: infronGlm51Model, provider: 'infron' },
-  { id: infronGrok43Model, provider: 'infron' },
-  { id: fireworksDeepSeekV4ProPriorityModel, provider: 'fireworks' },
-  { id: fireworksKimiK2P5Model, provider: 'fireworks' },
-  { id: fireworksQwen3235BA22BModel, provider: 'fireworks' },
-  { id: fireworksQwen36PlusModel, provider: 'fireworks' },
-  { id: googleAiStudioGemini31FlashLiteModel, provider: 'google-ai-studio' },
-  { id: cerebrasQwenModel, provider: 'cerebras' },
+  { id: officialDeepSeekV4ProModel, provider: 'deepseek' },
 ]
 const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势']
 const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势', '位置']
@@ -68,6 +25,7 @@ let interceptionPromptSnapshot = null
 let persistController = null
 let activeStreamController = null
 let postprocessQueueRunning = false
+let historyCompactionRunning = false
 let pendingModelSelection = null
 let config = {
   model: defaultModel,
@@ -75,12 +33,7 @@ let config = {
   hasApiKey: false,
   providers: {
     deepseek: { baseUrl: 'https://api.deepseek.com', hasApiKey: false },
-    fireworks: { baseUrl: 'https://api.fireworks.ai/inference/v1', hasApiKey: false },
-    infron: { baseUrl: 'https://llm.onerouter.pro/v1', hasApiKey: false, providerSort: 'throughput' },
-    cerebras: { baseUrl: 'https://api.cerebras.ai/v1', hasApiKey: false },
-    googleAiStudio: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', hasApiKey: false },
   },
-  sceneModules: [],
 }
 
 const els = {
@@ -90,7 +43,6 @@ const els = {
   providerSelect: document.querySelector('#providerSelect'),
   modelSelect: document.querySelector('#modelSelect'),
   applyModelSelectionButton: document.querySelector('#applyModelSelectionButton'),
-  infronReasoningSelect: document.querySelector('#infronReasoningSelect'),
   temperatureInput: document.querySelector('#temperatureInput'),
   apiKeyButton: document.querySelector('#apiKeyButton'),
   providerTestButton: document.querySelector('#providerTestButton'),
@@ -111,11 +63,6 @@ const els = {
   interceptionStatus: document.querySelector('#interceptionStatus'),
   interceptionSystemInput: document.querySelector('#interceptionSystemInput'),
   interceptionResultOutput: document.querySelector('#interceptionResultOutput'),
-  directorControlButton: document.querySelector('#directorControlButton'),
-  directorControlDialog: document.querySelector('#directorControlDialog'),
-  directorControlForm: document.querySelector('#directorControlForm'),
-  directorPlotGoalInput: document.querySelector('#directorPlotGoalInput'),
-  cancelDirectorControlButton: document.querySelector('#cancelDirectorControlButton'),
   resetButton: document.querySelector('#resetButton'),
   storySelect: document.querySelector('#storySelect'),
   storyNameInput: document.querySelector('#storyNameInput'),
@@ -168,12 +115,6 @@ const els = {
   sendButton: document.querySelector('#sendButton'),
   statusPanelView: document.querySelector('#statusPanelView'),
   storyTrackingView: document.querySelector('#storyTrackingView'),
-  sceneModuleButton: document.querySelector('#sceneModuleButton'),
-  sceneModuleDialog: document.querySelector('#sceneModuleDialog'),
-  sceneModuleForm: document.querySelector('#sceneModuleForm'),
-  sceneModuleDialogList: document.querySelector('#sceneModuleDialogList'),
-  cancelSceneModuleButton: document.querySelector('#cancelSceneModuleButton'),
-  sceneModuleList: document.querySelector('#sceneModuleList'),
   toggleDebugButton: document.querySelector('#toggleDebugButton'),
   debugOutput: document.querySelector('#debugOutput'),
   emptyConversationTemplate: document.querySelector('#emptyConversationTemplate'),
@@ -216,12 +157,12 @@ function defaultStory(name = '未选择故事') {
     currentSituation: '',
     chapterSummary: '',
     outline: '',
-    plotGoal: '',
     physicalConstraints: [],
     directorStyle: '',
     narratorStyle: '',
     plotLines: [],
     feedbackMemory: [],
+    optionalDisturbance: '',
     playerFeedback: '',
     directorHistory: [],
     storyAssetId: '',
@@ -232,8 +173,6 @@ function defaultStory(name = '未选择故事') {
     globalContext: '',
     playerOptions: [],
     postprocessQueue: [],
-    enabledSceneModules: [],
-    lastSelectedSceneModules: [],
     model: readPreferredModelFromStorage(),
     lastTurnSnapshot: null,
     debug: {},
@@ -306,8 +245,8 @@ function normalizeAppState(raw) {
 function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultModelVersion) {
   const base = defaultStory(fallbackName)
   const rest = { ...(raw || {}) }
-  const messages = Array.isArray(raw?.messages) ? raw.messages : []
   const openingText = String(raw?.openingText || '')
+  const messages = stripOpeningMessages(Array.isArray(raw?.messages) ? raw.messages : [], openingText)
   const existingChapterSummary = cleanHistoricalGlobalContext(String(raw?.chapterSummary || raw?.currentSituation || ''))
   const existingGlobalContext = cleanHistoricalGlobalContext(String(raw?.globalContext || ''))
   const openingHistory = openingTurnHistory(openingText)
@@ -325,6 +264,7 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
   retiredKeys.forEach(key => {
     delete rest[key]
   })
+  const debug = normalizeDebugState(raw?.debug)
   return {
     ...base,
     ...rest,
@@ -339,12 +279,12 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     currentSituation: String(raw?.currentSituation || openingText || ''),
     chapterSummary,
     outline: String(raw?.outline || openingText || ''),
-    plotGoal: String(raw?.plotGoal || ''),
     physicalConstraints: normalizePhysicalConstraints(raw?.physicalConstraints),
     directorStyle: String(raw?.directorStyle || ''),
     narratorStyle: String(raw?.narratorStyle || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
     feedbackMemory: normalizeFeedbackMemory(raw?.feedbackMemory),
+    optionalDisturbance: String(raw?.optionalDisturbance || ''),
     playerFeedback: String(raw?.playerFeedback || ''),
     directorHistory: normalizeDirectorHistory(raw?.directorHistory),
     storyAssetId: String(raw?.storyAssetId || ''),
@@ -354,13 +294,73 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     statusState: normalizeStatusState(raw?.statusState, normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []), Array.isArray(raw?.characters) ? raw.characters : [], normalizeStatusSchema(raw?.statusSchema)),
     globalContext,
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
-    postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.filter(item => item && typeof item === 'object') : [],
-    enabledSceneModules: normalizeSceneModuleNames(raw?.enabledSceneModules),
-    lastSelectedSceneModules: normalizeSceneModuleNames(raw?.lastSelectedSceneModules).slice(0, 2),
+    postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.map(normalizePostprocessJob).filter(Boolean) : [],
     model: normalizePersistedModel(raw?.model, modelVersion) || base.model,
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
-    debug: raw?.debug && typeof raw.debug === 'object' ? raw.debug : {},
+    debug,
   }
+}
+
+function hasRetiredDirectorPlanFields(plan) {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return false
+  return [
+    'beat1',
+    'beat2',
+    'beat3',
+    'beats',
+    'ending',
+    'goalStep',
+    'turnIntent',
+    'plotStep',
+    'plotFrame',
+    'writingPlan',
+    'narrativeStrategy',
+    'pacing',
+    'focusLens',
+    'languageStyle',
+  ].some(key => Object.prototype.hasOwnProperty.call(plan, key))
+}
+
+function normalizeDirectorPlan(plan) {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return null
+  if (hasRetiredDirectorPlanFields(plan)) return null
+  const normalized = deepClone(plan)
+  delete normalized.optionalDisturbance
+  delete normalized.可选扰动源
+  return normalized
+}
+
+function normalizeDebugState(debug) {
+  if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return {}
+  const normalized = { ...debug }
+  if (normalized.director) {
+    const director = normalizeDirectorPlan(normalized.director)
+    if (director) {
+      normalized.director = director
+    } else {
+      delete normalized.director
+    }
+  }
+  return normalized
+}
+
+function stripOpeningMessages(messages, openingText) {
+  const opening = normalizeOpeningCompareText(openingText)
+  if (!opening || !Array.isArray(messages) || messages.length === 0) return messages
+  const firstUserIndex = messages.findIndex(message => message?.role === 'user')
+  const head = firstUserIndex >= 0 ? messages.slice(0, firstUserIndex) : messages
+  if (!head.length || !head.every(message => message?.role === 'assistant')) return messages
+  const headText = normalizeOpeningCompareText(head.map(message => message.content).join('\n'))
+  if (!headText) return messages
+  if (opening.includes(headText) || headText.includes(opening)) return messages.slice(head.length)
+  return messages
+}
+
+function normalizeOpeningCompareText(value) {
+  return String(value || '')
+    .replace(/^第0轮[:：]/, '')
+    .replace(/\s+/g, '')
+    .trim()
 }
 
 function openingTurnHistory(openingText) {
@@ -408,7 +408,7 @@ function normalizeFeedbackMemory(items) {
       }
     })
     .filter(Boolean)
-    .slice(-15)
+    .slice(-6)
 }
 
 function normalizePhysicalConstraints(value) {
@@ -500,7 +500,7 @@ function normalizeFeedbackType(type) {
   const value = String(type || '').trim()
   if (value === 'narrativeRepetition') return value
   if (value === 'plotDesignRepetition') return value
-  if (value === 'optionalDisturbance') return value
+  if (value === 'plotPacingDrag') return value
   return 'narrativeRepetition'
 }
 
@@ -514,7 +514,7 @@ function renderFeedbackMemory(items = state.feedbackMemory, target = 'all') {
       const label = {
         narrativeRepetition: '文字细节重复',
         plotDesignRepetition: '剧情设计重复',
-        optionalDisturbance: '可选扰动源',
+        plotPacingDrag: '剧情速度拖沓',
       }[item.type] || '反馈'
       return `- [${label}｜剩${item.ttl}轮] ${baselineLogText(item.text)}`
     })
@@ -528,7 +528,7 @@ function mergeFeedbackMemory(existing, payload) {
   const incoming = [
     ['narrativeRepetition', payload.文字细节重复 || payload.存在重复 || payload.narrativeRepetitionFeedback],
     ['plotDesignRepetition', payload.剧情设计重复 || payload.plotDesignRepetitionFeedback],
-    ['optionalDisturbance', payload.可选扰动源 || payload.optionalDisturbance],
+    ['plotPacingDrag', payload.剧情速度拖沓 || payload.plotPacingDragFeedback],
   ]
     .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 3 }))
     .filter(item => item.text)
@@ -541,14 +541,22 @@ function mergeFeedbackMemory(existing, payload) {
       merged.push(item)
     }
   }
-  return normalizeFeedbackMemory(merged)
+  return normalizeFeedbackMemory(merged).slice(-6)
+}
+
+function renderDirectorFeedbackMemory() {
+  return [
+    renderFeedbackMemory(state.feedbackMemory, 'director'),
+    state.optionalDisturbance ? `- [可选扰动源] ${baselineLogText(state.optionalDisturbance)}` : '',
+  ].filter(Boolean).join('\n')
 }
 
 function normalizeDirectorHistory(value) {
   if (!Array.isArray(value)) return []
   return value
     .filter(item => item && typeof item === 'object' && !Array.isArray(item))
-    .map(item => deepClone(item))
+    .map(item => normalizeDirectorPlan(item))
+    .filter(Boolean)
     .slice(-5)
 }
 
@@ -557,6 +565,16 @@ function appendDirectorHistory(history, directorPlan) {
   const normalized = normalizeDirectorHistory(history)
   if (!plan || Object.keys(plan).length === 0) return normalized
   return [...normalized, deepClone(plan)].slice(-5)
+}
+
+function currentDirectorPlanForRequest() {
+  const plan = normalizeDirectorPlan(state.debug?.director) || {}
+  const normalized = Object.keys(plan).length ? plan : {}
+  return normalized
+}
+
+function applyDirectorPlanState(directorPlan) {
+  if (!directorPlan || typeof directorPlan !== 'object' || Array.isArray(directorPlan)) return
 }
 
 function applyLegacyMigrations() {
@@ -659,17 +677,14 @@ function readPreferredModelFromStorage() {
 function readStoredPreferredModel() {
   try {
     const model = String(localStorage.getItem(preferredModelStorageKey) || '').trim()
-    const version = String(localStorage.getItem(preferredModelVersionStorageKey) || '').trim()
-    if (version !== defaultModelVersion && model === infronGrok43Model) return ''
     return modelOptions.has(model) ? model : ''
   } catch {
     return ''
   }
 }
 
-function normalizePersistedModel(value, version = defaultModelVersion) {
+function normalizePersistedModel(value) {
   const model = String(value || '').trim()
-  if (version !== defaultModelVersion && model === infronGrok43Model) return ''
   return modelOptions.has(model) ? model : ''
 }
 
@@ -691,20 +706,12 @@ function setPreferredModel(model) {
 }
 
 function providerForModel(model) {
-  const normalized = normalizeModel(model)
-  if (normalized === fireworksDeepSeekV4ProPriorityModel || normalized === fireworksKimiK2P5Model || normalized === fireworksQwen3235BA22BModel || normalized === fireworksQwen36PlusModel) return 'fireworks'
-  if (normalized === infronDeepSeekV4ProModel || normalized === infronDeepSeekV4FlashModel || normalized === infronGemini31FlashLiteModel || normalized === infronGemini25FlashModel || normalized === infronGemini3FlashPreviewModel || normalized === infronKimiK25Model || normalized === infronQwen35EaricaModel || normalized === infronQwen36FlashModel || normalized === infronQwen36PlusModel || normalized === infronXiaomiMimo25Model || normalized === infronGlm47FlashxModel || normalized === infronGlm51Model || normalized === infronGrok43Model) return 'infron'
-  if (normalized === cerebrasQwenModel) return 'cerebras'
-  if (normalized === googleAiStudioGemini31FlashLiteModel) return 'google-ai-studio'
+  normalizeModel(model)
   return 'deepseek'
 }
 
 function providerLabel(provider) {
-  if (provider === 'fireworks') return 'Fireworks'
-  if (provider === 'infron') return 'Infron'
-  if (provider === 'cerebras') return 'Cerebras'
-  if (provider === 'google-ai-studio') return 'Google AI Studio'
-  return 'DeepSeek'
+  return 'DeepSeek Official'
 }
 
 function normalizeProvider(value) {
@@ -725,42 +732,7 @@ function modelLabel(model) {
   return {
     [officialDeepSeekV4ProModel]: 'DeepSeek V4 Pro | official | DeepSeek',
     [officialDeepSeekV4FlashModel]: 'DeepSeek V4 Flash | official | DeepSeek',
-    [fireworksDeepSeekV4ProPriorityModel]: 'DeepSeek V4 Pro | priority | Fireworks',
-    [fireworksKimiK2P5Model]: 'Kimi K2.5 | Fireworks',
-    [fireworksQwen3235BA22BModel]: 'Qwen3 235B A22B | Fireworks',
-    [fireworksQwen36PlusModel]: 'Qwen3.6 Plus | Fireworks',
-    [infronDeepSeekV4ProModel]: 'DeepSeek V4 Pro | throughput | Infron',
-    [infronDeepSeekV4FlashModel]: 'DeepSeek V4 Flash | throughput | Infron',
-    [infronGemini31FlashLiteModel]: 'Gemini 3.1 Flash Lite | throughput | Infron',
-    [infronGemini25FlashModel]: 'Gemini 2.5 Flash | throughput | Infron',
-    [infronGemini3FlashPreviewModel]: 'Gemini 3 Flash Preview | throughput | Infron',
-    [infronKimiK25Model]: 'Kimi K2.5 | throughput | Infron',
-    [infronQwen35EaricaModel]: 'Qwen3.5 27B Earica Derestricted | throughput | Infron',
-    [infronQwen36FlashModel]: 'Qwen3.6 Flash | throughput | Infron',
-    [infronQwen36PlusModel]: 'Qwen3.6 Plus | throughput | Infron',
-    [infronXiaomiMimo25Model]: 'Xiaomi MiMo V2.5 | throughput | Infron',
-    [infronGlm47FlashxModel]: 'GLM 4.7 FlashX | throughput | Infron',
-    [infronGlm51Model]: 'GLM 5.1 | throughput | Infron',
-    [infronGrok43Model]: 'Grok 4.3 | throughput | Infron',
-    [googleAiStudioGemini31FlashLiteModel]: 'Gemini 3.1 Flash Lite | AI Studio | Google',
-    [cerebrasQwenModel]: 'Qwen 3 235B A22B Instruct 2507 | fast | Cerebras',
   }[model] || model
-}
-
-function normalizeInfronReasoningEffort(value) {
-  const effort = String(value || '').trim()
-  return ['none', 'low', 'medium', 'high'].includes(effort) ? effort : ''
-}
-
-function getInfronReasoningEffort() {
-  return normalizeInfronReasoningEffort(localStorage.getItem(infronReasoningStorageKey) || '')
-}
-
-function setInfronReasoningEffort(value) {
-  const effort = normalizeInfronReasoningEffort(value)
-  if (effort) localStorage.setItem(infronReasoningStorageKey, effort)
-  else localStorage.removeItem(infronReasoningStorageKey)
-  return effort
 }
 
 async function loadConfig() {
@@ -791,55 +763,13 @@ function normalizeRuntimeConfig(raw) {
     },
     baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
     hasApiKey: Boolean(raw?.hasApiKey || raw?.providers?.deepseek?.hasApiKey),
-    sceneModules: normalizeAvailableSceneModules(raw?.sceneModules),
     providers: {
       deepseek: {
         baseUrl: String(raw?.providers?.deepseek?.baseUrl || raw?.baseUrl || 'https://api.deepseek.com'),
         hasApiKey: Boolean(raw?.providers?.deepseek?.hasApiKey || raw?.hasApiKey),
       },
-      fireworks: {
-        baseUrl: String(raw?.providers?.fireworks?.baseUrl || 'https://api.fireworks.ai/inference/v1'),
-        hasApiKey: Boolean(raw?.providers?.fireworks?.hasApiKey),
-      },
-      infron: {
-        baseUrl: String(raw?.providers?.infron?.baseUrl || 'https://llm.onerouter.pro/v1'),
-        hasApiKey: Boolean(raw?.providers?.infron?.hasApiKey),
-        providerSort: String(raw?.providers?.infron?.providerSort || 'throughput'),
-        reasoningEffort: normalizeInfronReasoningEffort(raw?.providers?.infron?.reasoningEffort || ''),
-      },
-      cerebras: {
-        baseUrl: String(raw?.providers?.cerebras?.baseUrl || 'https://api.cerebras.ai/v1'),
-        hasApiKey: Boolean(raw?.providers?.cerebras?.hasApiKey),
-      },
-      googleAiStudio: {
-        baseUrl: String(raw?.providers?.googleAiStudio?.baseUrl || 'https://generativelanguage.googleapis.com/v1beta/openai'),
-        hasApiKey: Boolean(raw?.providers?.googleAiStudio?.hasApiKey),
-      },
     },
   }
-}
-
-function normalizeAvailableSceneModules(value) {
-  if (!Array.isArray(value)) return []
-  return value.map(module => {
-    if (!module || typeof module !== 'object') return null
-    const name = String(module.name || module.id || '').trim()
-    if (!name) return null
-    return {
-      name,
-      description: String(module.description || '').trim(),
-    }
-  }).filter(Boolean)
-}
-
-function normalizeSceneModuleNames(value) {
-  const items = Array.isArray(value) ? value : []
-  const output = []
-  for (const item of items) {
-    const name = String(item || '').trim()
-    if (name && !output.includes(name)) output.push(name)
-  }
-  return output
 }
 
 function bindEvents() {
@@ -876,19 +806,6 @@ function bindEvents() {
     openPromptPreview()
   })
 
-  els.sceneModuleButton.addEventListener('click', () => {
-    openSceneModuleDialog()
-  })
-
-  els.cancelSceneModuleButton.addEventListener('click', () => {
-    els.sceneModuleDialog.close()
-  })
-
-  els.sceneModuleForm.addEventListener('submit', event => {
-    event.preventDefault()
-    saveSceneModuleSelection()
-  })
-
   els.closePromptPreviewButton.addEventListener('click', () => {
     els.promptPreviewDialog.close()
   })
@@ -907,11 +824,6 @@ function bindEvents() {
 
   els.providerSelect.addEventListener('change', event => {
     pendingModelSelection = defaultModelForProvider(event.target.value)
-    renderModelManagementPage()
-  })
-
-  els.infronReasoningSelect.addEventListener('change', () => {
-    setInfronReasoningEffort(els.infronReasoningSelect.value)
     renderModelManagementPage()
   })
 
@@ -940,19 +852,6 @@ function bindEvents() {
 
   els.closeModelManagementButton.addEventListener('click', () => {
     closeModelManagementPage()
-  })
-
-  els.directorControlButton.addEventListener('click', () => {
-    openDirectorControl()
-  })
-
-  els.cancelDirectorControlButton.addEventListener('click', () => {
-    els.directorControlDialog.close()
-  })
-
-  els.directorControlForm.addEventListener('submit', event => {
-    event.preventDefault()
-    saveDirectorControl()
   })
 
   els.apiKeyButton.addEventListener('click', () => {
@@ -1144,7 +1043,6 @@ function render() {
   renderPlayerFeedback()
   renderStatusPanel()
   renderStoryTracking()
-  renderSceneModules()
   renderConversation()
   renderOptions()
   renderReadingJumpControls()
@@ -1461,8 +1359,7 @@ async function saveSelectedStorySettings() {
   els.saveStorySettingsButton.disabled = true
   setStoryLibraryStatus('正在保存故事设定。', 'running')
   try {
-    const config = await saveStoryAssetProgramConfig(asset, patch)
-    applyProgramConfigToCurrentStory(asset, config)
+    await saveStoryAssetProgramConfig(asset, patch)
     await loadStoryLibrary()
     renderStoryLibraryAssets()
     renderNewGameAssets()
@@ -1534,21 +1431,6 @@ function escapeControlCharactersInJsonStrings(text) {
     output += char
   }
   return output
-}
-
-function applyProgramConfigToCurrentStory(asset, config) {
-  if (!asset || !config) return
-  if (state.storyAssetId !== asset.id && state.programConfigFile !== asset.programConfigFile) return
-  state.worldview = String(config.worldview || state.worldview || '')
-  state.openingText = String(config.openingText || state.openingText || '')
-  state.directorStyle = String(config.directorStyle || '')
-  state.narratorStyle = String(config.narratorStyle || '')
-  state.statusSchema = normalizeStatusSchema(config.statusSchema || state.statusSchema)
-  state.statusRoster = normalizeStatusRoster(config.statusRoster || state.statusRoster, state.characters)
-  state.statusState = normalizeStatusState(config.statusState || state.statusState, state.statusRoster, state.characters, state.statusSchema)
-  state.globalContext = cleanHistoricalGlobalContext(state.globalContext)
-  saveState()
-  renderStoryTracking()
 }
 
 function setStoryLibraryStatus(message, tone = '') {
@@ -1624,7 +1506,6 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.currentSituation = openingSummary
   story.chapterSummary = ''
   story.outline = openingSummary
-  story.plotGoal = String(init.plotGoal || '')
   story.physicalConstraints = []
   story.directorStyle = String(init.directorStyle || '')
   story.narratorStyle = String(init.narratorStyle || '')
@@ -1638,7 +1519,6 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.globalContext = ''
   story.messages = []
   story.playerOptions = normalizeInitialPlayerOptions(init.initialPlayerOptions || init.playerOptions)
-  story.lastSelectedSceneModules = []
   story.debug = {}
   appState.stories.push(story)
   appState.currentStoryId = story.id
@@ -1940,8 +1820,7 @@ function renderConnection() {
   const providerConfig = getProviderConfig(provider)
   const keyState = hasRuntimeApiKey(provider) ? 'key ready' : `no ${providerLabel(provider)} key`
   const pipelineModels = pipelineModelsForSelection(model)
-  const route = provider === 'infron' ? ' · sort=throughput' : ''
-  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 当前选择 ${modelLabel(model)} · ${providerLabel(provider)} · ${keyState}${route}`
+  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 当前选择 ${modelLabel(model)} · ${providerLabel(provider)} · ${keyState}`
   renderPipelineModelGrid(model, pipelineModels)
   renderTurnStatus()
 }
@@ -1991,7 +1870,7 @@ async function testCurrentProvider() {
       body: JSON.stringify({
         model,
         apiKey: getLocalApiKey(provider),
-        reasoningEffort: provider === 'infron' ? getInfronReasoningEffort() : '',
+        reasoningEffort: '',
       }),
     })
     const payload = await response.json().catch(() => ({}))
@@ -2039,7 +1918,7 @@ async function testCurrentProviderSpeed() {
       body: JSON.stringify({
         model,
         apiKey: getLocalApiKey(provider),
-        reasoningEffort: provider === 'infron' ? getInfronReasoningEffort() : '',
+        reasoningEffort: '',
       }),
     })
     const payload = await response.json().catch(() => ({}))
@@ -2111,7 +1990,7 @@ function buildInterceptionRequestPayload() {
   delete payload.apiKeys
   return {
     ...payload,
-    director: state.debug?.director || {},
+    director: currentDirectorPlanForRequest(),
   }
 }
 
@@ -2124,7 +2003,7 @@ function buildPromptPreviewRequestPayload() {
     : []
   return {
     ...payload,
-    director: state.debug?.director || {},
+    director: currentDirectorPlanForRequest(),
     finalText: latestAssistantTextForPromptPreview(),
   }
 }
@@ -2246,7 +2125,7 @@ async function runContentInterceptionTest() {
         model,
         apiKey: getLocalApiKey(provider),
         temperature: Number(els.temperatureInput.value || 0.8),
-        reasoningEffort: provider === 'infron' ? getInfronReasoningEffort() : '',
+        reasoningEffort: '',
         systemInstruction: els.interceptionSystemInput.value,
         narratorSystem: interceptionPromptSnapshot.narratorSystem,
         narratorUser: interceptionPromptSnapshot.narratorUser,
@@ -2285,18 +2164,6 @@ function renderModelTestResult(result) {
   `
 }
 
-function openDirectorControl() {
-  els.directorPlotGoalInput.value = state.plotGoal || ''
-  els.directorControlDialog.showModal()
-}
-
-function saveDirectorControl() {
-  state.plotGoal = els.directorPlotGoalInput.value.trim()
-  saveState()
-  renderStoryTracking()
-  els.directorControlDialog.close()
-}
-
 function renderTurnStatus() {
   const completed = completedAssistantTurnCount()
   const generating = Boolean(generationBusy && state.debug?.startedAt)
@@ -2312,18 +2179,11 @@ function currentProvider() {
 
 function getProviderConfig(provider) {
   if (config.providers?.[provider]) return config.providers[provider]
-  if (provider === 'fireworks') return { baseUrl: 'https://api.fireworks.ai/inference/v1', hasApiKey: false }
-  if (provider === 'infron') return { baseUrl: 'https://llm.onerouter.pro/v1', hasApiKey: false, providerSort: 'throughput' }
-  if (provider === 'cerebras') return { baseUrl: 'https://api.cerebras.ai/v1', hasApiKey: false }
-  if (provider === 'google-ai-studio') return { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', hasApiKey: false }
   return { baseUrl: config.baseUrl || 'https://api.deepseek.com', hasApiKey: config.hasApiKey }
 }
 
 function apiKeyStorageKeyForProvider(provider) {
-  if (provider === 'fireworks') return fireworksApiKeyStorageKey
-  if (provider === 'infron') return infronApiKeyStorageKey
-  if (provider === 'cerebras') return cerebrasApiKeyStorageKey
-  if (provider === 'google-ai-studio') return googleAiStudioApiKeyStorageKey
+  normalizeProvider(provider)
   return deepSeekApiKeyStorageKey
 }
 
@@ -2338,10 +2198,6 @@ function getPipelineApiKey() {
 function getPipelineApiKeys() {
   return {
     deepseek: getLocalApiKey('deepseek'),
-    fireworks: getLocalApiKey('fireworks'),
-    infron: getLocalApiKey('infron'),
-    cerebras: getLocalApiKey('cerebras'),
-    'google-ai-studio': getLocalApiKey('google-ai-studio'),
   }
 }
 
@@ -2374,7 +2230,7 @@ async function applyModelSelection() {
 }
 
 function getRequestReasoningEffort() {
-  return currentProvider() === 'infron' ? getInfronReasoningEffort() : ''
+  return ''
 }
 
 function hasRuntimeApiKey(provider = currentProvider()) {
@@ -2388,27 +2244,17 @@ function renderModelManagementPage() {
   els.providerSelect.value = provider
   els.modelSelect.innerHTML = modelsForProvider(provider).map(item => `<option value="${escapeAttr(item.id)}">${escapeHtml(modelLabel(item.id))}</option>`).join('')
   els.modelSelect.value = model
-  els.infronReasoningSelect.value = getInfronReasoningEffort()
-  els.infronReasoningSelect.disabled = provider !== 'infron'
-  const helpByProvider = {
-    fireworks: `当前模型：${modelLabel(model)}。请填写 Fireworks API key，Key 只保存在当前浏览器本地。`,
-    infron: `当前模型：${modelLabel(model)}。请填写 Infron API key；请求会按 throughput 排序路由。Key 只保存在当前浏览器本地。`,
-    cerebras: `当前模型：${modelLabel(model)}。请填写 Cerebras API key，Key 只保存在当前浏览器本地。`,
-    'google-ai-studio': `当前模型：${modelLabel(model)}。请填写 Google AI Studio / Gemini API key，Key 只保存在当前浏览器本地。`,
-    deepseek: `当前模型：${modelLabel(model)}。请填写 DeepSeek API key，Key 只保存在当前浏览器本地。`,
-  }
-  els.apiKeyHelp.textContent = helpByProvider[provider] || helpByProvider.deepseek
-  els.apiKeyLabel.textContent = provider === 'fireworks' ? 'Fireworks Key' : provider === 'infron' ? 'Infron Key' : provider === 'cerebras' ? 'Cerebras Key' : provider === 'google-ai-studio' ? 'Gemini Key' : 'DeepSeek Key'
-  els.apiKeyInput.placeholder = provider === 'fireworks' ? 'FIREWORKS_API_KEY' : provider === 'infron' ? 'INFRON_API_KEY' : provider === 'cerebras' ? 'CEREBRAS_API_KEY' : provider === 'google-ai-studio' ? 'GEMINI_API_KEY' : 'sk-...'
+  els.apiKeyHelp.textContent = `当前模型：${modelLabel(model)}。请填写 DeepSeek API key，Key 只保存在当前浏览器本地。`
+  els.apiKeyLabel.textContent = 'DeepSeek Key'
+  els.apiKeyInput.placeholder = 'sk-...'
   els.apiKeyInput.value = getLocalApiKey(provider)
   document.querySelectorAll('[data-provider-model]').forEach(button => {
     button.classList.toggle('selected', providerForModel(button.dataset.providerModel) === provider)
   })
   const hasPendingChange = model !== appliedModel
   els.applyModelSelectionButton.disabled = !hasPendingChange
-  const reasoningLabel = provider === 'infron' ? ` · reasoning ${getInfronReasoningEffort() || 'default'}` : ''
   const pendingLabel = hasPendingChange ? '待确定' : '已应用'
-  els.modelManagementStatus.textContent = `${providerLabel(provider)} · ${modelLabel(model)} · ${pendingLabel}${reasoningLabel} · ${hasRuntimeApiKey(provider) ? 'Key ready' : 'No key'}`
+  els.modelManagementStatus.textContent = `${providerLabel(provider)} · ${modelLabel(model)} · ${pendingLabel} · ${hasRuntimeApiKey(provider) ? 'Key ready' : 'No key'}`
   els.modelManagementStatus.dataset.tone = ''
 }
 
@@ -2425,67 +2271,8 @@ function renderStoryTracking() {
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', formatHistoricalSummaryForTracker(summary) || '暂无历史总结。')}
     ${renderTrackerSection('故事风格', formatStoryStyleForTracker() || '暂无故事风格。')}
-    ${renderTrackerSection('当前剧情目标', state.plotGoal || '暂无当前剧情目标。')}
     ${renderFeedbackMemory() ? renderTrackerSection('上轮反重复提醒', renderFeedbackMemory()) : ''}
   `
-}
-
-function renderSceneModules() {
-  if (!els.sceneModuleList) return
-  const modules = Array.isArray(config.sceneModules) ? config.sceneModules : []
-  if (!modules.length) {
-    els.sceneModuleList.innerHTML = '<p class="meta no-indent">没有场景模块。</p>'
-    return
-  }
-  const enabled = normalizeSceneModuleNames(state.enabledSceneModules)
-  const selected = normalizeSceneModuleNames(state.lastSelectedSceneModules)
-  els.sceneModuleList.innerHTML = `
-    <div class="scene-module-summary">
-      <strong>已启用</strong>
-      <span>${escapeHtml(enabled.length ? enabled.join('、') : '未启用')}</span>
-    </div>
-    <div class="scene-module-summary">
-      <strong>上轮选中</strong>
-      <span>${escapeHtml(selected.length ? selected.join('、') : '无')}</span>
-    </div>
-  `
-}
-
-function openSceneModuleDialog() {
-  renderSceneModuleDialog()
-  els.sceneModuleDialog.showModal()
-}
-
-function renderSceneModuleDialog() {
-  const modules = Array.isArray(config.sceneModules) ? config.sceneModules : []
-  if (!modules.length) {
-    els.sceneModuleDialogList.innerHTML = '<p class="meta no-indent">没有场景模块。</p>'
-    return
-  }
-  const enabled = new Set(normalizeSceneModuleNames(state.enabledSceneModules))
-  const selected = new Set(normalizeSceneModuleNames(state.lastSelectedSceneModules))
-  els.sceneModuleDialogList.innerHTML = modules.map(module => {
-    const checked = enabled.has(module.name) ? 'checked' : ''
-    const active = selected.has(module.name) ? '<em>上轮选中</em>' : ''
-    return `
-      <label class="scene-module-choice">
-        <input type="checkbox" value="${escapeAttr(module.name)}" ${checked} />
-        <span>
-          <strong>${escapeHtml(module.name)} ${active}</strong>
-          <small>${escapeHtml(module.description || module.name)}</small>
-        </span>
-      </label>
-    `
-  }).join('')
-}
-
-function saveSceneModuleSelection() {
-  const checkedNames = Array.from(els.sceneModuleDialogList.querySelectorAll('input[type="checkbox"]:checked')).map(item => item.value)
-  state.enabledSceneModules = normalizeSceneModuleNames(checkedNames)
-  state.lastSelectedSceneModules = normalizeSceneModuleNames(state.lastSelectedSceneModules).filter(name => state.enabledSceneModules.includes(name)).slice(0, 2)
-  saveState()
-  els.sceneModuleDialog.close()
-  renderSceneModules()
 }
 
 function formatHistoricalSummaryForTracker(value) {
@@ -2700,12 +2487,15 @@ function normalizePostprocessJob(value) {
   const playerInput = String(value.playerInput || '').trim()
   const finalText = String(value.finalText || '').trim()
   if (!playerInput || !finalText) return null
+  const job = deepClone(value)
   return {
-    ...deepClone(value),
+    ...job,
     id: String(value.id || makeId('postprocess-job')),
     status: ['queued', 'running', 'error'].includes(value.status) ? value.status : 'queued',
     createdAt: String(value.createdAt || new Date().toISOString()),
     updatedAt: String(value.updatedAt || new Date().toISOString()),
+    director: job.director || {},
+    recentDirectorPlans: normalizeDirectorHistory(job.recentDirectorPlans),
   }
 }
 
@@ -2829,8 +2619,8 @@ function buildPendingPostprocessFromState() {
     storyName: state.name,
     playerInput,
     finalText,
-    director: state.debug?.director || {},
-    recentDirectorPlans: state.directorHistory,
+    director: currentDirectorPlanForRequest(),
+    recentDirectorPlans: normalizeDirectorHistory(state.directorHistory),
     recentTurns: messages
       .slice(Math.max(0, assistantIndex - 10), assistantIndex)
       .filter(message => message.role === 'user' || message.role === 'assistant'),
@@ -2840,11 +2630,9 @@ function buildPendingPostprocessFromState() {
     statusState: state.statusState,
     playerOptions: state.playerOptions,
     physicalConstraints: state.physicalConstraints,
-    enabledSceneModules: state.enabledSceneModules,
-    lastSelectedSceneModules: state.lastSelectedSceneModules,
-    plotGoal: state.plotGoal,
+    globalContext: buildHistoricalSummaryForRequest(),
     playerFeedback: state.debug?.postprocessRecoveryBase?.playerFeedback || '',
-    feedbackText: renderFeedbackMemory(state.feedbackMemory, 'director'),
+    feedbackText: renderDirectorFeedbackMemory(),
     narratorFeedbackText: renderFeedbackMemory(state.feedbackMemory, 'narrator'),
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
@@ -3041,6 +2829,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     state.debug.postprocessRecoveryBase = null
     state.debug.pipelineMode = payload.pipelineMode
     state.debug.director = payload.director
+    applyDirectorPlanState(payload.director)
     state.debug.narrator = payload.narrator
     state.debug.postprocess = null
     state.directorHistory = appendDirectorHistory(state.directorHistory, payload.director)
@@ -3048,6 +2837,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     enqueuePostprocessJob(payload.pendingPostprocess)
     saveState()
     render()
+    scrollToLatestAssistantStart()
     processPostprocessQueue()
   } catch (error) {
     if (streamController.signal.aborted) return
@@ -3074,22 +2864,19 @@ function buildGenerateRequestPayload(playerInput) {
     playerInput,
     playerFeedback: state.playerFeedback,
     storyContext: buildStoryContextForRequest(),
-    globalContext: state.globalContext,
-    feedbackText: renderFeedbackMemory(state.feedbackMemory, 'director'),
+    globalContext: buildHistoricalSummaryForRequest(),
+    feedbackText: renderDirectorFeedbackMemory(),
     narratorFeedbackText: renderFeedbackMemory(state.feedbackMemory, 'narrator'),
     physicalConstraints: state.physicalConstraints,
-    plotGoal: state.plotGoal,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: nextAssistantTurnIndex(),
     recentTurns: buildRecentTurnsForRequest(playerInput),
-    recentDirectorPlans: state.directorHistory,
+    recentDirectorPlans: normalizeDirectorHistory(state.directorHistory),
     characters: state.characters,
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
-    enabledSceneModules: state.enabledSceneModules,
-    lastSelectedSceneModules: state.lastSelectedSceneModules,
     model: getActiveModel(),
     apiKey: getPipelineApiKey(),
     apiKeys: getPipelineApiKeys(),
@@ -3189,12 +2976,12 @@ function pickRegenerableStoryState(story) {
     'currentSituation',
     'chapterSummary',
     'outline',
-    'plotGoal',
     'physicalConstraints',
     'directorStyle',
     'narratorStyle',
     'plotLines',
     'feedbackMemory',
+    'optionalDisturbance',
     'playerFeedback',
     'directorHistory',
     'storyAssetId',
@@ -3204,8 +2991,6 @@ function pickRegenerableStoryState(story) {
     'statusState',
     'globalContext',
     'playerOptions',
-    'enabledSceneModules',
-    'lastSelectedSceneModules',
     'debug',
   ]
   const snapshot = {}
@@ -3285,11 +3070,13 @@ function handlePipelineEvent(event) {
     row.status = 'skipped'
     row.endedAtMs = eventMs
     if (event.json) state.debug[stage] = event.json
+    if (stage === 'director') applyDirectorPlanState(event.json)
   }
   if (event.type === 'stage_result') {
     row.status = 'done'
     row.endedAtMs = eventMs
     state.debug[stage] = event.json
+    if (stage === 'director') applyDirectorPlanState(event.json)
   }
 
   state.debug.progress = progress
@@ -3354,8 +3141,7 @@ function applyPostprocess(payload) {
     state.currentSituation = turnSummary
     state.outline = turnSummary
   }
-  if (typeof payload.plotGoal === 'string') state.plotGoal = payload.plotGoal.trim()
-  if (Array.isArray(payload.selectedSceneModules)) state.lastSelectedSceneModules = normalizeSceneModuleNames(payload.selectedSceneModules).slice(0, 2)
+  state.optionalDisturbance = String(payload.可选扰动源 || payload.optionalDisturbance || '').trim()
   state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
   state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
   const statusPatch = payload.postprocess && typeof payload.postprocess === 'object' ? payload.postprocess : payload
@@ -3396,6 +3182,72 @@ function appendBulletText(existing, next, limit = Number.POSITIVE_INFINITY) {
   if (lines[lines.length - 1] !== text) lines.push(text)
   const kept = Number.isFinite(limit) ? lines.slice(-limit) : lines
   return kept.map(line => `- ${line}`).join('\n')
+}
+
+function parseHistorySummaryLines(value) {
+  return String(value || '')
+    .split('\n')
+    .map(line => line.trim().replace(/^-\s*/, ''))
+    .filter(Boolean)
+}
+
+function formatHistorySummaryLines(lines) {
+  return lines.map(line => `- ${String(line || '').trim().replace(/^-\s*/, '')}`).filter(line => line !== '- ').join('\n')
+}
+
+function buildHistoricalSummaryForRequest() {
+  const lines = parseHistorySummaryLines(state.globalContext || state.chapterSummary)
+  if (lines.length <= 5) return ''
+  return formatHistorySummaryLines(lines.slice(0, -5))
+}
+
+function maybeCompactHistorySummary() {
+  if (historyCompactionRunning) return
+  const lines = parseHistorySummaryLines(state.globalContext || state.chapterSummary)
+  if (lines.length < 20) return
+  historyCompactionRunning = true
+  compactHistorySummary(lines).catch(error => {
+    state.debug = {
+      ...(state.debug || {}),
+      note: `历史总结压缩失败：${error.message}`,
+    }
+    saveState()
+    renderPostprocessSideEffects()
+  }).finally(() => {
+    historyCompactionRunning = false
+  })
+}
+
+async function compactHistorySummary(lines) {
+  const sourceLines = lines.slice(0, 10)
+  const retainedLines = lines.slice(10)
+  const response = await fetch('/api/history-compact', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      historyLines: sourceLines,
+      apiKey: getPipelineApiKey(),
+      apiKeys: getPipelineApiKeys(),
+      model: getActiveModel(),
+      reasoningEffort: getRequestReasoningEffort(),
+    }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(payload.error || '历史总结压缩失败')
+  const compactedLines = Array.isArray(payload.historyLines)
+    ? payload.historyLines.map(line => String(line || '').trim().replace(/^-\s*/, '')).filter(Boolean)
+    : []
+  if (!payload.compacted || compactedLines.length !== 2) throw new Error('历史总结压缩失败：返回结构不完整')
+  const nextSummary = formatHistorySummaryLines([...compactedLines, ...retainedLines])
+  state.globalContext = nextSummary
+  state.chapterSummary = nextSummary
+  state.debug = {
+    ...(state.debug || {}),
+    historyCompact: payload.raw || payload,
+    note: `历史总结已压缩：前 10 条变为 ${compactedLines.length} 条，其余 ${retainedLines.length} 条保留。`,
+  }
+  saveState()
+  renderPostprocessSideEffects()
 }
 
 function removeTrailingErrorMessages() {
@@ -3804,6 +3656,7 @@ function persistAndRender() {
 function persistPostprocessResult() {
   saveState()
   renderPostprocessSideEffects()
+  maybeCompactHistorySummary()
 }
 
 function renderPostprocessSideEffects() {
