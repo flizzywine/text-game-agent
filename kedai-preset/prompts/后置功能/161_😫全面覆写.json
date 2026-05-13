@@ -1,0 +1,14 @@
+{
+  "identifier": "85486a6c-ed0d-4827-867e-4c96cd784f70",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "😫全面覆写",
+  "role": "user",
+  "content": "{{addvar::可待_后置功能::\n第一优先：【覆写指导】\n现在，你必须要根据覆写规则，在输出<content>内正文时输出的所有段落都进行覆写。\n格式如下：\n<fx>（原段落）</fx>\n（在这里输出根据上个段落进行全面优化的新段落）\n覆写规则如下：\n1. 优化后的段落必须文风更好，观感更好，不得包含任何禁库内容，且富有创造力。\n2. 不要留下诸如“（覆写段落）”之类的处理痕迹。\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

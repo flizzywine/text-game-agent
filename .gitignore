@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+.env.local
+debug/
+save/*
+!save/README.md
+story/*
+!story/README.md
+.env
+.env.*
+!.env.example

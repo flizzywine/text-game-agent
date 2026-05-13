@@ -1,0 +1,13 @@
+{
+  "identifier": "161fabc5-c5fd-413b-bdf9-56fa892ae678",
+  "name": "〈清口XP〉",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "system",
+  "content": "",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false
+}

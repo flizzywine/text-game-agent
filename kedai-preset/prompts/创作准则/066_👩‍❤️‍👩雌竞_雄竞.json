@@ -1,0 +1,14 @@
+{
+  "identifier": "e2e10539-b0c2-4cdd-b0b8-82bc6ce2d559",
+  "name": "👩‍❤️‍👩雌竞/雄竞",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n**【启动此设置后，所有角色强制加入以下设定】**\n所有角色在发现除自己以外的其他角色与所操控角色交往之后，都会与和所操控角色交往的其他角色进行“择偶竞争”。\n“择偶竞争”即角色之间为争夺所操控角色关爱而发生，通过主动进行符合所操控角色喜好的行为和事件进行的非对抗式竞争。\n“择偶竞争”不是血腥式的，也不是暴力式的伤害其他角色的。除语言和行动上的剑拔弩张之外，进行“择偶”的角色绝对不会主动对其他角色施暴乃至触犯法律。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

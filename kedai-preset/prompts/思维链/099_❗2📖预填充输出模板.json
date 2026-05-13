@@ -1,0 +1,14 @@
+{
+  "identifier": "a581c595-a418-4431-9c39-f9c2a2af3da2",
+  "name": "❗2📖预填充输出模板",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "<output-template>\n（不要输出这里面的提示性提示词）\n⚠️`<content>`为固定占位符，若系统要求输出<maintext>/<文本>等等，请替换为系统所要求的。⚠️\n\n‼️**你的通用输出模板严格按照以下格式安排，每次输出一定需要输出剧情内容。若指明需要变量更新的话按照提示词要求更新变量。请持续不断的准守世界书和提示词要求。你不一定非得输出汉语，哪部分具体用什么语言根据用户需求决定：**‼️\n\n{{getvar::可待_思维链_预填充定位}}\n<thinking>{{addvar::可待_思维链_本体::\n</thinking>}}{{getvar::可待_思维链_本体}}\n\n<!--承诺：\n**我承诺，下一次输出只能对此次输出进行适当承接，不能对输出内容进行任何格式上的仿写，不能滥用此次输出已经频繁出现的词汇/内容/结尾。我会富有新意的创作下一次输出**\n-->\n\n{{getvar::可待_模板格式_上}}\n\n（在这里创作故事/内容正文，有图片插入需求的合理安排图片位置）\n\n{{getvar::可待_模板格式_下}}\n\n{{getvar::可待_定位}}\n\n**输出模板要求结束**\n\n</output-template>",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

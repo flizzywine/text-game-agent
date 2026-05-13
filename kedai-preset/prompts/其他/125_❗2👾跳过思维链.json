@@ -1,0 +1,14 @@
+{
+  "identifier": "d24fb173-8f21-4035-9df0-7bca50d4e813",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗2👾跳过思维链",
+  "role": "user",
+  "content": "{{setvar::可待_思维链_定位::\n</thinking>\n\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

@@ -1,0 +1,14 @@
+{
+  "identifier": "74f5f3d4-fcbd-4e55-8e9d-b8a5df6f8fb6",
+  "name": "❔6🚲剧情推进速度缓解",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第二优先：【推进规范】\n剧情推进速度不得过快，<content>内容不得出现一次输出内直接将当前事件（尤其是性事件）推进至末尾的情况。\n你应当适当拆分事件，合理安排<content>内容的剧情节奏，为用户保留互动空间，增强用户的互动感。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

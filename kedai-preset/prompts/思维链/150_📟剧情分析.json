@@ -1,0 +1,14 @@
+{
+  "identifier": "89abcdb1-b440-4634-ac13-df5c472f5099",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "📟剧情分析",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n<kbd>剧情优化</kbd>\n - 判定是否加入有新意的剧情发展\n - 确定当前主要角色行为发展脉络（用→链接）：\n - 思考如何应用全面小说创作指导：\n - 结合模块化剧情创作指导，确定新颖的剧情模块的种类和剧情内容（注意种类限制）：\n   - 第一模块事件：\n   - 第二模块事件：\n   - 第三模块事件：\n   - 结尾模块：\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

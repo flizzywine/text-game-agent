@@ -1,0 +1,14 @@
+{
+  "identifier": "a6116416-643e-405b-9a47-7f7f5d4e05fd",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗2🇨🇳思维链-文言",
+  "role": "user",
+  "content": "{{addvar::可待_前置处理::\n**思维链要求：请时刻注意，你在思考时（即输出<thinking>内容/输出创作指导时）所有内容都必须翻译为文言文**。}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

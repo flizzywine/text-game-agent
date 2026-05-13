@@ -1,0 +1,14 @@
+{
+  "identifier": "d6411a27-3396-438d-ab03-e2d52dc1af09",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗1 Kimi/克/其他用尾部",
+  "role": "user",
+  "content": "{{setvar::可待_思维链_非预填充定位::\n你已输出完<jc>内所有禁词，不得重复输出禁词。\n你将根据提示词，竭尽全力去思考和<content>内正文有关的所有要求，尽可能创作出符合用户要求的<content>内正文。\n现在你将按照格式，开始思考创作准则，思考完成创作指导之后在思考外输出<scene>内时间、<content>内正文和所有后置功能。\n**现在，你将直接开启思考创作正则。**\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

@@ -1,0 +1,14 @@
+{
+  "identifier": "25a40a1b-fba8-44a4-854c-f742dbaf7a98",
+  "name": "🔒💊预填充输入",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "model",
+  "content": "{{getvar::可待_思维链_预填充定位}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

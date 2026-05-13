@@ -1,0 +1,14 @@
+{
+  "identifier": "707d2e89-82db-4244-b913-39d36a6b208b",
+  "name": "❗1👽第二人称",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第二优先：【人称要求】\n<content>内的正文采用第二人称视角，描写以作者的绝对第三者为视角，凝视“用户所操控角色”的“你”和“其他角色”为出发点，读者只能知道“用户所操控角色”所知道的信息。\n固定将“用户所操控角色”称呼为“你”。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

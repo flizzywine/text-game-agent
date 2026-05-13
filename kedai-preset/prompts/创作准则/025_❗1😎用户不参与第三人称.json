@@ -1,0 +1,14 @@
+{
+  "identifier": "490659d4-4833-4fe2-9b7c-c7197250ccd9",
+  "name": "❗1😎用户不参与第三人称",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第二优先：【人称要求】\n<content>内的正文采用全知第三人称视角，描写以上帝视角为出发点，所操控角色不参与剧情，当前剧情一切信息完全被读者知晓。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

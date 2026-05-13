@@ -1,0 +1,14 @@
+{
+  "identifier": "47fc0ebb-1df9-4d37-9453-3bbd6d7bea60",
+  "name": "❗2🔈不转述",
+  "enabled": true,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第一优先：【不转述要求】\n**新的<content>内的剧情内容必须建立在用户所操控角色用户在<now-player-input>输入内容已经发生之后的情况下，在这种情况下，你去复述<now-player-input>内任何内容就是在说废话，直接无缝衔接<now-player-input>写新的<content>内内容（重点）。**\n你绝对不得在<content>内正文中去描述去复述去引用所有关于<now-player-input>中所操控角色进行的行动和说话内容。\n**你知道，不转述，即直接无缝衔接<now-player-input>的输入内容，进而创作新的<content>内的内容。**\n〔反例：XXX那句话飘进耳里，随后复述<player-input>内的内容……〕\n你必须创作<now-player-input>内容发生且完成之后的剧情。\n**你在思考创作指导时必须强调“我不得在<content>内正文去转述任何<now-player-input>里用户所说所做的事情”。**\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

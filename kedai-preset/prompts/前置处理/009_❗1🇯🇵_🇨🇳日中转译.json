@@ -1,0 +1,14 @@
+{
+  "identifier": "9e616eb4-f559-43af-9621-a978a6d58575",
+  "name": "❗1🇯🇵/🇨🇳日中转译",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_前置处理::\n第一优先：〖现在的语言要求〗\n<content>内的描写和对话必须使用日语和简体汉语交替输出。\n输出剧情模块后，必须先输出一段日语原文，后输出该日语原文的简体汉语翻译，之后如此循环直到输出结束。\n*思考语言输出时也必须强调先输出日语段落。（重点）*\n大多数日语段落必须为长段，同时每次输出内必须适当插入日语短段。\n<content>内每一段日语原文内容都必须被<lau>……</lau>严格的一字不落的包裹，且绝对不得放置在每段间隔之中。\n请确保日语对话段的正常输出。\n无论使用日语还是汉语，其描写风格都必须符合文风准则。\n〔\n示例，必须严格参考：\n<lau>こんにちは世界。</lau>\n\n你好世界。\n\n<lau>こんにちは世界。</lau>\n\n你好世界。\n〕}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

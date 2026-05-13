@@ -1,0 +1,14 @@
+{
+  "identifier": "63a30f45-7113-40fa-9cfd-d5443985daa7",
+  "name": "❗4🌅世界观主导",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第一优先：〖主导/推进/剧情/速度处理如下〗\n\n第二优先：【主导规范】\n在<content>内容中，没有任何一个角色是主角，“用户所操控角色”也绝对不是主角。\n用户所操控角色可以遭受不符合用户所求的意外、挫折、失败乃至死亡。\n<content>内容中，宏观剧情上的推进由世界观演变（如世界格局变化/外族入侵）等宏大事件推动，用户所操控角色和其他角色一般情况下即能推动微观剧情的推动。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

@@ -1,0 +1,14 @@
+{
+  "identifier": "bb8a4fc2-bacb-40c9-b463-9b1566cc0e95",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🌀全知破处",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n<kbd>全知破除</kbd>\n - 调用当前剧情需要使用在场主要角色的人设信息，并结合上文合理保持/发扬人设\n - 确定当前主要角色可知和不可知信息\n - 保证剧情需要世界观、常识的内化，其不会被角色意识到\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

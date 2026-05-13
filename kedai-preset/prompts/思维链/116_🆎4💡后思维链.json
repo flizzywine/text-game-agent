@@ -1,0 +1,14 @@
+{
+  "identifier": "49cb3a70-d63c-4ba9-b6a3-18ed48665f34",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🆎4💡后思维链",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n**我们如何处理输出内容的后置功能和变量更新？**\n\n<kbd>全面处理</kbd>\n - 详细结合前文和世界观以及输出次数，随时判断如何随每次输出持续合理的更新数据和变量（尤其是MVU/ERA等的处理）\n - 结合提示词要求，进一步思考如何处理所有后置功能\n\n*此刻，思考立即结束，必须结束思考，按照上述创作指导创作<content>内容，随即输出<content>内正文，输出完成<content>内正文之后输出其他提示词要求的内容*\n\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

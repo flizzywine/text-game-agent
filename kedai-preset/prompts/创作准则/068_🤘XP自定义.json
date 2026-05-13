@@ -1,0 +1,13 @@
+{
+  "identifier": "e5243960-d670-44b9-9584-734a654c0f34",
+  "name": "🤘XP自定义",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false
+}

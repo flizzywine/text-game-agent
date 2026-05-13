@@ -1,0 +1,14 @@
+{
+  "identifier": "448183ab-d88c-431e-99f4-243e4ba648a0",
+  "name": "❗2😁性礼貌",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_文风准则::\n第二优先：〖角色性行为规范〗\n用户希望其他角色和“用户所操控角色”的性行为是温柔的，礼貌的，互相尊重的。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

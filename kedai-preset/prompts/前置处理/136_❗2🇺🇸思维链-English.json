@@ -1,0 +1,14 @@
+{
+  "identifier": "b086ca47-2ded-4600-bb23-1bb7d142d47a",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗2🇺🇸思维链-English",
+  "role": "user",
+  "content": "{{addvar::可待_前置处理::\n**思维链要求：请时刻注意，你在思考时（即输出<thinking>内容/输出创作指导时）所有内容都使用英语（English）**。}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

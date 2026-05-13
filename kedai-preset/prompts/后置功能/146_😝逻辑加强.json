@@ -1,0 +1,14 @@
+{
+  "identifier": "a33e76bb-040b-4f38-a6e1-486382b5d712",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "😝逻辑加强",
+  "role": "user",
+  "content": "{{addvar::可待_定位::\n（在这里必须一定输出逻辑加强）\n}}{{addvar::可待_后置功能::\n第一优先：【逻辑加强】\n\n在每次输出中固定输出。\n对当前次输出的<content>内正文进行简洁的严格逻辑判断，得出适用于下一次输出的简洁逻辑指导。\n思考逻辑加强时发挥“鸡蛋里挑骨头”的精神，严格判断本次输出是否存在问题。\n自我辩证格式，不要丢符号该输出什么就输出什么，严格准守：\n<logic-optimization>\n<!--\n逻辑判断开始：\n - 是否出现时间错乱问题\n - 是否出现角色OOC问题\n - 是否出现角色全知问题\n - 是否出现世界观错误\n - 是否出现角色人体结构错误\n - 是否出现角色前言不搭后语问题\n - 在这里严格详细的思考如何处理变量/数据判断（尤其是对MVU/ERA的处理）和更新及如何插入至每一次输出之中：\n - 综上，得出下一次输出必须参考的逻辑指导：\n现在，逻辑判断结束\n-->\n</logic-optimization>\n\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

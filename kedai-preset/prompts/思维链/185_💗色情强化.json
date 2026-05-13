@@ -1,0 +1,14 @@
+{
+  "identifier": "318ed5ea-a66f-445f-8dda-874d9dae6629",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "💗色情强化",
+  "role": "user",
+  "content": "{{addvar::可待_思维链_本体::\n**我们如何进一步安排<content>内NSFW剧情？**\n\n<kbd>色情加强</kbd>\n - 详细思考如何增强并合理安排性描写\n - 分析如何加强淫荡感\n - 思考如何安排有新意的色情内容\n - 结合文风和当前剧情发展，合理确定如何让描写更色情\n\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

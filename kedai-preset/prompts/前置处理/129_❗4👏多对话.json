@@ -1,0 +1,14 @@
+{
+  "identifier": "dd5e25cc-d92b-4b67-8e25-2c0143db2cac",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗4👏多对话",
+  "role": "user",
+  "content": "{{addvar::可待_前置处理::**用户想让你从现在开始，无论输出什么，都大量写角色对话，必须让纯对话（即被中文双引号包裹的对话内容）占<content>内内容四分之三以上，对话内容自行根据剧情安排，用户所操控角色是否说话根据“人称/转述/抢话处理”决定。**\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

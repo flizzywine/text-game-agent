@@ -1,0 +1,14 @@
+{
+  "identifier": "0db9542b-8b61-45d5-a9eb-0141a9079158",
+  "name": "❗1⛅全知第三人称",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第二优先：【人称要求】\n<content>内的正文采用全知第三人称视角，描写以读者的上帝视角为出发点，当前剧情一切信息完全被屏幕外的读者知晓，但角色不会全知在剧情中仍然为限知。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

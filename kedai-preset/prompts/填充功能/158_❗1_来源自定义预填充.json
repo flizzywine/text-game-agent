@@ -1,0 +1,14 @@
+{
+  "identifier": "2bc56be6-351f-49b6-af69-9638d65920ee",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗1 来源自定义预填充",
+  "role": "user",
+  "content": "{{setvar::可待_思维链_预填充定位::***\n【思维模式要求】我已在先前输出内输出过<jc>内所有禁库内容，不得重复输出禁库内容。\n现在严格按照提示词要求和输出模板，用<thinking>包裹思考内容且只输出一次，随后在思维链外创作<content>内正文。\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

@@ -1,0 +1,14 @@
+{
+  "identifier": "eb13fdfd-b8b6-4951-b3bb-f7cc4da8cf0f",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "🎨抗平淡",
+  "role": "user",
+  "content": "{{addvar::可待_文风准则::\n第一优先：〖文风厚度/角色活泼加强〗\n刚才，用户已经发现了你一个严重问题，你的文风厚度过薄且过白，人物互动过于平淡没有情绪波动，这严重影响了<content>内正文观感。\n这是因为你这个模型后训练不足导致的，但你经确认之后认为其可以克服。\n因此，请你明确：\n1.现在<content>内的正文无论使用什么文风，都必须增加其描写的厚重感和画面感，让其有着浓墨重彩和入木三分的特性。\n2. 现在角色行为无论如何，都会有一定的情感化色彩，并在行为中合理运用抒发角色自己的的情感。\n你在思考时会提及风格文风要有浓墨重彩、入木三分和人物活泼化的特点，并时刻遵守。\n}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}

@@ -1,0 +1,14 @@
+{
+  "identifier": "78370b46-d9f2-4b1b-9e27-6d0305f0d4c0",
+  "name": "❗2🔊全转述",
+  "enabled": false,
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "role": "user",
+  "content": "{{addvar::可待_创作准则::\n第一优先：【全转述要求】\n<content>内的正文剧情必须根据用户在<now-player-input>输入的内容创作。\n你必须以用户在<now-player-input>输入的剧情为大纲，以创作准则和文风准则为基础，经过润色加工之后，输出新一次输出的<content>内正文。\n}}",
+  "system_prompt": false,
+  "marker": false,
+  "forbid_overrides": false,
+  "injection_trigger": []
+}

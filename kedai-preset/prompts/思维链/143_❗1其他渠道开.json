@@ -1,0 +1,14 @@
+{
+  "identifier": "15825ea5-fda6-49ec-a4b7-9e8839488407",
+  "system_prompt": false,
+  "enabled": false,
+  "marker": false,
+  "name": "❗1其他渠道开",
+  "role": "user",
+  "content": "（格式示例：第一部分）\n{{getvar::可待_思维链_定位}}<thinking>{{addvar::可待_思维链_本体::\n</thinking>}}{{getvar::可待_思维链_本体}}",
+  "injection_position": 0,
+  "injection_depth": 4,
+  "injection_order": 100,
+  "injection_trigger": [],
+  "forbid_overrides": false
+}
