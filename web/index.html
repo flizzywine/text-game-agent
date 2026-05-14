@@ -11,35 +11,17 @@
       <header class="topbar">
         <div>
           <h1>Text Game Agent</h1>
-            <p id="connectionStatus">DeepSeek Official</p>
-          <div id="pipelineModelGrid" class="pipeline-model-grid" aria-label="流水线模型"></div>
+          <p id="connectionStatus">模型：DeepSeek V4 Flash · Key 未配置</p>
           <p id="turnStatus" class="turn-status">当前第 0 轮</p>
         </div>
         <div class="control-stack">
           <div class="story-strip">
-            <label>
-              <span>Story</span>
-              <select id="storySelect"></select>
-            </label>
-            <label class="story-name-field">
-              <span>Name</span>
-              <input id="storyNameInput" />
-            </label>
             <button id="storyLibraryButton" class="ghost-button" type="button">故事库</button>
             <button id="newStoryButton" class="ghost-button" type="button">开始新游戏</button>
-            <button id="deleteStoryButton" class="ghost-button" type="button">删除</button>
             <button id="saveArchiveButton" class="ghost-button" type="button">保存游戏</button>
             <button id="loadArchiveButton" class="ghost-button" type="button">读取存档</button>
-            <button id="deleteSaveButton" class="ghost-button" type="button">删除存档</button>
+            <button id="playerFeedbackButton" class="ghost-button feedback-entry-button" type="button">用户反馈</button>
             <button id="modelManagementButton" class="ghost-button" type="button">模型管理</button>
-            <button id="promptPreviewButton" class="ghost-button" type="button">Prompt 查看</button>
-          </div>
-          <div class="model-strip">
-            <label>
-              <span>Temp</span>
-              <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="0.8" />
-            </label>
-            <button id="resetButton" class="ghost-button" type="button">清空当前故事</button>
           </div>
         </div>
       </header>
@@ -63,7 +45,6 @@
           <div id="conversation" class="conversation"></div>
           <div id="optionTray" class="option-tray"></div>
           <form id="playForm" class="composer">
-            <textarea id="playerFeedback" rows="1" placeholder="玩家负反馈，持续广播给所有模块；清空这里即可删除，可留空"></textarea>
             <textarea id="playerInput" rows="2" placeholder="输入你的行动、对话或想法"></textarea>
             <div class="composer-actions">
               <button id="retryStageButton" class="ghost-button" type="button">继续未完成</button>
@@ -106,7 +87,7 @@
             <button id="deleteStoryAssetButton" class="ghost-button" type="button">删除选中资料</button>
             <button id="refreshStoryLibraryButton" class="ghost-button" type="button">刷新</button>
             <button id="closeStoryLibraryButton" class="ghost-button" type="button">返回游戏</button>
-            <input id="storyLibraryFileInput" type="file" accept=".json,.md,.txt,.png" multiple hidden />
+            <input id="storyLibraryFileInput" type="file" accept=".txt,.md,.png,.epub,.json" multiple hidden />
           </div>
           <p id="storyLibraryStatus" class="dialog-status">未开始初始化。</p>
         </section>
@@ -135,42 +116,59 @@
         <section class="library-hero">
           <div>
             <h2>模型管理</h2>
-            <p>管理 DeepSeek Official API Key、默认模型和简化测速。</p>
+            <p>管理全局默认模型、流水线模型覆盖和 API Key。</p>
           </div>
           <div class="library-actions">
-            <button id="providerTestButton" class="ghost-button" type="button">连通性测试</button>
-            <button id="providerSpeedTestButton" class="ghost-button" type="button">速度测试</button>
             <button id="closeModelManagementButton" class="ghost-button" type="button">返回游戏</button>
           </div>
           <p id="modelManagementStatus" class="dialog-status">未测试。</p>
         </section>
         <section class="model-management-grid">
-          <div class="model-provider-list">
-            <button type="button" class="provider-card" data-provider-model="deepseek-v4-flash">
-              <strong>DeepSeek Official</strong>
-              <span>官方 DeepSeek；当前模型全局用于所有流水线阶段。</span>
-            </button>
-          </div>
           <section class="model-settings-form model-selection-form">
             <h3>模型选择</h3>
-            <label>
-              <span>供应商</span>
-              <select id="providerSelect">
-                <option value="deepseek">DeepSeek Official</option>
-              </select>
-            </label>
             <label>
               <span>当前模型</span>
               <select id="modelSelect">
                 <option value="deepseek-v4-flash">DeepSeek V4 Flash | official | DeepSeek</option>
                 <option value="deepseek-v4-pro">DeepSeek V4 Pro | official | DeepSeek</option>
+                <option value="google/gemini-3.1-flash-lite">Gemini 3.1 Flash Lite | Infron</option>
               </select>
             </label>
+            <label>
+              <span>叙事人称</span>
+              <select id="narrativePerspectiveSelect">
+                <option value="first_person">第一人称限知</option>
+                <option value="third_person">第三人称限知</option>
+              </select>
+            </label>
+            <label>
+              <span>初始化</span>
+              <select id="pipelineInitializerModel"></select>
+            </label>
+            <label>
+              <span>导演</span>
+              <select id="pipelineDirectorModel"></select>
+            </label>
+            <label>
+              <span>叙事者</span>
+              <select id="pipelineNarratorModel"></select>
+            </label>
+            <label>
+              <span>反馈/总结</span>
+              <select id="pipelinePostprocessModel"></select>
+            </label>
+            <p class="dialog-note">留空表示跟随当前模型。</p>
             <button id="applyModelSelectionButton" class="primary-button" type="button">确定</button>
-            <div id="modelTestResults" class="model-test-results"></div>
           </section>
           <section class="model-settings-form api-key-form">
             <h3>API Key</h3>
+            <label>
+              <span>供应商</span>
+              <select id="apiKeyProviderSelect">
+                <option value="deepseek">DeepSeek Official</option>
+                <option value="infron">Infron</option>
+              </select>
+            </label>
             <label>
               <span id="apiKeyLabel">API Key</span>
               <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-..." />
@@ -179,35 +177,6 @@
             <div class="dialog-actions left-actions">
               <button id="apiKeyButton" class="ghost-button" type="button">保存 Key</button>
               <button id="clearApiKeyButton" class="ghost-button" type="button">清除当前 Key</button>
-            </div>
-          </section>
-          <section class="interception-panel">
-            <div>
-              <h3>内容拦截测试</h3>
-              <p class="dialog-note">生成当前 Narrator prompt 快照并落盘，再拼接上传的系统指令文件做一次原始模型调用。</p>
-            </div>
-            <div class="interception-actions">
-              <button id="buildInterceptionPromptButton" class="ghost-button" type="button">生成当前 Narrator Prompt</button>
-              <label class="file-button">
-                选择 Prompt 文件
-                <input id="interceptionPromptFile" type="file" accept=".txt,.md,.json" />
-              </label>
-              <label class="file-button">
-                选择系统指令文件
-                <input id="interceptionInstructionFiles" type="file" multiple accept=".txt,.md,.json" />
-              </label>
-              <button id="runInterceptionTestButton" class="ghost-button" type="button">测试内容拦截</button>
-            </div>
-            <p id="interceptionStatus" class="dialog-status">尚未生成测试 prompt。</p>
-            <div class="interception-grid">
-              <label>
-                <span>系统指令文件内容</span>
-                <textarea id="interceptionSystemInput" rows="10" placeholder="选择文件后会自动拼接；也可以直接编辑。"></textarea>
-              </label>
-              <label>
-                <span>测试结果</span>
-                <textarea id="interceptionResultOutput" rows="10" readonly placeholder="这里显示模型原始返回或拦截错误。"></textarea>
-              </label>
             </div>
           </section>
         </section>
@@ -221,6 +190,10 @@
         <label>
           <span>故事名</span>
           <input id="newGameName" placeholder="默认使用故事资料名" />
+        </label>
+        <label>
+          <span>操控人物</span>
+          <select id="newGamePlayerCharacter"></select>
         </label>
         <div id="storyAssetList" class="asset-list"></div>
         <div id="newGamePreview" class="asset-preview"></div>
@@ -243,16 +216,15 @@
       </form>
     </dialog>
 
-    <dialog id="promptPreviewDialog" class="app-dialog prompt-preview-dialog">
-      <form method="dialog">
-        <div class="prompt-preview-head">
-          <div>
-            <h3>Prompt 查看</h3>
-            <p id="promptPreviewStatus" class="dialog-note">展示当前存档拼接后的实际发送 prompt。</p>
-          </div>
-          <button value="cancel" type="button" id="closePromptPreviewButton" class="ghost-button">关闭</button>
+    <dialog id="playerFeedbackDialog" class="app-dialog feedback-dialog">
+      <form method="dialog" id="playerFeedbackForm">
+        <h3>用户反馈</h3>
+        <p class="dialog-note">这条反馈会保存在当前游戏里，持续影响后续生成；清空后停止。</p>
+        <textarea id="playerFeedbackInput" rows="7" placeholder="写下你对剧情、文风、节奏或角色表现的不满。"></textarea>
+        <div class="dialog-actions">
+          <button id="clearPlayerFeedbackButton" class="ghost-button" type="button">清空</button>
+          <button id="closePlayerFeedbackButton" type="submit">确定</button>
         </div>
-        <div id="promptPreviewList" class="prompt-preview-list"></div>
       </form>
     </dialog>
 

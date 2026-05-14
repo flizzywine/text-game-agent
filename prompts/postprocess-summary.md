@@ -1,11 +1,11 @@
-# System Message
-
-# User Message
 
 ## Hard Rule
 {{hardRule}}
 
 # 输入变量
+## 世界观
+{{storyContext}}
+
 ## 状态字段
 {{statusSchema}}
 
@@ -15,11 +15,11 @@
 ## 当前人物状态
 {{statusState}}
 
-## 最近正文
-{{recentTurns}}
+## 当前操控人物
+{{controlledCharacterName}}
 
-## 玩家输入
-{{playerInput}}
+## 长期总结
+{{historicalSummary}}
 
 ## 最终正文
 {{finalText}}
@@ -37,8 +37,8 @@
 - `statusRosterPatch` 只新增正文中新登场且后续可能影响剧情的人名；临时路人不加。
 - `statusStatePatch` 只写变化字段，不重写完整人物状态。
 - `statusStatePatch` 的顶层 key 只能是人物名；不得输出 `_环境`、`_候选项`、`环境`、`候选项`、`旁白`、`场景` 等非人物主体。
-- `情绪`、`姿势` 是强制状态字段；玩家或正在互动的 NPC 情绪/姿势变化必须输出。
-- 玩家身体状态、位置、姿势、衣着等客观事实有变化，必须输出 `玩家` patch。
+- `情绪`、`姿势` 是强制状态字段；当前操控人物或正在互动的 NPC 情绪/姿势变化必须输出。
+- 【最终正文】里的“我”指向【当前操控人物】；当前操控人物的身体状态、位置、姿势、衣着等客观事实有变化，必须输出对应人物名的 patch；不得输出 `玩家`、`我` 或 `当前操控人物` patch。
 - 不得把剧情目标、世界摘要、反馈意见塞进人物状态。
 
 JSON 形状：

@@ -1,6 +1,3 @@
-# System Message
-
-# User Message
 
 ## Hard Rule
 {{hardRule}}

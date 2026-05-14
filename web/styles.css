@@ -107,59 +107,13 @@ button:disabled {
   font-weight: 700;
 }
 
-.pipeline-model-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(108px, 1fr));
-  gap: 6px;
-  margin-top: 8px;
-  max-width: 760px;
-}
-
-.pipeline-model-card {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  border: 1px solid rgba(30, 28, 24, 0.18);
-  background: rgba(255, 252, 244, 0.68);
-  padding: 6px 8px;
-}
-
-.pipeline-model-card span,
-.pipeline-model-card small,
-.pipeline-model-card strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pipeline-model-role {
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10px;
-}
-
-.pipeline-model-card strong {
-  color: var(--ink);
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.pipeline-model-card small {
-  color: var(--blue);
-  font-family: var(--mono);
-  font-size: 10px;
-}
-
 .control-stack {
   display: grid;
   gap: 8px;
   justify-items: end;
 }
 
-.story-strip,
-.model-strip {
+.story-strip {
   display: flex;
   align-items: end;
   gap: 10px;
@@ -167,8 +121,7 @@ button:disabled {
   justify-content: flex-end;
 }
 
-.story-strip label,
-.model-strip label {
+.story-strip label {
   display: grid;
   gap: 4px;
   font-family: var(--mono);
@@ -177,9 +130,7 @@ button:disabled {
 }
 
 .story-strip input,
-.story-strip select,
-.model-strip input,
-.model-strip select {
+.story-strip select {
   width: 190px;
   min-height: 34px;
   border: 1px solid var(--line);
@@ -193,12 +144,10 @@ button:disabled {
   width: 170px;
 }
 
-.story-name-field input {
-  width: 180px;
-}
-
-#temperatureInput {
-  width: 74px;
+.feedback-entry-button.active {
+  border-color: var(--red);
+  color: var(--red);
+  background: rgba(166, 55, 45, 0.08);
 }
 
 #modelSelect {
@@ -401,8 +350,21 @@ button:disabled {
   border-left: 5px solid var(--line);
   padding: 10px 14px 12px;
   background: rgba(255, 252, 244, 0.72);
+  font-size: 16px;
+  line-height: 1.86;
+}
+
+.message-body {
   white-space: pre-wrap;
-  line-height: 1.72;
+}
+
+.message.assistant .message-body p {
+  margin: 0 0 1em;
+  text-indent: 2em;
+}
+
+.message.assistant .message-body p:last-child {
+  margin-bottom: 0;
 }
 
 .message.user {
@@ -425,6 +387,58 @@ button:disabled {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
+}
+
+.character-highlight {
+  color: #1f6f61;
+  font-weight: 650;
+}
+
+.dialogue-highlight {
+  color: #7b3f23;
+  background: rgba(191, 102, 51, 0.08);
+  box-shadow: inset 0 -0.34em 0 rgba(191, 102, 51, 0.12);
+}
+
+.markdown-strong {
+  font-weight: 700;
+  color: #1d4ed8;
+  border-radius: 4px;
+  padding: 0 2px;
+  background: rgba(29, 78, 216, 0.12);
+  box-shadow: inset 0 -0.42em 0 rgba(29, 78, 216, 0.18);
+}
+
+.markdown-emphasis {
+  font-style: italic;
+  color: #6f52a4;
+  background: rgba(111, 82, 164, 0.08);
+  box-shadow: inset 0 -0.32em 0 rgba(111, 82, 164, 0.1);
+}
+
+.opening-title {
+  margin: 2px 0 12px;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.opening-worldview,
+.opening-text {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.opening-worldview strong,
+.opening-text strong {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.opening-worldview p,
+.opening-text p {
+  margin: 0;
 }
 
 .option-tray {
@@ -475,14 +489,6 @@ button:disabled {
   padding: 9px 12px;
   line-height: 1.45;
   outline: none;
-}
-
-#playerFeedback {
-  min-height: 36px;
-  max-height: 72px;
-  font-size: 13px;
-  color: var(--red);
-  background: rgba(255, 252, 244, 0.42);
 }
 
 .composer-actions {
@@ -572,6 +578,11 @@ button:disabled {
   font-family: var(--mono);
   font-size: 11px;
   line-height: 1.45;
+}
+
+.compact-button {
+  padding: 4px 8px;
+  min-height: 28px;
 }
 
 .story-item {
@@ -667,9 +678,12 @@ button:disabled {
   width: min(860px, calc(100vw - 28px));
 }
 
-.prompt-preview-dialog {
-  width: min(1280px, calc(100vw - 28px));
-  height: min(86vh, 920px);
+.feedback-dialog {
+  width: min(520px, calc(100vw - 28px));
+}
+
+.feedback-dialog textarea {
+  min-height: 180px;
 }
 
 .app-dialog::backdrop {
@@ -680,11 +694,6 @@ button:disabled {
   display: grid;
   gap: 12px;
   padding: 18px;
-}
-
-.prompt-preview-dialog form {
-  height: 100%;
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .app-dialog h3 {
@@ -737,51 +746,6 @@ button:disabled {
 
 .dialog-status[data-tone='error'] {
   color: #9f2f2f;
-}
-
-.prompt-preview-head {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.prompt-preview-list {
-  min-height: 0;
-  overflow: auto;
-  display: grid;
-  gap: 14px;
-  padding-right: 4px;
-}
-
-.prompt-preview-item {
-  display: grid;
-  gap: 8px;
-  border: 1px solid var(--line);
-  background: rgba(255, 252, 244, 0.62);
-  padding: 10px;
-}
-
-.prompt-preview-title {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.prompt-preview-title span,
-.prompt-preview-title small {
-  font-family: var(--mono);
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.prompt-preview-item textarea {
-  min-height: 220px;
-  resize: vertical;
-  font-family: var(--mono);
-  font-size: 11px;
-  white-space: pre;
 }
 
 .asset-list {
@@ -893,39 +857,8 @@ button:disabled {
 .model-management-grid {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(230px, 0.7fr) minmax(420px, 1.15fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr);
   gap: 14px;
-}
-
-.model-provider-list {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-}
-
-.provider-card {
-  text-align: left;
-  border: 1px solid var(--line);
-  background: rgba(255, 252, 244, 0.7);
-  padding: 12px;
-  color: var(--ink);
-}
-
-.provider-card.selected {
-  border-color: var(--black);
-  box-shadow: inset 3px 0 0 var(--gold);
-}
-
-.provider-card strong,
-.provider-card span {
-  display: block;
-}
-
-.provider-card span {
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
 }
 
 .model-settings-form {
@@ -942,26 +875,6 @@ button:disabled {
   font-size: 16px;
 }
 
-.interception-panel {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--black);
-  background: rgba(255, 252, 244, 0.72);
-}
-
-.interception-panel h3 {
-  margin: 0 0 4px;
-  font-size: 16px;
-}
-
-.interception-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
 .file-button {
   display: inline-flex;
   align-items: center;
@@ -974,49 +887,6 @@ button:disabled {
 
 .file-button input {
   display: none;
-}
-
-.interception-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.interception-grid label,
-.interception-panel label {
-  display: grid;
-  gap: 6px;
-}
-
-.interception-grid textarea {
-  width: 100%;
-  min-height: 220px;
-  resize: vertical;
-  border: 1px solid var(--line);
-  background: rgba(255, 252, 244, 0.8);
-  color: var(--ink);
-  padding: 9px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.model-test-results {
-  overflow: auto;
-}
-
-.model-test-results table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
-.model-test-results th,
-.model-test-results td {
-  border: 1px solid var(--line);
-  padding: 6px;
-  vertical-align: top;
 }
 
 .story-settings-two {
@@ -1117,10 +987,6 @@ button:disabled {
 }
 
 @media (max-width: 1180px) {
-  .pipeline-model-grid {
-    grid-template-columns: repeat(3, minmax(118px, 1fr));
-  }
-
   .workspace-grid {
     grid-template-columns: 270px 1fr;
     grid-template-areas:
@@ -1152,8 +1018,7 @@ button:disabled {
 
   .topbar,
   .control-stack,
-  .story-strip,
-  .model-strip {
+  .story-strip {
     align-items: stretch;
     flex-direction: column;
     justify-items: stretch;
@@ -1161,15 +1026,8 @@ button:disabled {
   }
 
   .story-strip input,
-  .story-strip select,
-  .model-strip input,
-  .model-strip select {
+  .story-strip select {
     width: 100%;
-  }
-
-  .pipeline-model-grid {
-    grid-template-columns: 1fr;
-    max-width: none;
   }
 
   .workspace-grid {
@@ -1196,7 +1054,6 @@ button:disabled {
 
   .story-library-grid,
   .model-management-grid,
-  .interception-grid,
   .story-settings-two {
     grid-template-columns: 1fr;
   }

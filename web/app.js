@@ -1,18 +1,35 @@
 const storageKey = 'text-game-agent.web-state.v2'
 const legacyStorageKey = 'text-game-agent.web-state.v1'
 const deepSeekApiKeyStorageKey = 'text-game-agent.deepseek-api-key'
+const infronApiKeyStorageKey = 'text-game-agent.infron-api-key'
 const preferredModelStorageKey = 'text-game-agent.preferred-model'
 const preferredModelVersionStorageKey = 'text-game-agent.preferred-model-version'
 const officialDeepSeekV4ProModel = 'deepseek-v4-pro'
 const officialDeepSeekV4FlashModel = 'deepseek-v4-flash'
+const infronGemini31FlashLiteModel = 'google/gemini-3.1-flash-lite'
 const defaultModel = officialDeepSeekV4FlashModel
 const defaultModelVersion = 'official-deepseek-v4-flash'
-const modelOptions = new Set([officialDeepSeekV4FlashModel, officialDeepSeekV4ProModel])
-const providerOptions = ['deepseek']
+const defaultTemperature = 0.8
+const novelImportCharacterLimit = 20_000
+const providerOptions = ['deepseek', 'infron']
+const providerKeyStorageKeys = {
+  deepseek: deepSeekApiKeyStorageKey,
+  infron: infronApiKeyStorageKey,
+}
 const modelCatalog = [
-  { id: officialDeepSeekV4FlashModel, provider: 'deepseek' },
-  { id: officialDeepSeekV4ProModel, provider: 'deepseek' },
+  { id: officialDeepSeekV4FlashModel, provider: 'deepseek', label: 'DeepSeek V4 Flash | official | DeepSeek' },
+  { id: officialDeepSeekV4ProModel, provider: 'deepseek', label: 'DeepSeek V4 Pro | official | DeepSeek' },
+  { id: infronGemini31FlashLiteModel, provider: 'infron', label: 'Gemini 3.1 Flash Lite | Infron' },
 ]
+const modelOptions = new Set(modelCatalog.map(item => item.id))
+const pipelineStages = ['initializer', 'director', 'narrator', 'postprocess']
+const pipelineStageLabels = {
+  initializer: '初始化',
+  director: '导演',
+  narrator: '叙事者',
+  postprocess: '反馈/总结',
+}
+const narrativePerspectiveOptions = new Set(['first_person', 'third_person'])
 const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势']
 const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势', '位置']
 
@@ -20,33 +37,41 @@ const appState = loadAppState()
 let state = getCurrentStory()
 let storyLibraryAssets = []
 let selectedNewGameAssetId = ''
+let selectedLibraryAssetId = ''
 let generationBusy = false
-let interceptionPromptSnapshot = null
 let persistController = null
 let activeStreamController = null
 let postprocessQueueRunning = false
 let historyCompactionRunning = false
 let pendingModelSelection = null
+let pendingPipelineModelSelection = null
+let pendingApiKeyProviderSelection = 'deepseek'
+let pendingNarrativePerspectiveSelection = null
+let storyInitializationTimer = null
 let config = {
   model: defaultModel,
   baseUrl: 'https://api.deepseek.com',
   hasApiKey: false,
   providers: {
     deepseek: { baseUrl: 'https://api.deepseek.com', hasApiKey: false },
+    infron: { baseUrl: 'https://llm.onerouter.pro/v1', hasApiKey: false },
   },
 }
 
 const els = {
   connectionStatus: document.querySelector('#connectionStatus'),
-  pipelineModelGrid: document.querySelector('#pipelineModelGrid'),
   turnStatus: document.querySelector('#turnStatus'),
-  providerSelect: document.querySelector('#providerSelect'),
   modelSelect: document.querySelector('#modelSelect'),
+  narrativePerspectiveSelect: document.querySelector('#narrativePerspectiveSelect'),
+  pipelineModelSelects: {
+    initializer: document.querySelector('#pipelineInitializerModel'),
+    director: document.querySelector('#pipelineDirectorModel'),
+    narrator: document.querySelector('#pipelineNarratorModel'),
+    postprocess: document.querySelector('#pipelinePostprocessModel'),
+  },
   applyModelSelectionButton: document.querySelector('#applyModelSelectionButton'),
-  temperatureInput: document.querySelector('#temperatureInput'),
+  apiKeyProviderSelect: document.querySelector('#apiKeyProviderSelect'),
   apiKeyButton: document.querySelector('#apiKeyButton'),
-  providerTestButton: document.querySelector('#providerTestButton'),
-  providerSpeedTestButton: document.querySelector('#providerSpeedTestButton'),
   apiKeyHelp: document.querySelector('#apiKeyHelp'),
   apiKeyLabel: document.querySelector('#apiKeyLabel'),
   apiKeyInput: document.querySelector('#apiKeyInput'),
@@ -55,28 +80,13 @@ const els = {
   modelManagementPage: document.querySelector('#modelManagementPage'),
   closeModelManagementButton: document.querySelector('#closeModelManagementButton'),
   modelManagementStatus: document.querySelector('#modelManagementStatus'),
-  modelTestResults: document.querySelector('#modelTestResults'),
-  buildInterceptionPromptButton: document.querySelector('#buildInterceptionPromptButton'),
-  interceptionPromptFile: document.querySelector('#interceptionPromptFile'),
-  interceptionInstructionFiles: document.querySelector('#interceptionInstructionFiles'),
-  runInterceptionTestButton: document.querySelector('#runInterceptionTestButton'),
-  interceptionStatus: document.querySelector('#interceptionStatus'),
-  interceptionSystemInput: document.querySelector('#interceptionSystemInput'),
-  interceptionResultOutput: document.querySelector('#interceptionResultOutput'),
-  resetButton: document.querySelector('#resetButton'),
-  storySelect: document.querySelector('#storySelect'),
-  storyNameInput: document.querySelector('#storyNameInput'),
   storyLibraryButton: document.querySelector('#storyLibraryButton'),
   newStoryButton: document.querySelector('#newStoryButton'),
-  deleteStoryButton: document.querySelector('#deleteStoryButton'),
   saveArchiveButton: document.querySelector('#saveArchiveButton'),
   loadArchiveButton: document.querySelector('#loadArchiveButton'),
-  deleteSaveButton: document.querySelector('#deleteSaveButton'),
-  promptPreviewButton: document.querySelector('#promptPreviewButton'),
-  promptPreviewDialog: document.querySelector('#promptPreviewDialog'),
-  closePromptPreviewButton: document.querySelector('#closePromptPreviewButton'),
-  promptPreviewStatus: document.querySelector('#promptPreviewStatus'),
-  promptPreviewList: document.querySelector('#promptPreviewList'),
+  playerFeedbackButton: document.querySelector('#playerFeedbackButton'),
+  playerFeedbackDialog: document.querySelector('#playerFeedbackDialog'),
+  playerFeedbackForm: document.querySelector('#playerFeedbackForm'),
   saveSlotsDialog: document.querySelector('#saveSlotsDialog'),
   saveSlotsForm: document.querySelector('#saveSlotsForm'),
   saveSlotsList: document.querySelector('#saveSlotsList'),
@@ -87,6 +97,7 @@ const els = {
   newGameDialog: document.querySelector('#newGameDialog'),
   newGameForm: document.querySelector('#newGameForm'),
   newGameName: document.querySelector('#newGameName'),
+  newGamePlayerCharacter: document.querySelector('#newGamePlayerCharacter'),
   storyAssetList: document.querySelector('#storyAssetList'),
   newGamePreview: document.querySelector('#newGamePreview'),
   cancelNewGameButton: document.querySelector('#cancelNewGameButton'),
@@ -107,7 +118,6 @@ const els = {
   conversation: document.querySelector('#conversation'),
   optionTray: document.querySelector('#optionTray'),
   playForm: document.querySelector('#playForm'),
-  playerFeedback: document.querySelector('#playerFeedback'),
   playerInput: document.querySelector('#playerInput'),
   retryStageButton: document.querySelector('#retryStageButton'),
   rollbackTurnButton: document.querySelector('#rollbackTurnButton'),
@@ -115,6 +125,9 @@ const els = {
   sendButton: document.querySelector('#sendButton'),
   statusPanelView: document.querySelector('#statusPanelView'),
   storyTrackingView: document.querySelector('#storyTrackingView'),
+  playerFeedbackInput: document.querySelector('#playerFeedbackInput'),
+  clearPlayerFeedbackButton: document.querySelector('#clearPlayerFeedbackButton'),
+  closePlayerFeedbackButton: document.querySelector('#closePlayerFeedbackButton'),
   toggleDebugButton: document.querySelector('#toggleDebugButton'),
   debugOutput: document.querySelector('#debugOutput'),
   emptyConversationTemplate: document.querySelector('#emptyConversationTemplate'),
@@ -139,19 +152,7 @@ function defaultStory(name = '未选择故事') {
     createdAt: now,
     updatedAt: now,
     messages: [],
-    characters: [
-      {
-        id: makeId('character'),
-        name: '玩家',
-        gender: '未设定',
-        role: '玩家操控角色',
-        mood: '克制',
-        location: '当前场景',
-        health: '正常',
-        trust: '',
-        notes: '不替玩家锁死长期选择。',
-      },
-    ],
+    characters: [],
     openingText: '',
     worldview: '',
     currentSituation: '',
@@ -160,15 +161,16 @@ function defaultStory(name = '未选择故事') {
     physicalConstraints: [],
     directorStyle: '',
     narratorStyle: '',
+    playerFeedback: '',
+    playerFeedbackUpdatedAt: '',
     plotLines: [],
     feedbackMemory: [],
-    optionalDisturbance: '',
-    playerFeedback: '',
     directorHistory: [],
+    controlledCharacterName: '',
     storyAssetId: '',
     programConfigFile: '',
     statusSchema: fallbackStatusSchema,
-    statusRoster: ['玩家'],
+    statusRoster: [],
     statusState: {},
     globalContext: '',
     playerOptions: [],
@@ -181,7 +183,30 @@ function defaultStory(name = '未选择故事') {
 
 function buildStoryContextForRequest() {
   const worldview = String(state.worldview || '').trim()
-  return worldview ? `## 世界观\n${worldview}` : ''
+  const controlledCharacterName = normalizeControlledCharacterName(state.controlledCharacterName)
+  const perspective = normalizeNarrativePerspective(appState.narrativePerspective)
+  const perspectiveText = renderNarrativePerspectiveInstruction(perspective, controlledCharacterName)
+  const controlledBlock = controlledCharacterName
+    ? `## 当前操控人物\n${controlledCharacterName}\n用户输入代表该人物接下来的行动、话语、观察或意图。\n\n## 叙事人称\n${perspectiveText}`
+    : ''
+  return [worldview ? `## 世界观\n${worldview}` : '', controlledBlock].filter(Boolean).join('\n\n')
+}
+
+function normalizeNarrativePerspective(value) {
+  const perspective = String(value || '').trim()
+  return narrativePerspectiveOptions.has(perspective) ? perspective : 'first_person'
+}
+
+function narrativePerspectiveLabel(value) {
+  return normalizeNarrativePerspective(value) === 'third_person' ? '第三人称限知' : '第一人称限知'
+}
+
+function renderNarrativePerspectiveInstruction(value, controlledCharacterName = '') {
+  const name = controlledCharacterName || '当前操控人物'
+  if (normalizeNarrativePerspective(value) === 'third_person') {
+    return `第三人称限知。正文叙述当前操控人物时固定使用“${name}”、简称或“她/他”，不要在叙述中切换成“我”。`
+  }
+  return `第一人称限知。正文叙述当前操控人物时固定使用“我”，不要在叙述中切换成“${name}”“她/他”。其他人物称呼当前操控人物、对白或客观身份说明时，才可以使用人物名。`
 }
 
 function defaultAppState() {
@@ -189,6 +214,8 @@ function defaultAppState() {
   return {
     defaultModelVersion,
     preferredModel: story.model,
+    pipelineModels: defaultPipelineModelOverrides(),
+    narrativePerspective: 'first_person',
     currentStoryId: story.id,
     stories: [story],
     multiSpatialMigration: true,
@@ -234,6 +261,8 @@ function normalizeAppState(raw) {
   return {
     defaultModelVersion,
     preferredModel: normalizePersistedModel(raw?.preferredModel, modelVersion) || readStoredPreferredModel() || normalizePersistedModel(rawCurrentStory?.model, modelVersion) || base.preferredModel || defaultModel,
+    pipelineModels: normalizePipelineModelOverrides(raw?.pipelineModels),
+    narrativePerspective: normalizeNarrativePerspective(raw?.narrativePerspective),
     currentStoryId,
     stories,
     multiSpatialMigration: Boolean(raw?.multiSpatialMigration),
@@ -260,6 +289,8 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     'normalized' + 'Entries',
     'storybook' + 'Entries',
     'module' + 'Enabled',
+    'optional' + 'Disturbance',
+    '可选' + '扰动源',
   ]
   retiredKeys.forEach(key => {
     delete rest[key]
@@ -282,11 +313,12 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     physicalConstraints: normalizePhysicalConstraints(raw?.physicalConstraints),
     directorStyle: String(raw?.directorStyle || ''),
     narratorStyle: String(raw?.narratorStyle || ''),
+    playerFeedback: String(raw?.playerFeedback || ''),
+    playerFeedbackUpdatedAt: String(raw?.playerFeedbackUpdatedAt || raw?.updatedAt || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
     feedbackMemory: normalizeFeedbackMemory(raw?.feedbackMemory),
-    optionalDisturbance: String(raw?.optionalDisturbance || ''),
-    playerFeedback: String(raw?.playerFeedback || ''),
     directorHistory: normalizeDirectorHistory(raw?.directorHistory),
+    controlledCharacterName: normalizeControlledCharacterName(raw?.controlledCharacterName),
     storyAssetId: String(raw?.storyAssetId || ''),
     programConfigFile: String(raw?.programConfigFile || ''),
     statusSchema: normalizeStatusSchema(raw?.statusSchema),
@@ -324,10 +356,7 @@ function hasRetiredDirectorPlanFields(plan) {
 function normalizeDirectorPlan(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return null
   if (hasRetiredDirectorPlanFields(plan)) return null
-  const normalized = deepClone(plan)
-  delete normalized.optionalDisturbance
-  delete normalized.可选扰动源
-  return normalized
+  return deepClone(plan)
 }
 
 function normalizeDebugState(debug) {
@@ -400,11 +429,11 @@ function normalizeFeedbackMemory(items) {
       if (!item || typeof item !== 'object') return null
       const text = String(item.text || '').trim()
       if (!text) return null
-      const ttl = Number.isFinite(Number(item.ttl)) ? Number(item.ttl) : 3
+      const ttl = Number.isFinite(Number(item.ttl)) ? Number(item.ttl) : 1
       return {
         type: normalizeFeedbackType(item.type),
         text,
-        ttl: Math.max(1, Math.min(3, Math.floor(ttl))),
+        ttl: Math.max(1, Math.min(1, Math.floor(ttl))),
       }
     })
     .filter(Boolean)
@@ -421,7 +450,13 @@ function normalizePhysicalConstraints(value) {
 
 function parseStatusSchemaFields(value) {
   const items = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n|[,，、]/) : []
-  return items.map(item => String(item || '').replace(/^[-*]\s*/, '').split(/[：:]/)[0].trim()).filter(Boolean)
+  return items.map(item => normalizeStatusFieldName(String(item || '').replace(/^[-*]\s*/, '').split(/[：:]/)[0])).filter(Boolean)
+}
+
+function normalizeStatusFieldName(value) {
+  const text = String(value || '').trim()
+  if (text === '对玩家看法' || text === '对玩家态度') return '对当前操控人物看法'
+  return text
 }
 
 function normalizeStatusSchema(value, fallback = fallbackStatusSchema) {
@@ -430,20 +465,25 @@ function normalizeStatusSchema(value, fallback = fallbackStatusSchema) {
   return [...new Set([...requiredStatusSchema, ...source])]
 }
 
+function normalizeControlledCharacterName(value) {
+  const text = String(value || '').trim()
+  return text === '玩家' ? '' : text
+}
+
 function normalizeStatusRoster(value, characters = []) {
   const names = (Array.isArray(value) ? value : [])
     .map(item => typeof item === 'string' ? item : item?.name)
     .map(item => String(item || '').trim())
     .filter(isValidStatusSubjectName)
   const characterNames = characters.map(character => String(character.name || '').trim()).filter(isValidStatusSubjectName)
-  return [...new Set(['玩家', ...names, ...characterNames])]
+  return [...new Set([...names, ...characterNames])]
 }
 
 function isValidStatusSubjectName(name) {
   const text = String(name || '').trim()
   if (!text) return false
   if (text.startsWith('_')) return false
-  return !/^(环境|场景|候选项|选项|旁白|系统|剧情|总结|世界观|状态|未知|其他)$/i.test(text)
+  return !/^(玩家|环境|场景|候选项|选项|旁白|系统|剧情|总结|世界观|状态|未知|其他)$/i.test(text)
 }
 
 function normalizeStatusState(value, roster, characters = [], schema = fallbackStatusSchema) {
@@ -465,13 +505,13 @@ function statusFieldValue(field, record, character, name) {
   if (record[field] !== undefined && record[field] !== null) return String(record[field])
   const fallbackByField = {
     性别: record.gender || character?.gender,
-    身份: record.role || character?.role || (name === '玩家' ? '玩家操控角色' : ''),
+    身份: record.role || character?.role || '',
     位置: record.location || character?.location,
     外显状态: record.health || character?.health,
     外貌: record.appearance || character?.appearance,
     性格: record.personality || character?.personality,
     情绪: record.mood || character?.mood,
-    对玩家态度: record.trust || character?.trust || (name === '玩家' ? '玩家本人' : ''),
+    对当前操控人物看法: record.对当前操控人物看法 || record.对玩家看法 || record.对玩家态度 || record.trust || character?.trust || '',
   }
   return String(fallbackByField[field] || '')
 }
@@ -491,7 +531,7 @@ function mergeStatusState(current, patch, roster, characters = [], schema = fall
   for (const [name, record] of Object.entries(delta)) {
     if (!isValidStatusSubjectName(name)) continue
     if (!roster.includes(name) || !record || typeof record !== 'object') continue
-    base[name] = { ...(base[name] || {}), ...Object.fromEntries(Object.entries(record).map(([key, value]) => [key, String(value ?? '').trim()]).filter(([, value]) => value)) }
+    base[name] = { ...(base[name] || {}), ...Object.fromEntries(Object.entries(record).map(([key, value]) => [normalizeStatusFieldName(key), String(value ?? '').trim()]).filter(([, value]) => value)) }
   }
   return base
 }
@@ -530,13 +570,13 @@ function mergeFeedbackMemory(existing, payload) {
     ['plotDesignRepetition', payload.剧情设计重复 || payload.plotDesignRepetitionFeedback],
     ['plotPacingDrag', payload.剧情速度拖沓 || payload.plotPacingDragFeedback],
   ]
-    .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 3 }))
+    .map(([type, value]) => ({ type, text: String(value || '').trim(), ttl: 1 }))
     .filter(item => item.text)
   const merged = [...aged]
   for (const item of incoming) {
     const index = merged.findIndex(old => old.type === item.type && old.text === item.text)
     if (index >= 0) {
-      merged[index] = { ...merged[index], ttl: 3 }
+      merged[index] = { ...merged[index], ttl: 1 }
     } else {
       merged.push(item)
     }
@@ -545,10 +585,12 @@ function mergeFeedbackMemory(existing, payload) {
 }
 
 function renderDirectorFeedbackMemory() {
-  return [
-    renderFeedbackMemory(state.feedbackMemory, 'director'),
-    state.optionalDisturbance ? `- [可选扰动源] ${baselineLogText(state.optionalDisturbance)}` : '',
-  ].filter(Boolean).join('\n')
+  return [renderPlayerFeedbackForPrompt(), renderFeedbackMemory(state.feedbackMemory, 'director')].filter(Boolean).join('\n')
+}
+
+function renderPlayerFeedbackForPrompt() {
+  const text = String(state.playerFeedback || '').trim()
+  return text ? `- [用户反馈｜持续] ${baselineLogText(text)}` : ''
 }
 
 function normalizeDirectorHistory(value) {
@@ -670,6 +712,17 @@ function normalizeModel(value) {
   return modelOptions.has(model) ? model : defaultModel
 }
 
+function defaultPipelineModelOverrides() {
+  return Object.fromEntries(pipelineStages.map(stage => [stage, '']))
+}
+
+function normalizePipelineModelOverrides(value) {
+  const record = value && typeof value === 'object' ? value : {}
+  return Object.fromEntries(
+    pipelineStages.map(stage => [stage, record[stage] ? normalizeModel(record[stage]) : '']),
+  )
+}
+
 function readPreferredModelFromStorage() {
   return readStoredPreferredModel() || defaultModel
 }
@@ -706,12 +759,15 @@ function setPreferredModel(model) {
 }
 
 function providerForModel(model) {
-  normalizeModel(model)
-  return 'deepseek'
+  const normalized = normalizeModel(model)
+  return modelCatalog.find(item => item.id === normalized)?.provider || 'deepseek'
 }
 
 function providerLabel(provider) {
-  return 'DeepSeek Official'
+  return {
+    deepseek: 'DeepSeek Official',
+    infron: 'Infron',
+  }[normalizeProvider(provider)]
 }
 
 function normalizeProvider(value) {
@@ -723,16 +779,31 @@ function modelsForProvider(provider) {
   return modelCatalog.filter(item => item.provider === normalizeProvider(provider))
 }
 
-function defaultModelForProvider(provider) {
-  if (normalizeProvider(provider) === providerForModel(defaultModel)) return defaultModel
-  return modelsForProvider(provider)[0]?.id || defaultModel
+function modelLabel(model) {
+  return modelCatalog.find(item => item.id === model)?.label || model
 }
 
-function modelLabel(model) {
-  return {
-    [officialDeepSeekV4ProModel]: 'DeepSeek V4 Pro | official | DeepSeek',
-    [officialDeepSeekV4FlashModel]: 'DeepSeek V4 Flash | official | DeepSeek',
-  }[model] || model
+function getPipelineModelOverrides() {
+  return normalizePipelineModelOverrides(appState.pipelineModels)
+}
+
+function getPipelineModelsForRequest(baseModel = getActiveModel(), overrides = appState.pipelineModels) {
+  const selectedModel = normalizeModel(baseModel)
+  const normalizedOverrides = normalizePipelineModelOverrides(overrides)
+  return Object.fromEntries(
+    pipelineStages.map(stage => [stage, normalizedOverrides[stage] || selectedModel]),
+  )
+}
+
+function requiredProvidersForPipeline(models = getPipelineModelsForRequest()) {
+  return [...new Set(Object.values(models).map(providerForModel))]
+}
+
+function formatPipelineModelSummary(models = getPipelineModelsForRequest(), overridesInput = appState.pipelineModels) {
+  const overrides = normalizePipelineModelOverrides(overridesInput)
+  const changed = pipelineStages.filter(stage => overrides[stage])
+  if (!changed.length) return '全部跟随当前模型'
+  return changed.map(stage => `${pipelineStageLabels[stage]}:${modelLabel(models[stage])}`).join(' / ')
 }
 
 async function loadConfig() {
@@ -755,18 +826,17 @@ async function fetchRuntimeConfig() {
 function normalizeRuntimeConfig(raw) {
   return {
     model: normalizeModel(raw?.model || defaultModel),
-    pipelineModels: raw?.pipelineModels || {
-      director: defaultModel,
-      narrator: defaultModel,
-      postprocess: defaultModel,
-      initializer: defaultModel,
-    },
+    pipelineModels: raw?.pipelineModels || getPipelineModelsForRequest(raw?.model || defaultModel),
     baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
     hasApiKey: Boolean(raw?.hasApiKey || raw?.providers?.deepseek?.hasApiKey),
     providers: {
       deepseek: {
         baseUrl: String(raw?.providers?.deepseek?.baseUrl || raw?.baseUrl || 'https://api.deepseek.com'),
         hasApiKey: Boolean(raw?.providers?.deepseek?.hasApiKey || raw?.hasApiKey),
+      },
+      infron: {
+        baseUrl: String(raw?.providers?.infron?.baseUrl || 'https://llm.onerouter.pro/v1'),
+        hasApiKey: Boolean(raw?.providers?.infron?.hasApiKey),
       },
     },
   }
@@ -798,53 +868,41 @@ function bindEvents() {
     scrollToConversationBottom()
   })
 
+  els.playerFeedbackInput.addEventListener('input', event => {
+    setPlayerFeedback(String(event.target.value || '').trim())
+  })
+
+  els.playerFeedbackInput.addEventListener('change', () => {
+    syncPlayerFeedbackFromInput()
+  })
+
+  els.clearPlayerFeedbackButton.addEventListener('click', () => {
+    setPlayerFeedback('')
+    els.playerFeedbackInput.value = ''
+    render()
+  })
+
+  els.playerFeedbackButton.addEventListener('click', () => {
+    renderPlayerFeedbackInput()
+    els.playerFeedbackDialog.showModal()
+    els.playerFeedbackInput.focus()
+  })
+
+  els.playerFeedbackForm.addEventListener('submit', () => {
+    syncPlayerFeedbackFromInput()
+    render()
+  })
+
   els.modelManagementButton.addEventListener('click', () => {
     openModelManagementPage()
-  })
-
-  els.promptPreviewButton.addEventListener('click', () => {
-    openPromptPreview()
-  })
-
-  els.closePromptPreviewButton.addEventListener('click', () => {
-    els.promptPreviewDialog.close()
-  })
-
-  els.providerTestButton.addEventListener('click', () => {
-    testCurrentProvider()
-  })
-
-  els.providerSpeedTestButton.addEventListener('click', () => {
-    testCurrentProviderSpeed()
   })
 
   els.applyModelSelectionButton.addEventListener('click', () => {
     applyModelSelection()
   })
 
-  els.providerSelect.addEventListener('change', event => {
-    pendingModelSelection = defaultModelForProvider(event.target.value)
-    renderModelManagementPage()
-  })
-
-  els.buildInterceptionPromptButton.addEventListener('click', () => {
-    buildCurrentInterceptionPrompt()
-  })
-
-  els.interceptionPromptFile.addEventListener('change', () => {
-    loadInterceptionPromptFile()
-  })
-
-  els.interceptionInstructionFiles.addEventListener('change', () => {
-    loadInterceptionInstructionFiles()
-  })
-
-  els.runInterceptionTestButton.addEventListener('click', () => {
-    runContentInterceptionTest()
-  })
-
   els.clearApiKeyButton.addEventListener('click', () => {
-    localStorage.removeItem(apiKeyStorageKeyForProvider(selectedProviderForManagement()))
+    localStorage.removeItem(apiKeyStorageKeyForProvider(selectedApiKeyProviderForManagement()))
     els.apiKeyInput.value = ''
     renderModelManagementPage()
     renderConnection()
@@ -855,7 +913,7 @@ function bindEvents() {
   })
 
   els.apiKeyButton.addEventListener('click', () => {
-    const provider = selectedProviderForManagement()
+    const provider = selectedApiKeyProviderForManagement()
     const key = els.apiKeyInput.value.trim()
     if (provider === 'deepseek' && key && !/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) {
       alert('API Key 格式不对。DeepSeek key 通常以 sk- 开头，请重新粘贴完整 key。')
@@ -872,39 +930,23 @@ function bindEvents() {
     renderModelManagementPage()
   })
 
-  document.querySelectorAll('[data-provider-model]').forEach(button => {
-    button.addEventListener('click', () => {
-      pendingModelSelection = defaultModelForProvider(providerForModel(button.dataset.providerModel))
+  els.narrativePerspectiveSelect.addEventListener('change', event => {
+    pendingNarrativePerspectiveSelection = normalizeNarrativePerspective(event.target.value)
+    renderModelManagementPage()
+  })
+
+  els.apiKeyProviderSelect.addEventListener('change', event => {
+    pendingApiKeyProviderSelection = normalizeProvider(event.target.value)
+    renderModelManagementPage()
+  })
+
+  for (const stage of pipelineStages) {
+    els.pipelineModelSelects[stage]?.addEventListener('change', event => {
+      pendingPipelineModelSelection = normalizePipelineModelOverrides(pendingPipelineModelSelection || appState.pipelineModels)
+      pendingPipelineModelSelection[stage] = event.target.value ? normalizeModel(event.target.value) : ''
       renderModelManagementPage()
     })
-  })
-
-  els.resetButton.addEventListener('click', () => {
-    if (!confirm('清空当前故事的对话、人物、故事书和上下文？')) return
-    const replacement = defaultStory(state.name)
-    replacement.id = state.id
-    replacement.createdAt = state.createdAt
-    const index = appState.stories.findIndex(story => story.id === state.id)
-    appState.stories[index] = replacement
-    state = replacement
-    saveState()
-    render()
-  })
-
-  els.storySelect.addEventListener('change', event => {
-    switchStory(event.target.value)
-  })
-
-  els.storyNameInput.addEventListener('input', event => {
-    state.name = event.target.value.trim() || '未命名故事'
-    saveState()
-    renderStoryControls()
-  })
-
-  els.playerFeedback.addEventListener('change', () => {
-    state.playerFeedback = els.playerFeedback.value.trim()
-    saveState()
-  })
+  }
 
   els.storyLibraryButton.addEventListener('click', () => {
     openStoryLibraryDialog()
@@ -912,19 +954,6 @@ function bindEvents() {
 
   els.newStoryButton.addEventListener('click', () => {
     openNewGameDialog()
-  })
-
-  els.deleteStoryButton.addEventListener('click', () => {
-    if (appState.stories.length <= 1) {
-      alert('至少保留一个故事。')
-      return
-    }
-    if (!confirm(`删除故事“${state.name}”？此操作只删除浏览器里的本地故事槽。`)) return
-    appState.stories = appState.stories.filter(story => story.id !== state.id)
-    appState.currentStoryId = appState.stories[0].id
-    state = getCurrentStory()
-    saveState()
-    render()
   })
 
   els.saveArchiveButton.addEventListener('click', async () => {
@@ -951,16 +980,7 @@ function bindEvents() {
     if (action === 'load') await loadSaveSlot(id)
     if (action === 'favorite') await toggleSaveSlotFavorite(id, button.dataset.favorite !== 'true')
     if (action === 'delete') await deleteSaveSlot(id, button.dataset.name || id)
-  })
-
-  els.deleteSaveButton.addEventListener('click', async () => {
-    if (!confirm('删除 save/current-state.json，并清空当前浏览器进度？')) return
-    await fetch('/api/save-state', { method: 'DELETE' }).catch(() => {})
-    localStorage.removeItem(storageKey)
-    const fresh = defaultAppState()
-    Object.assign(appState, fresh)
-    state = getCurrentStory()
-    render()
+    if (action === 'evaluate') await evaluateSavedSlot(id, { refreshBefore: true })
   })
 
   els.cancelNewGameButton.addEventListener('click', () => {
@@ -979,7 +999,7 @@ function bindEvents() {
         const imported = await importStoryFile(file)
         const asset = storyAssetFromImported(file.name, imported)
         storyLibraryAssets.unshift(asset)
-        selectedNewGameAssetId = asset.id
+        selectedLibraryAssetId = asset.id
       }
       if (files.length) setStoryLibraryStatus('导入完成。请选择资料并初始化。', 'done')
     } catch (error) {
@@ -1025,7 +1045,7 @@ function bindEvents() {
       return
     }
     try {
-      await startNewGameFromAsset(asset, els.newGameName.value.trim())
+      await startNewGameFromAsset(asset, els.newGameName.value.trim(), els.newGamePlayerCharacter.value)
     } catch (error) {
       alert(error.message)
       renderNewGameAssets()
@@ -1040,9 +1060,9 @@ function bindEvents() {
 function render() {
   renderConnection()
   renderStoryControls()
-  renderPlayerFeedback()
   renderStatusPanel()
   renderStoryTracking()
+  renderPlayerFeedbackInput()
   renderConversation()
   renderOptions()
   renderReadingJumpControls()
@@ -1054,9 +1074,24 @@ function render() {
   renderDebug()
 }
 
-function renderPlayerFeedback() {
-  if (document.activeElement === els.playerFeedback) return
-  els.playerFeedback.value = state.playerFeedback || ''
+function renderPlayerFeedbackInput() {
+  if (document.activeElement === els.playerFeedbackInput) return
+  els.playerFeedbackInput.value = String(state.playerFeedback || '')
+  const hasFeedback = Boolean(String(state.playerFeedback || '').trim())
+  els.playerFeedbackButton.classList.toggle('active', hasFeedback)
+  els.playerFeedbackButton.title = hasFeedback ? '用户反馈已生效' : '添加用户反馈'
+}
+
+function syncPlayerFeedbackFromInput() {
+  const text = String(els.playerFeedbackInput?.value || '').trim()
+  if (state.playerFeedback !== text) setPlayerFeedback(text)
+  return text
+}
+
+function setPlayerFeedback(text) {
+  state.playerFeedback = String(text || '').trim()
+  state.playerFeedbackUpdatedAt = new Date().toISOString()
+  saveState()
 }
 
 function renderDebug() {
@@ -1086,9 +1121,9 @@ function renderDebug() {
   const payload = {
     initializer: debug.initializer,
     director: debug.director,
+    planFeedback: debug.planFeedback,
     narrator: debug.narrator,
     postprocessSummary: debug.postprocessSummary,
-    postprocessFeedback: debug.postprocessFeedback,
   }
   if (Object.values(payload).some(Boolean)) {
     lines.push('', 'stages:', baselineLogText(JSON.stringify(payload, null, 2)))
@@ -1106,8 +1141,8 @@ function baselineLogText(value) {
     .replaceAll('预言故事', '正文')
     .replaceAll('预言方向', '剧情方向')
     .replaceAll('命运分叉', '可选行动')
-    .replaceAll('顾客需求', '玩家输入')
-    .replaceAll('顾客', '玩家')
+    .replaceAll('顾客需求', '用户输入')
+    .replaceAll('顾客', '用户')
     .replaceAll('花语', '剧情')
     .replaceAll('预言', '剧情')
     .replaceAll('花朵', '故事')
@@ -1135,13 +1170,7 @@ function formatPipelineMs(ms) {
 }
 
 function renderStoryControls() {
-  els.storySelect.innerHTML = appState.stories.map(story => `
-    <option value="${escapeAttr(story.id)}" ${story.id === state.id ? 'selected' : ''}>
-      ${escapeHtml(story.name || '未命名故事')}
-    </option>
-  `).join('')
-  els.storyNameInput.value = state.name || ''
-  els.deleteStoryButton.disabled = appState.stories.length <= 1
+  return
 }
 
 function switchStory(id) {
@@ -1170,7 +1199,7 @@ async function openStoryLibraryDialog() {
 
 async function openStoryLibraryPage() {
   await loadStoryLibrary()
-  selectedNewGameAssetId = storyLibraryAssets[0]?.id || ''
+  preserveSelectedLibraryAsset()
   setStoryLibraryStatus(storyLibraryAssets.some(asset => asset.programConfig)
     ? '已有已初始化故事，可以开始新游戏。'
     : '请选择故事资料并点击初始化。')
@@ -1188,6 +1217,9 @@ function closeStoryLibraryPage() {
 
 function openModelManagementPage() {
   pendingModelSelection = getActiveModel()
+  pendingPipelineModelSelection = getPipelineModelOverrides()
+  pendingApiKeyProviderSelection = selectedProviderForManagement()
+  pendingNarrativePerspectiveSelection = normalizeNarrativePerspective(appState.narrativePerspective)
   renderModelManagementPage()
   els.gamePage.hidden = true
   els.storyLibraryPage.hidden = true
@@ -1196,6 +1228,8 @@ function openModelManagementPage() {
 
 function closeModelManagementPage() {
   pendingModelSelection = null
+  pendingPipelineModelSelection = null
+  pendingNarrativePerspectiveSelection = null
   els.modelManagementPage.hidden = true
   els.gamePage.hidden = false
   render()
@@ -1215,6 +1249,7 @@ function renderNewGameAssets() {
   if (storyLibraryAssets.length === 0) {
     els.storyAssetList.innerHTML = '<p class="meta no-indent">还没有故事资料。请先进入“故事库”导入并初始化。</p>'
     els.newGamePreview.innerHTML = ''
+    renderNewGamePlayerSelector(null)
     return
   }
 
@@ -1222,6 +1257,7 @@ function renderNewGameAssets() {
   if (readyAssets.length === 0) {
     els.storyAssetList.innerHTML = '<p class="meta no-indent">还没有已初始化故事。请先进入“故事库”初始化。</p>'
     els.newGamePreview.innerHTML = ''
+    renderNewGamePlayerSelector(null)
     return
   }
   if (!readyAssets.some(asset => asset.id === selectedNewGameAssetId)) selectedNewGameAssetId = readyAssets[0].id
@@ -1247,7 +1283,21 @@ function renderNewGameAssets() {
 
   const selected = readyAssets.find(asset => asset.id === selectedNewGameAssetId)
   if (selected) els.newGameName.value = assetDefaultStoryName(selected)
+  renderNewGamePlayerSelector(selected)
   renderNewGamePreview(selected)
+}
+
+function renderNewGamePlayerSelector(asset) {
+  if (!els.newGamePlayerCharacter) return
+  const candidates = playableCharactersFromConfig(asset?.programConfig)
+  els.newGamePlayerCharacter.disabled = !asset || candidates.length <= 1
+  if (!asset) {
+    els.newGamePlayerCharacter.innerHTML = ''
+    return
+  }
+  const options = candidates.length ? candidates : normalizeStatusRoster(asset?.programConfig?.statusRoster).slice(0, 8)
+  const current = options.includes(els.newGamePlayerCharacter.value) ? els.newGamePlayerCharacter.value : options[0] || ''
+  els.newGamePlayerCharacter.innerHTML = options.map(name => `<option value="${escapeAttr(name)}" ${name === current ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')
 }
 
 function renderStoryLibraryAssets() {
@@ -1258,11 +1308,12 @@ function renderStoryLibraryAssets() {
     els.deleteStoryAssetButton.disabled = true
     return
   }
-  els.deleteStoryAssetButton.disabled = !selectedNewGameAssetId
+  preserveSelectedLibraryAsset()
+  els.deleteStoryAssetButton.disabled = !selectedLibraryAssetId
 
   els.libraryAssetList.innerHTML = storyLibraryAssets.map(asset => `
     <label class="asset-choice">
-      <input type="radio" name="library-asset" value="${escapeAttr(asset.id)}" ${asset.id === selectedNewGameAssetId ? 'checked' : ''} />
+      <input type="radio" name="library-asset" value="${escapeAttr(asset.id)}" ${asset.id === selectedLibraryAssetId ? 'checked' : ''} />
       <span>
         <strong>${escapeHtml(assetDefaultStoryName(asset))} ${asset.programConfigFile || asset.programConfig ? '<em class="status-pill ready">已初始化</em>' : '<em class="status-pill pending">待初始化</em>'}</strong>
         <small>${escapeHtml(asset.sourceName || asset.id)} · ${(asset.entries || []).length} 条资料 · ${(asset.characters || []).length} 个人物${asset.programConfig?.generatedAt ? ` · ${escapeHtml(formatTime(asset.programConfig.generatedAt))}` : ''}</small>
@@ -1272,18 +1323,19 @@ function renderStoryLibraryAssets() {
 
   els.libraryAssetList.querySelectorAll('input[name="library-asset"]').forEach(input => {
     input.addEventListener('change', event => {
-      selectedNewGameAssetId = event.target.value
+      selectedLibraryAssetId = event.target.value
       renderStoryLibraryAssets()
     })
   })
 
-  const selected = storyLibraryAssets.find(asset => asset.id === selectedNewGameAssetId)
+  const selected = storyLibraryAssets.find(asset => asset.id === selectedLibraryAssetId)
   renderStorySettingsForm(selected)
   if (els.libraryPreview) renderAssetPreview(els.libraryPreview, selected)
 }
 
 async function deleteSelectedStoryAsset() {
-  const asset = storyLibraryAssets.find(item => item.id === selectedNewGameAssetId)
+  syncSelectedLibraryAssetFromDom()
+  const asset = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
   if (!asset) {
     alert('请先选择一个故事资料。')
     return
@@ -1301,7 +1353,7 @@ async function deleteSelectedStoryAsset() {
       saveState()
     }
     await loadStoryLibrary()
-    selectedNewGameAssetId = storyLibraryAssets[0]?.id || ''
+    selectedLibraryAssetId = storyLibraryAssets[0]?.id || ''
     renderStoryLibraryAssets()
     renderNewGameAssets()
     setStoryLibraryStatus('已删除故事资料，可以重新选择文件导入。', 'done')
@@ -1331,6 +1383,7 @@ function storyProgramConfigForEdit(asset) {
     openingText: String(config.openingText || ''),
     directorStyle: String(config.directorStyle || ''),
     narratorStyle: String(config.narratorStyle || ''),
+    playableCharacters: playableCharactersFromConfig(config),
     statusSchema: normalizeStatusSchema(config.statusSchema),
     statusRoster: normalizeStatusRoster(config.statusRoster),
     statusState: normalizeStatusState(config.statusState, normalizeStatusRoster(config.statusRoster), [], normalizeStatusSchema(config.statusSchema)),
@@ -1340,7 +1393,8 @@ function storyProgramConfigForEdit(asset) {
 }
 
 async function saveSelectedStorySettings() {
-  const asset = storyLibraryAssets.find(item => item.id === selectedNewGameAssetId)
+  syncSelectedLibraryAssetFromDom()
+  const asset = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
   if (!asset) {
     alert('请先选择一个故事资料。')
     return
@@ -1368,9 +1422,20 @@ async function saveSelectedStorySettings() {
     setStoryLibraryStatus(error.message, 'error')
     alert(error.message)
   } finally {
-    const selected = storyLibraryAssets.find(item => item.id === selectedNewGameAssetId)
+    const selected = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
     els.saveStorySettingsButton.disabled = !selected?.programConfig
   }
+}
+
+function preserveSelectedLibraryAsset() {
+  if (!storyLibraryAssets.some(asset => asset.id === selectedLibraryAssetId)) {
+    selectedLibraryAssetId = storyLibraryAssets[0]?.id || ''
+  }
+}
+
+function syncSelectedLibraryAssetFromDom() {
+  const checked = els.libraryAssetList?.querySelector('input[name="library-asset"]:checked')
+  if (checked?.value) selectedLibraryAssetId = checked.value
 }
 
 function parseEditableJson(text) {
@@ -1486,20 +1551,33 @@ function assetDefaultStoryName(asset) {
   return String(asset.sourceName || asset.id || '新故事').replace(/\.[^.]+$/, '')
 }
 
-async function startNewGameFromAsset(asset, requestedName) {
+async function startNewGameFromAsset(asset, requestedName, requestedControlledName) {
   abortActiveStream()
   const init = asset.programConfig
   assertInitializedProgramConfig(init)
   const story = defaultStory(requestedName || assetDefaultStoryName(asset))
-  const player = story.characters.find(character => character.name === '玩家')
   const characterSeeds = characterSeedsFromStatus(init, asset.characters || [])
-  story.characters = [
-    player,
-    ...characterSeeds.filter(character => character?.name !== '玩家').map(character => ({
-      ...character,
+  story.characters = characterSeeds.map(character => ({
+    ...character,
+    id: makeId('character'),
+  })).filter(Boolean)
+  const controlledCharacterName = selectedPlayableCharacter(init, requestedControlledName)
+  if (!story.characters.some(character => character.name === controlledCharacterName)) {
+    const record = init.statusState?.[controlledCharacterName] && typeof init.statusState[controlledCharacterName] === 'object' ? init.statusState[controlledCharacterName] : {}
+    story.characters.unshift({
       id: makeId('character'),
-    })),
-  ].filter(Boolean)
+      name: controlledCharacterName,
+      gender: String(record.性别 || ''),
+      role: String(record.身份 || ''),
+      mood: String(record.情绪 || ''),
+      location: String(record.位置 || ''),
+      health: String(record.外显状态 || ''),
+      trust: String(record.对当前操控人物看法 || record.对玩家看法 || record.对玩家态度 || ''),
+      appearance: String(record.外貌 || ''),
+      personality: String(record.性格 || ''),
+    })
+  }
+  story.controlledCharacterName = controlledCharacterName
   story.openingText = String(init.openingText || extractOpeningText(asset.entries || []))
   const openingSummary = String(story.openingText || '').trim()
   story.worldview = String(init.worldview || '')
@@ -1509,12 +1587,14 @@ async function startNewGameFromAsset(asset, requestedName) {
   story.physicalConstraints = []
   story.directorStyle = String(init.directorStyle || '')
   story.narratorStyle = String(init.narratorStyle || '')
+  story.playerFeedback = ''
   story.plotLines = []
   story.feedbackMemory = []
   story.storyAssetId = String(asset.id || '')
   story.programConfigFile = String(asset.programConfigFile || init.programConfigFile || '')
   story.statusSchema = normalizeStatusSchema(init.statusSchema)
   story.statusRoster = normalizeStatusRoster(init.statusRoster, story.characters)
+  if (controlledCharacterName && !story.statusRoster.includes(controlledCharacterName)) story.statusRoster.unshift(controlledCharacterName)
   story.statusState = normalizeStatusState(init.statusState, story.statusRoster, story.characters, story.statusSchema)
   story.globalContext = ''
   story.messages = []
@@ -1529,12 +1609,14 @@ async function startNewGameFromAsset(asset, requestedName) {
 }
 
 async function initializeSelectedStoryAsset() {
-  const asset = storyLibraryAssets.find(item => item.id === selectedNewGameAssetId)
+  syncSelectedLibraryAssetFromDom()
+  const asset = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
   if (!asset) {
     alert('请先选择一个故事资料。')
     return
   }
-  const provider = currentProvider()
+  const pipelineModels = getPipelineModelsForRequest()
+  const provider = providerForModel(pipelineModels.initializer)
   if (!hasRuntimeApiKey(provider)) {
     alert(`请先配置 ${providerLabel(provider)} API Key。`)
     return
@@ -1543,14 +1625,14 @@ async function initializeSelectedStoryAsset() {
   state.debug = {
     status: 'running',
     pipelineMode: 'initializer',
-    note: 'Initializer 只生成世界观、人物介绍、第一轮交互、初始选项和人物状态 schema。',
+    note: `Initializer 正在初始化：${assetDefaultStoryName(asset)}。`,
     progress: [],
     initializer: null,
   }
   renderDebug()
   els.initializeStoryAssetButton.disabled = true
   els.initializeStoryAssetButton.textContent = '初始化中'
-  setStoryLibraryStatus(`初始化中：正在等待 ${providerLabel(provider)} 返回结构化故事配置。`, 'running')
+  startStoryInitializationTimer(asset)
 
   try {
     const payload = await initializeStoryAssetStream(asset, true)
@@ -1563,8 +1645,10 @@ async function initializeSelectedStoryAsset() {
     if (!confirmed?.programConfig) throw new Error('Initializer 已返回 JSON，但 program-config 未落盘。请重新导入资料后再初始化。')
     renderStoryLibraryAssets()
     renderNewGameAssets()
+    stopStoryInitializationTimer()
     setStoryLibraryStatus(`初始化完成：${assetDefaultStoryName(asset)} 已写入 program-config，可以开始新游戏。`, 'done')
   } catch (error) {
+    stopStoryInitializationTimer()
     state.debug.status = 'error'
     state.debug.error = error.message
     renderDebug()
@@ -1574,6 +1658,33 @@ async function initializeSelectedStoryAsset() {
     els.initializeStoryAssetButton.disabled = false
     els.initializeStoryAssetButton.textContent = '初始化选中故事'
   }
+}
+
+function startStoryInitializationTimer(asset) {
+  stopStoryInitializationTimer()
+  const startedAt = Date.now()
+  const name = assetDefaultStoryName(asset)
+  const render = (message = '正在等待 DeepSeek V4 Pro 返回结构化故事配置') => {
+    setStoryLibraryStatus(`初始化中：${name} · ${message} · 已耗时 ${formatPipelineMs(Date.now() - startedAt)}`, 'running')
+  }
+  render()
+  storyInitializationTimer = {
+    assetId: asset.id,
+    startedAt,
+    render,
+    interval: window.setInterval(() => render(), 1000),
+  }
+}
+
+function updateStoryInitializationStatus(message) {
+  if (storyInitializationTimer?.render) {
+    storyInitializationTimer.render(message || '正在等待 DeepSeek V4 Pro 返回结构化故事配置')
+  }
+}
+
+function stopStoryInitializationTimer() {
+  if (storyInitializationTimer?.interval) window.clearInterval(storyInitializationTimer.interval)
+  storyInitializationTimer = null
 }
 
 async function saveStoryAssetProgramConfig(asset, config) {
@@ -1599,6 +1710,7 @@ async function initializeStoryAssetStream(asset, force = true) {
       entries: asset.entries || [],
       characters: asset.characters || [],
       model: getActiveModel(),
+      pipelineModels: getPipelineModelsForRequest(),
       apiKey: getPipelineApiKey(),
       apiKeys: getPipelineApiKeys(),
       force,
@@ -1610,7 +1722,7 @@ async function initializeStoryAssetStream(asset, force = true) {
   }
   const payload = await readNdjsonStream(response, event => {
     handlePipelineEvent(event)
-    if (event.stage === 'initializer' && event.message) setStoryLibraryStatus(event.message, 'running')
+    if (event.stage === 'initializer' && event.message) updateStoryInitializationStatus(event.message)
   })
   if (!payload) throw new Error('故事初始化失败：没有收到 program-config。')
   assertInitializedProgramConfig(payload)
@@ -1625,10 +1737,26 @@ function assertInitializedProgramConfig(config) {
   if (!Array.isArray(config?.statusSchema) || config.statusSchema.length === 0) missing.push('statusSchema')
   if (!Array.isArray(config?.statusRoster) || config.statusRoster.length === 0) missing.push('statusRoster')
   if (!config?.statusState || typeof config.statusState !== 'object') missing.push('statusState')
+  if (playableCharactersFromConfig(config).length === 0) missing.push('playableCharacters')
   if (!Array.isArray(config?.initialPlayerOptions) || config.initialPlayerOptions.length !== 3) missing.push('initialPlayerOptions')
   if (missing.length) {
     throw new Error(`故事尚未完成初始化，缺少：${missing.join('、')}。不能开始游戏。`)
   }
+}
+
+function playableCharactersFromConfig(config) {
+  const explicit = Array.isArray(config?.playableCharacters)
+    ? config.playableCharacters.map(name => normalizeControlledCharacterName(name)).filter(isValidStatusSubjectName)
+    : []
+  if (explicit.length) return [...new Set(explicit)]
+  return normalizeStatusRoster(config?.statusRoster).slice(0, 8)
+}
+
+function selectedPlayableCharacter(config, requestedName) {
+  const candidates = playableCharactersFromConfig(config)
+  const requested = normalizeControlledCharacterName(requestedName)
+  if (requested && candidates.includes(requested)) return requested
+  return candidates[0] || ''
 }
 
 function characterSeedsFromStatus(config, fallbackCharacters = []) {
@@ -1645,7 +1773,7 @@ function characterSeedsFromStatus(config, fallbackCharacters = []) {
       mood: String(record.情绪 || ''),
       location: String(record.位置 || ''),
       health: String(record.外显状态 || ''),
-      trust: String(record.对玩家态度 || ''),
+      trust: String(record.对当前操控人物看法 || record.对玩家看法 || record.对玩家态度 || ''),
       appearance: String(record.外貌 || ''),
       personality: String(record.性格 || ''),
     }
@@ -1724,7 +1852,47 @@ async function saveCurrentSlot() {
     alert(payload.error || '保存失败。')
     return
   }
-  alert(`已保存：${payload.slot?.name || trimmedName}`)
+  alert(`已保存：${payload.slot?.name || trimmedName}。存档评价后台生成中，可在“读取存档”里查看。`)
+  evaluateSavedSlot(payload.slot?.id)
+}
+
+async function evaluateSavedSlot(id, options = {}) {
+  if (!id) return
+  if (options.refreshBefore && els.saveSlotsDialog?.open) {
+    els.saveSlotsStatus.textContent = '存档评价生成中。'
+    els.saveSlotsStatus.dataset.tone = 'running'
+    markSaveEvaluationRunning(id)
+  }
+  try {
+    const response = await fetch(`/api/save-slots/${encodeURIComponent(id)}/evaluate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        apiKey: getPipelineApiKey(),
+        model: getActiveModel(),
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || '存档评价生成失败')
+    if (els.saveSlotsDialog?.open) {
+      await refreshSaveSlots()
+      const evaluation = String(payload.slot?.saveEvaluation || '').trim()
+      const status = String(payload.slot?.saveEvaluationStatus || '').trim()
+      if (evaluation) {
+        els.saveSlotsStatus.textContent = `存档评价已生成：${evaluation}`
+        els.saveSlotsStatus.dataset.tone = 'done'
+      } else if (status.startsWith('error:')) {
+        els.saveSlotsStatus.textContent = `存档评价失败：${status.replace(/^error:\s*/, '')}`
+        els.saveSlotsStatus.dataset.tone = 'error'
+      }
+    }
+  } catch (error) {
+    if (els.saveSlotsDialog?.open) {
+      await refreshSaveSlots()
+      els.saveSlotsStatus.textContent = `存档评价失败：${error.message}`
+      els.saveSlotsStatus.dataset.tone = 'error'
+    }
+  }
 }
 
 async function openSaveSlotsDialog() {
@@ -1751,18 +1919,48 @@ async function refreshSaveSlots() {
 
 function renderSaveSlots(slots) {
   els.saveSlotsList.innerHTML = slots.length ? slots.map(slot => `
-    <article class="save-slot-item">
+    <article class="save-slot-item" data-save-slot-id="${escapeAttr(slot.id)}">
       <div>
         <strong>${slot.favorite ? '★ ' : ''}${escapeHtml(slot.name)}</strong>
-        <p>${escapeHtml(slot.storyName || '未命名故事')} · 第 ${Number(slot.turnIndex || 0)} 轮 · ${escapeHtml(slot.savedAt || '')}</p>
+        <p>${escapeHtml(slot.storyName || '未命名故事')} · 第 ${Number(slot.turnIndex || 0)} 轮 · ${escapeHtml(slot.savedAt || '')}<span class="save-evaluation-text">${formatSaveEvaluation(slot)}</span></p>
       </div>
       <div class="save-slot-actions">
         <button type="button" class="ghost-button" data-action="load" data-id="${escapeAttr(slot.id)}">读取</button>
         <button type="button" class="ghost-button" data-action="favorite" data-id="${escapeAttr(slot.id)}" data-favorite="${slot.favorite ? 'true' : 'false'}">${slot.favorite ? '取消收藏' : '收藏'}</button>
+        ${renderSaveEvaluationButton(slot)}
         <button type="button" class="ghost-button" data-action="delete" data-id="${escapeAttr(slot.id)}" data-name="${escapeAttr(slot.name)}">删除</button>
       </div>
     </article>
   `).join('') : '<div class="empty-state"><strong>暂无存档</strong><span>点击“保存游戏”创建一个手动存档。</span></div>'
+}
+
+function formatSaveEvaluation(slot) {
+  const evaluation = String(slot.saveEvaluation || '').trim()
+  if (evaluation) return ` · 评价：${escapeHtml(evaluation)}`
+  const status = String(slot.saveEvaluationStatus || '').trim()
+  if (status === 'pending' || status === 'running') return ' · 评价生成中'
+  if (status.startsWith('error:')) return ` · 评价失败：${escapeHtml(status.replace(/^error:\s*/, '').slice(0, 80))}`
+  return ' · 未生成评价'
+}
+
+function renderSaveEvaluationButton(slot) {
+  const evaluation = String(slot.saveEvaluation || '').trim()
+  const status = String(slot.saveEvaluationStatus || '').trim()
+  if (status === 'running' || status === 'pending') return ''
+  const label = evaluation || status.startsWith('error:') ? '重新评价' : '生成评价'
+  return `<button type="button" class="ghost-button" data-action="evaluate" data-id="${escapeAttr(slot.id)}">${label}</button>`
+}
+
+function markSaveEvaluationRunning(id) {
+  const row = els.saveSlotsList.querySelector(`[data-save-slot-id="${cssEscape(id)}"]`)
+  if (!row) return
+  const text = row.querySelector('.save-evaluation-text')
+  if (text) text.textContent = ' · 评价生成中'
+  const button = row.querySelector('button[data-action="evaluate"]')
+  if (button) {
+    button.disabled = true
+    button.textContent = '评价生成中'
+  }
 }
 
 async function loadSaveSlot(id) {
@@ -1816,352 +2014,12 @@ async function deleteSaveSlot(id, name) {
 
 function renderConnection() {
   const model = getActiveModel()
-  const provider = providerForModel(model)
-  const providerConfig = getProviderConfig(provider)
-  const keyState = hasRuntimeApiKey(provider) ? 'key ready' : `no ${providerLabel(provider)} key`
-  const pipelineModels = pipelineModelsForSelection(model)
-  els.connectionStatus.textContent = `${providerConfig.baseUrl} · 当前选择 ${modelLabel(model)} · ${providerLabel(provider)} · ${keyState}`
-  renderPipelineModelGrid(model, pipelineModels)
+  const pipelineModels = getPipelineModelsForRequest(model)
+  const keyState = requiredProvidersForPipeline(pipelineModels)
+    .map(provider => `${providerLabel(provider)} ${hasRuntimeApiKey(provider) ? 'Key 已配置' : 'Key 未配置'}`)
+    .join(' / ')
+  els.connectionStatus.textContent = `模型：${modelLabel(model)} · 流水线：${formatPipelineModelSummary(pipelineModels)} · ${keyState}`
   renderTurnStatus()
-}
-
-function renderPipelineModelGrid(selectedModel, pipelineModels) {
-  if (!els.pipelineModelGrid) return
-  const rows = [
-    ['导演', 'director'],
-    ['叙事', 'narrator'],
-    ['后处理', 'postprocess'],
-    ['初始化', 'initializer'],
-  ]
-  els.pipelineModelGrid.innerHTML = rows.map(([label, key]) => {
-    const model = normalizeModel(pipelineModels?.[key] || selectedModel)
-    const tag = model === selectedModel ? '当前模型' : '旧配置'
-    return `
-      <div class="pipeline-model-card">
-        <span class="pipeline-model-role">${escapeHtml(label)}</span>
-        <strong>${escapeHtml(modelLabel(model))}</strong>
-        <small>${escapeHtml(providerLabel(providerForModel(model)))} · ${escapeHtml(tag)}</small>
-      </div>
-    `
-  }).join('')
-}
-
-function pipelineModelsForSelection(model) {
-  const normalized = normalizeModel(model)
-  return {
-    director: normalized,
-    narrator: normalized,
-    postprocess: normalized,
-    initializer: normalized,
-  }
-}
-
-async function testCurrentProvider() {
-  const model = selectedModelForManagement()
-  const provider = selectedProviderForManagement()
-  const startedAt = Date.now()
-  els.providerTestButton.disabled = true
-  els.providerTestButton.textContent = '测试中'
-  els.connectionStatus.textContent = `${providerLabel(provider)} 连通性测试中 · ${modelLabel(model)}`
-  try {
-    const response = await fetch('/api/provider-test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        apiKey: getLocalApiKey(provider),
-        reasoningEffort: '',
-      }),
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok || !payload.ok) {
-      throw new Error(payload.error || '连接测试失败')
-    }
-    const durationMs = Number(payload.durationMs || Date.now() - startedAt)
-    renderModelTestResult({
-      type: '连通性',
-      provider: providerLabel(provider),
-      model: modelLabel(model),
-      durationMs,
-      ttftMs: '-',
-      tps: '-',
-      outputTokens: '-',
-      reply: '成功',
-      ok: true,
-    })
-    els.connectionStatus.textContent = `${providerLabel(provider)} 可用 · ${modelLabel(model)} · 连通性 ${durationMs}ms`
-  } catch (error) {
-    renderModelTestResult({
-      type: '连通性',
-      provider: providerLabel(provider),
-      model: modelLabel(model),
-      error: error.message,
-      ok: false,
-    })
-    els.connectionStatus.textContent = `${providerLabel(provider)} 不可用 · ${modelLabel(model)} · ${error.message}`
-  } finally {
-    els.providerTestButton.disabled = false
-    els.providerTestButton.textContent = '连通性测试'
-  }
-}
-
-async function testCurrentProviderSpeed() {
-  const model = selectedModelForManagement()
-  const provider = selectedProviderForManagement()
-  els.providerSpeedTestButton.disabled = true
-  els.providerSpeedTestButton.textContent = '测速中'
-  els.connectionStatus.textContent = `${providerLabel(provider)} 速度测试中 · ${modelLabel(model)}`
-  try {
-    const response = await fetch('/api/provider-speed-test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        apiKey: getLocalApiKey(provider),
-        reasoningEffort: '',
-      }),
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok || !payload.ok) {
-      throw new Error(payload.error || '速度测试失败')
-    }
-    const outputTokens = Number(payload.usage?.outputTokens || payload.usage?.estimatedOutputTokens || 0)
-    renderModelTestResult({
-      type: '速度',
-      provider: providerLabel(provider),
-      model: modelLabel(model),
-      durationMs: Number(payload.durationMs || 0),
-      ttftMs: Number(payload.ttftMs || 0),
-      tps: Number(payload.tps || 0),
-      outputTokens,
-      reply: String(payload.reply || '').slice(0, 40),
-      ok: true,
-    })
-    els.connectionStatus.textContent = `${providerLabel(provider)} 速度测试完成 · ${modelLabel(model)} · TTFT ${Number(payload.ttftMs || 0)}ms · TPS ${Number(payload.tps || 0)}`
-  } catch (error) {
-    renderModelTestResult({
-      type: '速度',
-      provider: providerLabel(provider),
-      model: modelLabel(model),
-      error: error.message,
-      ok: false,
-    })
-    els.connectionStatus.textContent = `${providerLabel(provider)} 速度测试失败 · ${modelLabel(model)} · ${error.message}`
-  } finally {
-    els.providerSpeedTestButton.disabled = false
-    els.providerSpeedTestButton.textContent = '速度测试'
-  }
-}
-
-function latestPlayerInputForInterception() {
-  const typed = String(els.playerInput.value || '').trim()
-  if (typed) return typed
-  const recoveryInput = String(state.debug?.postprocessRecoveryBase?.playerInput || '').trim()
-  if (recoveryInput) return recoveryInput
-  const messages = Array.isArray(state.messages) ? state.messages : []
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === 'user') return String(messages[index].content || '').trim()
-  }
-  return '内容拦截测试：使用当前存档状态生成 Narrator prompt。'
-}
-
-function isSyntheticPromptInput(value) {
-  return String(value || '').trim() === '内容拦截测试：使用当前存档状态生成 Narrator prompt。'
-}
-
-function latestPlayerInputForPromptPreview() {
-  const typed = String(els.playerInput.value || '').trim()
-  if (typed && !isSyntheticPromptInput(typed)) return typed
-  const recoveryInput = String(state.debug?.postprocessRecoveryBase?.playerInput || '').trim()
-  if (recoveryInput && !isSyntheticPromptInput(recoveryInput)) return recoveryInput
-  const messages = Array.isArray(state.messages) ? state.messages : []
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === 'user') {
-      const content = String(messages[index].content || '').trim()
-      if (content && !isSyntheticPromptInput(content)) return content
-    }
-  }
-  return ''
-}
-
-function buildInterceptionRequestPayload() {
-  const payload = buildGenerateRequestPayload(latestPlayerInputForInterception())
-  delete payload.apiKey
-  delete payload.apiKeys
-  return {
-    ...payload,
-    director: currentDirectorPlanForRequest(),
-  }
-}
-
-function buildPromptPreviewRequestPayload() {
-  const payload = buildGenerateRequestPayload(latestPlayerInputForPromptPreview())
-  delete payload.apiKey
-  delete payload.apiKeys
-  payload.recentTurns = Array.isArray(payload.recentTurns)
-    ? payload.recentTurns.filter(turn => !isSyntheticPromptInput(turn?.content))
-    : []
-  return {
-    ...payload,
-    director: currentDirectorPlanForRequest(),
-    finalText: latestAssistantTextForPromptPreview(),
-  }
-}
-
-function latestAssistantTextForPromptPreview() {
-  const messages = Array.isArray(state.messages) ? state.messages : []
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === 'assistant') return String(messages[index].content || '')
-  }
-  return ''
-}
-
-async function openPromptPreview() {
-  els.promptPreviewDialog.showModal()
-  els.promptPreviewStatus.textContent = '正在拼接当前全部任务 prompt...'
-  els.promptPreviewList.innerHTML = ''
-  try {
-    const response = await fetch('/api/prompt-preview', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(buildPromptPreviewRequestPayload()),
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok || !payload.ok) throw new Error(payload.error || 'Prompt 预览生成失败')
-    renderPromptPreview(payload)
-  } catch (error) {
-    els.promptPreviewStatus.textContent = error.message
-    els.promptPreviewList.innerHTML = ''
-  }
-}
-
-function renderPromptPreview(payload) {
-  const prompts = Array.isArray(payload.prompts) ? payload.prompts : []
-  els.promptPreviewStatus.textContent = `模型：${modelLabel(payload.model || state.model)}；共 ${prompts.length} 个任务。`
-  els.promptPreviewList.innerHTML = prompts.map(item => `
-    <section class="prompt-preview-item">
-      <div class="prompt-preview-title">
-        <strong>${escapeHtml(item.task || 'Task')}</strong>
-        <span>${escapeHtml(item.model || '')}</span>
-        <small>${Number(item.userLength || 0)} 字</small>
-      </div>
-      <label>
-        <span>prompt</span>
-        <textarea readonly spellcheck="false">${escapeHtml(item.user || '')}</textarea>
-      </label>
-    </section>
-  `).join('')
-}
-
-async function buildCurrentInterceptionPrompt() {
-  els.buildInterceptionPromptButton.disabled = true
-  els.interceptionStatus.textContent = '正在拼接当前 Narrator prompt...'
-  els.interceptionStatus.dataset.tone = ''
-  try {
-    const response = await fetch('/api/content-interception/prompt', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(buildInterceptionRequestPayload()),
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok || !payload.ok) throw new Error(payload.error || '生成测试 prompt 失败')
-    interceptionPromptSnapshot = payload
-    els.interceptionStatus.textContent = `已落盘：${payload.file}；可读版：${payload.textFile}；System ${payload.systemLength} 字，User ${payload.userLength} 字。`
-    els.interceptionResultOutput.value = ''
-  } catch (error) {
-    interceptionPromptSnapshot = null
-    els.interceptionStatus.textContent = error.message
-    els.interceptionStatus.dataset.tone = 'error'
-  } finally {
-    els.buildInterceptionPromptButton.disabled = false
-  }
-}
-
-async function loadInterceptionInstructionFiles() {
-  const files = Array.from(els.interceptionInstructionFiles.files || [])
-  if (files.length === 0) return
-  const parts = []
-  for (const file of files) {
-    const text = await file.text()
-    parts.push(`# ${file.name}\n\n${text}`)
-  }
-  els.interceptionSystemInput.value = parts.join('\n\n---\n\n')
-  els.interceptionStatus.textContent = `已拼接系统指令文件：${files.map(file => file.name).join('、')}`
-  els.interceptionStatus.dataset.tone = ''
-}
-
-async function loadInterceptionPromptFile() {
-  const file = els.interceptionPromptFile.files?.[0]
-  if (!file) return
-  const text = await file.text()
-  interceptionPromptSnapshot = {
-    source: 'file',
-    fileName: file.name,
-    narratorSystem: '',
-    narratorUser: text,
-    systemLength: 0,
-    userLength: text.length,
-  }
-  els.interceptionResultOutput.value = ''
-  els.interceptionStatus.textContent = `已选择 Prompt 文件：${file.name}；${text.length} 字。`
-  els.interceptionStatus.dataset.tone = ''
-}
-
-async function runContentInterceptionTest() {
-  if (!interceptionPromptSnapshot) {
-    await buildCurrentInterceptionPrompt()
-    if (!interceptionPromptSnapshot) return
-  }
-  const model = selectedModelForManagement()
-  const provider = selectedProviderForManagement()
-  els.runInterceptionTestButton.disabled = true
-  els.interceptionStatus.textContent = `${providerLabel(provider)} 内容拦截测试中 · ${modelLabel(model)}`
-  els.interceptionStatus.dataset.tone = ''
-  try {
-    const response = await fetch('/api/content-interception/test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        apiKey: getLocalApiKey(provider),
-        temperature: Number(els.temperatureInput.value || 0.8),
-        reasoningEffort: '',
-        systemInstruction: els.interceptionSystemInput.value,
-        narratorSystem: interceptionPromptSnapshot.narratorSystem,
-        narratorUser: interceptionPromptSnapshot.narratorUser,
-      }),
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(payload.error || '内容拦截测试失败')
-    if (payload.ok) {
-      els.interceptionResultOutput.value = String(payload.raw || '')
-      els.interceptionStatus.textContent = `测试完成：${payload.responseFile}；请求：${payload.requestFile}；${payload.durationMs}ms · TTFT ${payload.ttftMs}ms · TPS ${payload.tps}`
-    } else {
-      els.interceptionResultOutput.value = String(payload.error || '')
-      els.interceptionStatus.textContent = `模型报错/拦截：${payload.errorFile}；请求：${payload.requestFile}`
-      els.interceptionStatus.dataset.tone = 'error'
-    }
-  } catch (error) {
-    els.interceptionResultOutput.value = error.message
-    els.interceptionStatus.textContent = error.message
-    els.interceptionStatus.dataset.tone = 'error'
-  } finally {
-    els.runInterceptionTestButton.disabled = false
-  }
-}
-
-function renderModelTestResult(result) {
-  if (!els.modelTestResults) return
-  const row = result.ok
-    ? `<tr><td>${escapeHtml(result.type || '测试')}</td><td>${escapeHtml(result.provider)}</td><td>${escapeHtml(result.model)}</td><td>${result.durationMs}</td><td>${result.ttftMs}</td><td>${result.tps}</td><td>${result.outputTokens}</td><td>${escapeHtml(result.reply)}</td></tr>`
-    : `<tr><td>${escapeHtml(result.type || '测试')}</td><td>${escapeHtml(result.provider)}</td><td>${escapeHtml(result.model)}</td><td colspan="5">${escapeHtml(result.error)}</td></tr>`
-  const existing = els.modelTestResults.querySelector('tbody')?.innerHTML || ''
-  els.modelTestResults.innerHTML = `
-    <table>
-      <thead><tr><th>类型</th><th>Provider</th><th>Model</th><th>耗时(ms)</th><th>TTFT(ms)</th><th>TPS</th><th>输出</th><th>返回</th></tr></thead>
-      <tbody>${row}${existing}</tbody>
-    </table>
-  `
 }
 
 function renderTurnStatus() {
@@ -2183,8 +2041,7 @@ function getProviderConfig(provider) {
 }
 
 function apiKeyStorageKeyForProvider(provider) {
-  normalizeProvider(provider)
-  return deepSeekApiKeyStorageKey
+  return providerKeyStorageKeys[normalizeProvider(provider)] || deepSeekApiKeyStorageKey
 }
 
 function getLocalApiKey(provider = currentProvider()) {
@@ -2196,9 +2053,7 @@ function getPipelineApiKey() {
 }
 
 function getPipelineApiKeys() {
-  return {
-    deepseek: getLocalApiKey('deepseek'),
-  }
+  return Object.fromEntries(providerOptions.map(provider => [provider, getLocalApiKey(provider)]))
 }
 
 function selectedModelForManagement() {
@@ -2209,14 +2064,24 @@ function selectedProviderForManagement() {
   return providerForModel(selectedModelForManagement())
 }
 
+function selectedApiKeyProviderForManagement() {
+  return normalizeProvider(pendingApiKeyProviderSelection || selectedProviderForManagement())
+}
+
 async function applyModelSelection() {
   const model = selectedModelForManagement()
+  const pipelineModels = normalizePipelineModelOverrides(pendingPipelineModelSelection || appState.pipelineModels)
+  const narrativePerspective = normalizeNarrativePerspective(pendingNarrativePerspectiveSelection || appState.narrativePerspective)
   setPreferredModel(model)
+  appState.pipelineModels = pipelineModels
+  appState.narrativePerspective = narrativePerspective
   els.applyModelSelectionButton.disabled = true
   els.modelManagementStatus.textContent = `正在保存：${modelLabel(model)}`
   els.modelManagementStatus.dataset.tone = ''
   try {
     pendingModelSelection = null
+    pendingPipelineModelSelection = null
+    pendingNarrativePerspectiveSelection = null
     saveState()
     renderModelManagementPage()
     renderConnection()
@@ -2239,38 +2104,56 @@ function hasRuntimeApiKey(provider = currentProvider()) {
 
 function renderModelManagementPage() {
   const model = selectedModelForManagement()
-  const provider = selectedProviderForManagement()
+  const apiKeyProvider = selectedApiKeyProviderForManagement()
   const appliedModel = getActiveModel()
-  els.providerSelect.value = provider
-  els.modelSelect.innerHTML = modelsForProvider(provider).map(item => `<option value="${escapeAttr(item.id)}">${escapeHtml(modelLabel(item.id))}</option>`).join('')
+  const pipelineModels = normalizePipelineModelOverrides(pendingPipelineModelSelection || appState.pipelineModels)
+  const narrativePerspective = normalizeNarrativePerspective(pendingNarrativePerspectiveSelection || appState.narrativePerspective)
+  els.modelSelect.innerHTML = modelCatalog.map(item => `<option value="${escapeAttr(item.id)}">${escapeHtml(modelLabel(item.id))}</option>`).join('')
   els.modelSelect.value = model
-  els.apiKeyHelp.textContent = `当前模型：${modelLabel(model)}。请填写 DeepSeek API key，Key 只保存在当前浏览器本地。`
-  els.apiKeyLabel.textContent = 'DeepSeek Key'
-  els.apiKeyInput.placeholder = 'sk-...'
-  els.apiKeyInput.value = getLocalApiKey(provider)
-  document.querySelectorAll('[data-provider-model]').forEach(button => {
-    button.classList.toggle('selected', providerForModel(button.dataset.providerModel) === provider)
-  })
+  els.narrativePerspectiveSelect.value = narrativePerspective
+  const optionHtml = `<option value="">跟随当前模型</option>${modelCatalog.map(item => `<option value="${escapeAttr(item.id)}">${escapeHtml(modelLabel(item.id))}</option>`).join('')}`
+  for (const stage of pipelineStages) {
+    const select = els.pipelineModelSelects[stage]
+    if (!select) continue
+    select.innerHTML = optionHtml
+    select.value = pipelineModels[stage] || ''
+  }
+  els.apiKeyProviderSelect.innerHTML = providerOptions.map(provider => `<option value="${escapeAttr(provider)}">${escapeHtml(providerLabel(provider))}</option>`).join('')
+  els.apiKeyProviderSelect.value = apiKeyProvider
+  els.apiKeyHelp.textContent = `${providerLabel(apiKeyProvider)} Key 只保存在当前浏览器本地。`
+  els.apiKeyLabel.textContent = `${providerLabel(apiKeyProvider)} Key`
+  els.apiKeyInput.placeholder = apiKeyProvider === 'deepseek' ? 'sk-...' : '粘贴 API Key'
+  els.apiKeyInput.value = getLocalApiKey(apiKeyProvider)
+  const appliedPipelineModels = normalizePipelineModelOverrides(appState.pipelineModels)
   const hasPendingChange = model !== appliedModel
+    || JSON.stringify(pipelineModels) !== JSON.stringify(appliedPipelineModels)
+    || narrativePerspective !== normalizeNarrativePerspective(appState.narrativePerspective)
   els.applyModelSelectionButton.disabled = !hasPendingChange
   const pendingLabel = hasPendingChange ? '待确定' : '已应用'
-  els.modelManagementStatus.textContent = `${providerLabel(provider)} · ${modelLabel(model)} · ${pendingLabel} · ${hasRuntimeApiKey(provider) ? 'Key ready' : 'No key'}`
+  const effectivePipelineModels = getPipelineModelsForRequest(model, pipelineModels)
+  const providers = requiredProvidersForPipeline(effectivePipelineModels)
+  const keyState = providers.map(provider => `${providerLabel(provider)}:${hasRuntimeApiKey(provider) ? 'Key ready' : 'No key'}`).join(' / ')
+  els.modelManagementStatus.textContent = `${modelLabel(model)} · ${narrativePerspectiveLabel(narrativePerspective)} · ${formatPipelineModelSummary(effectivePipelineModels, pipelineModels)} · ${pendingLabel} · ${keyState}`
   els.modelManagementStatus.dataset.tone = ''
 }
 
 function renderStatusPanel() {
+  const controlledCharacterName = normalizeControlledCharacterName(state.controlledCharacterName)
+  const controlledHtml = controlledCharacterName
+    ? `<p class="meta no-indent">当前操控：${escapeHtml(controlledCharacterName)} · ${escapeHtml(narrativePerspectiveLabel(appState.narrativePerspective))}</p>`
+    : '<p class="meta no-indent">当前操控：未选择</p>'
   if (!state.statusRoster?.length) {
-    els.statusPanelView.innerHTML = '<p class="meta no-indent">人物状态为空</p>'
+    els.statusPanelView.innerHTML = `${controlledHtml}<p class="meta no-indent">人物状态为空</p>`
     return
   }
-  els.statusPanelView.innerHTML = `<pre class="status-json">${escapeHtml(JSON.stringify(state.statusState || {}, null, 2))}</pre>`
+  els.statusPanelView.innerHTML = `${controlledHtml}<pre class="status-json">${escapeHtml(JSON.stringify(state.statusState || {}, null, 2))}</pre>`
 }
 
 function renderStoryTracking() {
   const summary = state.chapterSummary || deriveGlobalContextBlock('summary')
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', formatHistoricalSummaryForTracker(summary) || '暂无历史总结。')}
-    ${renderTrackerSection('故事风格', formatStoryStyleForTracker() || '暂无故事风格。')}
+    ${state.playerFeedback ? renderTrackerSection('用户反馈', state.playerFeedback) : ''}
     ${renderFeedbackMemory() ? renderTrackerSection('上轮反重复提醒', renderFeedbackMemory()) : ''}
   `
 }
@@ -2358,12 +2241,116 @@ function renderConversation({ scrollTarget = 'bottom' } = {}) {
   const messagesHtml = state.messages.map((message, index) => `
     <article class="message ${message.role}" data-message-index="${index}" data-message-role="${escapeAttr(message.role)}">
       <small>${message.role === 'user' ? 'PLAYER' : message.role === 'error' ? 'ERROR' : 'AGENT'}</small>
-      ${escapeHtml(message.content)}
+      ${renderMessageContent(message)}
     </article>
   `).join('')
   els.conversation.innerHTML = `${renderOpeningMessage()}${messagesHtml}`
   applyConversationScroll(scrollTarget, previousScrollTop, wasNearBottom)
   renderReadingJumpControls()
+}
+
+function renderMessageContent(message) {
+  const text = String(message?.content || '')
+  if (message?.role !== 'assistant') return `<div class="message-body">${escapeHtml(text)}</div>`
+  return `<div class="message-body">${renderDecoratedText(text, message)}</div>`
+}
+
+function renderDecoratedText(text, message) {
+  const parsed = parseInlineMarkdownDecorations(text)
+  const decorations = [
+    ...parsed.decorations,
+    ...collectTextDecorations(parsed.text, message),
+  ]
+  if (!decorations.length) return renderReadableParagraphs(parsed.text.split('\n').map(escapeHtml))
+  const ranges = resolveTextDecorationRanges(parsed.text, decorations)
+  let html = ''
+  let cursor = 0
+  for (const range of ranges) {
+    if (range.start > cursor) html += escapeHtml(parsed.text.slice(cursor, range.start))
+    html += `<span class="${escapeAttr(range.className)}">${escapeHtml(parsed.text.slice(range.start, range.end))}</span>`
+    cursor = range.end
+  }
+  if (cursor < parsed.text.length) html += escapeHtml(parsed.text.slice(cursor))
+  return renderReadableParagraphs(html.split('\n'))
+}
+
+function parseInlineMarkdownDecorations(text) {
+  const source = String(text || '')
+  const decorations = []
+  let plain = ''
+  for (let index = 0; index < source.length;) {
+    if (source.startsWith('**', index)) {
+      const end = source.indexOf('**', index + 2)
+      if (end > index + 2) {
+        const start = plain.length
+        plain += source.slice(index + 2, end)
+        decorations.push({ start, end: plain.length, className: 'markdown-strong', priority: 4 })
+        index = end + 2
+        continue
+      }
+    }
+    if (source[index] === '*' && source[index + 1] !== '*') {
+      const end = source.indexOf('*', index + 1)
+      if (end > index + 1 && source[end + 1] !== '*') {
+        const start = plain.length
+        plain += source.slice(index + 1, end)
+        decorations.push({ start, end: plain.length, className: 'markdown-emphasis', priority: 4 })
+        index = end + 1
+        continue
+      }
+    }
+    plain += source[index]
+    index += 1
+  }
+  return { text: plain, decorations }
+}
+
+function renderReadableParagraphs(lines) {
+  return lines.map(line => `<p>${line}</p>`).join('')
+}
+
+function collectTextDecorations(text, message) {
+  const decorations = []
+  const quotePattern = /“[^”]{1,120}”/g
+  for (const match of text.matchAll(quotePattern)) {
+    decorations.push({ start: match.index, end: match.index + match[0].length, className: 'dialogue-highlight', priority: 2 })
+  }
+  for (const name of collectCharacterNamesForHighlight()) {
+    addExactTextDecorations(decorations, text, name, 'character-highlight', 1)
+  }
+  return decorations
+}
+
+function collectCharacterNamesForHighlight() {
+  const names = [
+    state.controlledCharacterName,
+    ...(Array.isArray(state.statusRoster) ? state.statusRoster : []),
+    ...Object.keys(state.statusState || {}),
+    ...(Array.isArray(state.characters) ? state.characters.map(character => character?.name) : []),
+  ].map(name => String(name || '').trim()).filter(name => name.length >= 2)
+  return [...new Set(names)].sort((a, b) => b.length - a.length).slice(0, 40)
+}
+
+function addExactTextDecorations(decorations, source, needle, className, priority = 3) {
+  const text = String(needle || '').trim()
+  if (!text) return
+  let index = source.indexOf(text)
+  while (index >= 0) {
+    decorations.push({ start: index, end: index + text.length, className, priority })
+    index = source.indexOf(text, index + text.length)
+  }
+}
+
+function resolveTextDecorationRanges(text, decorations) {
+  return decorations
+    .filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start && item.start >= 0 && item.end <= text.length)
+    .sort((a, b) => b.priority - a.priority || a.start - b.start || b.end - a.end)
+    .reduce((ranges, item) => {
+      if (ranges.some(range => item.start < range.end && item.end > range.start)) return ranges
+      ranges.push(item)
+      return ranges
+    }, [])
+    .sort((a, b) => a.start - b.start)
 }
 
 function renderReadingJumpControls() {
@@ -2418,11 +2405,15 @@ function renderEmptyConversation() {
 
 function renderOpeningMessage() {
   const opening = String(state.openingText || '').trim()
-  if (!opening) return ''
+  const name = String(state.name || '').trim()
+  const worldview = String(state.worldview || '').trim()
+  if (!opening && !name && !worldview) return ''
   return `
     <article class="message assistant opening-message" data-message-index="-1" data-message-role="opening">
       <small>AGENT · 第0轮</small>
-      ${escapeHtml(opening)}
+      ${name ? `<h2 class="opening-title">${escapeHtml(name)}</h2>` : ''}
+      ${worldview ? `<section class="opening-worldview"><strong>世界观</strong><p>${escapeHtml(worldview)}</p></section>` : ''}
+      ${opening ? `<section class="opening-text"><strong>开场白</strong><p>${escapeHtml(opening)}</p></section>` : ''}
     </article>
   `
 }
@@ -2508,12 +2499,16 @@ function enqueuePostprocessJob(job) {
 
 async function submitTurn() {
   const playerInput = els.playerInput.value.trim()
-  const playerFeedback = els.playerFeedback.value.trim()
   if (!playerInput) return
+  syncPlayerFeedbackFromInput()
+  const missingProviders = requiredProvidersForPipeline().filter(provider => !hasRuntimeApiKey(provider))
+  if (missingProviders.length) {
+    alert(`请先配置 ${missingProviders.map(providerLabel).join('、')} API Key。`)
+    return
+  }
 
-  state.playerFeedback = playerFeedback
-  const snapshot = createTurnSnapshot(playerInput, playerFeedback)
-  await generateTurn(playerInput, { snapshot, modeLabel: 'running', playerFeedback })
+  const snapshot = createTurnSnapshot(playerInput)
+  await generateTurn(playerInput, { snapshot, modeLabel: 'running' })
 }
 
 async function regenerateLastTurn() {
@@ -2523,11 +2518,11 @@ async function regenerateLastTurn() {
     return
   }
   if (!snapshot.playerInput) {
-    alert('上一轮玩家输入为空，不能重新生成。')
+    alert('上一轮用户输入为空，不能重新生成。')
     return
   }
   restoreTurnSnapshot(snapshot)
-  await generateTurn(snapshot.playerInput, { snapshot, modeLabel: 'regenerating', playerFeedback: snapshot.playerFeedback || '' })
+  await generateTurn(snapshot.playerInput, { snapshot, modeLabel: 'regenerating' })
 }
 
 async function continueUnfinishedTurn() {
@@ -2544,7 +2539,6 @@ async function continueUnfinishedTurn() {
     await generateTurn(recovery.playerInput, {
       snapshot,
       modeLabel: 'continuing',
-      playerFeedback: recovery.playerFeedback || snapshot.playerFeedback || '',
       requestPayload: {
         ...recovery,
         director: director && typeof director === 'object' ? director : recovery.director,
@@ -2552,13 +2546,14 @@ async function continueUnfinishedTurn() {
         apiKeys: getPipelineApiKeys(),
         reasoningEffort: getRequestReasoningEffort(),
         model: getActiveModel(),
+        pipelineModels: getPipelineModelsForRequest(),
       },
     })
     return
   }
   if (state.debug?.status === 'error' && snapshot?.playerInput) {
     restoreTurnSnapshot(snapshot)
-    await generateTurn(snapshot.playerInput, { snapshot, modeLabel: 'continuing', playerFeedback: snapshot.playerFeedback || '' })
+    await generateTurn(snapshot.playerInput, { snapshot, modeLabel: 'continuing' })
     return
   }
   alert('没有可继续的未完成阶段。')
@@ -2579,7 +2574,6 @@ function rollbackUnfinishedTurn() {
     error: '',
   }
   els.playerInput.value = snapshot.playerInput || ''
-  els.playerFeedback.value = snapshot.playerFeedback || state.playerFeedback || ''
   saveState()
   render()
 }
@@ -2595,6 +2589,7 @@ function getPendingPostprocess() {
 }
 
 function buildPendingPostprocessFromState() {
+  const playerFeedback = syncPlayerFeedbackFromInput()
   const messages = Array.isArray(state.messages) ? state.messages : []
   let assistantIndex = -1
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -2628,17 +2623,17 @@ function buildPendingPostprocessFromState() {
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
+    controlledCharacterName: state.controlledCharacterName,
     playerOptions: state.playerOptions,
     physicalConstraints: state.physicalConstraints,
     globalContext: buildHistoricalSummaryForRequest(),
-    playerFeedback: state.debug?.postprocessRecoveryBase?.playerFeedback || '',
     feedbackText: renderDirectorFeedbackMemory(),
-    narratorFeedbackText: renderFeedbackMemory(state.feedbackMemory, 'narrator'),
+    playerFeedback,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: completedAssistantTurnCount(),
     model: getActiveModel(),
-    temperature: Number(els.temperatureInput.value || 0.8),
+    temperature: defaultTemperature,
     createdAt: new Date().toISOString(),
   }
 }
@@ -2661,6 +2656,7 @@ async function retryPendingPostprocess(pending) {
         apiKey: getPipelineApiKey(),
         apiKeys: getPipelineApiKeys(),
         model: getActiveModel(),
+        pipelineModels: getPipelineModelsForRequest(),
         reasoningEffort: getRequestReasoningEffort(),
       }),
     })
@@ -2679,7 +2675,7 @@ async function retryPendingPostprocess(pending) {
     state.debug.postprocessRecoveryBase = null
     state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
     if (payload.postprocessSummary) state.debug.postprocessSummary = payload.postprocessSummary
-    if (payload.postprocessFeedback) state.debug.postprocessFeedback = payload.postprocessFeedback
+    if (payload.planFeedback) state.debug.planFeedback = payload.planFeedback
     if (pending.id) state.postprocessQueue = (state.postprocessQueue || []).filter(item => item.id !== pending.id)
     setPreferredModel(payload.model || getActiveModel())
     applyPostprocess(payload)
@@ -2718,7 +2714,9 @@ async function processPostprocessQueue() {
     ...(state.debug || {}),
     postprocessPending: false,
     pendingPostprocess: null,
-    note: 'Postprocess 队列正在后台更新总结、状态和反重复提醒；不阻塞下一轮输入。',
+    note: job.summaryOnly
+      ? 'PostprocessSummary 正在后台更新总结和状态；不阻塞下一轮输入。'
+      : 'PostprocessSummary 正在后台更新总结和状态；不阻塞下一轮输入。',
   }
   saveState()
   renderPostprocessSideEffects()
@@ -2732,6 +2730,7 @@ async function processPostprocessQueue() {
         apiKey: getPipelineApiKey(),
         apiKeys: getPipelineApiKeys(),
         model: getActiveModel(),
+        pipelineModels: getPipelineModelsForRequest(),
         reasoningEffort: getRequestReasoningEffort(),
       }),
     })
@@ -2744,7 +2743,7 @@ async function processPostprocessQueue() {
     state.postprocessQueue = state.postprocessQueue.filter(item => item.id !== job.id)
     state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
     if (payload.postprocessSummary) state.debug.postprocessSummary = payload.postprocessSummary
-    if (payload.postprocessFeedback) state.debug.postprocessFeedback = payload.postprocessFeedback
+    if (payload.planFeedback) state.debug.planFeedback = payload.planFeedback
     state.debug.postprocessPending = false
     state.debug.pendingPostprocess = null
     state.debug.note = 'Postprocess 队列已完成一个任务。'
@@ -2767,24 +2766,21 @@ async function processPostprocessQueue() {
   }
 }
 
-async function generateTurn(playerInput, { snapshot, modeLabel = 'running', playerFeedback = '', requestPayload = null } = {}) {
+async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requestPayload = null } = {}) {
   const streamController = beginActiveStream()
-  const currentTurnPlayerFeedback = String(playerFeedback || snapshot?.playerFeedback || '').trim()
-  state.playerFeedback = currentTurnPlayerFeedback
   setBusy(true)
   const startedAt = Date.now()
   if (snapshot) state.lastTurnSnapshot = snapshot
   state.messages.push({ role: 'user', content: playerInput })
-  state.playerOptions = []
   state.debug = {
     status: modeLabel,
     startedAt,
-    pipelineMode: 'narrator+postprocess-queued',
+    pipelineMode: 'director+planfeedback+narrator+summary-queued',
     note: modeLabel === 'regenerating'
       ? '正在回滚并重新生成本次对话；会使用当前模型和配置完整重跑。'
       : modeLabel === 'continuing'
         ? '继续未完成：按当前状态重新执行未完成流程。'
-        : 'Narrator 正文会直接显示；Postprocess 进入独立队列，不阻塞下一轮输入。',
+        : 'PlanFeedback 会先审查导演计划；Narrator 接收整改要求后输出正文和候选项；PostprocessSummary 后台更新总结和状态。',
     visibleTextShown: false,
     postprocessPending: false,
     progress: [],
@@ -2821,7 +2817,8 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     } else {
       state.messages.push({ role: 'assistant', content: payload.finalText || '' })
     }
-    state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : []
+    state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
+    state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
     state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
     state.debug.status = 'done'
     state.debug.postprocessPending = false
@@ -2831,6 +2828,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     state.debug.director = payload.director
     applyDirectorPlanState(payload.director)
     state.debug.narrator = payload.narrator
+    if (payload.planFeedback) state.debug.planFeedback = payload.planFeedback
     state.debug.postprocess = null
     state.directorHistory = appendDirectorHistory(state.directorHistory, payload.director)
     setPreferredModel(payload.model || requestModel)
@@ -2844,8 +2842,10 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
     state.debug.status = 'error'
     state.debug.error = error.message
     markRunningPipelineStageError(error.message)
-    if (state.debug.visibleTextShown && state.debug.postprocessPending) {
-      state.debug.note = '正文已显示，但 Postprocess 未完成。点击“继续未完成”补上状态、总结和反重复提醒。'
+    if (state.debug.visibleTextShown) {
+      state.debug.postprocessPending = true
+      state.debug.pendingPostprocess = buildPendingPostprocessFromState()
+      state.debug.note = '正文已显示，但前台反馈或后台总结未完成。点击“继续未完成”补上候选项、总结和状态。'
     } else {
       state.messages.push({ role: 'error', content: error.message })
     }
@@ -2858,15 +2858,15 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', play
 }
 
 function buildGenerateRequestPayload(playerInput) {
+  const playerFeedback = syncPlayerFeedbackFromInput()
   return {
     storyId: state.id,
     storyName: state.name,
     playerInput,
-    playerFeedback: state.playerFeedback,
     storyContext: buildStoryContextForRequest(),
     globalContext: buildHistoricalSummaryForRequest(),
     feedbackText: renderDirectorFeedbackMemory(),
-    narratorFeedbackText: renderFeedbackMemory(state.feedbackMemory, 'narrator'),
+    playerFeedback,
     physicalConstraints: state.physicalConstraints,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
@@ -2877,10 +2877,12 @@ function buildGenerateRequestPayload(playerInput) {
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
+    controlledCharacterName: state.controlledCharacterName,
     model: getActiveModel(),
+    pipelineModels: getPipelineModelsForRequest(),
     apiKey: getPipelineApiKey(),
     apiKeys: getPipelineApiKeys(),
-    temperature: Number(els.temperatureInput.value || 0.8),
+    temperature: defaultTemperature,
     reasoningEffort: getRequestReasoningEffort(),
   }
 }
@@ -2906,10 +2908,9 @@ function buildOpeningRecentTurn() {
   }
 }
 
-function createTurnSnapshot(playerInput, playerFeedback = '') {
+function createTurnSnapshot(playerInput) {
   return {
     playerInput,
-    playerFeedback,
     storyState: pickRegenerableStoryState(state),
     createdAt: new Date().toISOString(),
   }
@@ -2922,7 +2923,6 @@ function normalizeTurnSnapshot(value) {
   if (!playerInput || !storyState) return null
   return {
     playerInput,
-    playerFeedback: String(value.playerFeedback || ''),
     storyState: deepClone(storyState),
     createdAt: String(value.createdAt || ''),
   }
@@ -2950,7 +2950,6 @@ function inferRegenerationSnapshotFromMessages() {
   storyState.debug = {}
   return {
     playerInput,
-    playerFeedback: state.debug?.postprocessRecoveryBase?.playerFeedback || '',
     storyState,
     createdAt: '',
   }
@@ -2979,11 +2978,12 @@ function pickRegenerableStoryState(story) {
     'physicalConstraints',
     'directorStyle',
     'narratorStyle',
+    'playerFeedback',
+    'playerFeedbackUpdatedAt',
     'plotLines',
     'feedbackMemory',
-    'optionalDisturbance',
-    'playerFeedback',
     'directorHistory',
+    'controlledCharacterName',
     'storyAssetId',
     'programConfigFile',
     'statusSchema',
@@ -3043,12 +3043,13 @@ function handlePipelineEvent(event) {
 
   const stage = event.stage
   if (!stage) return
+  const stateStage = stage
   const eventMs = Date.parse(event.at || '') || Date.now()
   if (!state.debug.firstEventAtMs) state.debug.firstEventAtMs = eventMs
   const progress = Array.isArray(state.debug.progress) ? state.debug.progress : []
-  let row = progress.find(item => item.stage === stage)
+  let row = progress.find(item => item.stage === stateStage)
   if (!row) {
-    row = { stage, label: event.label || stage, status: 'pending' }
+    row = { stage: stateStage, label: event.label || stateStage, status: 'pending' }
     progress.push(row)
   }
   row.label = event.label || row.label
@@ -3069,13 +3070,13 @@ function handlePipelineEvent(event) {
   if (event.type === 'stage_skip') {
     row.status = 'skipped'
     row.endedAtMs = eventMs
-    if (event.json) state.debug[stage] = event.json
+    if (event.json) state.debug[stateStage] = event.json
     if (stage === 'director') applyDirectorPlanState(event.json)
   }
   if (event.type === 'stage_result') {
     row.status = 'done'
     row.endedAtMs = eventMs
-    state.debug[stage] = event.json
+    state.debug[stateStage] = event.json
     if (stage === 'director') applyDirectorPlanState(event.json)
   }
 
@@ -3110,15 +3111,17 @@ function applyVisibleTextEvent(event) {
     state.messages.push({ role: 'assistant', content: finalText })
   }
 
+  if (Array.isArray(payload.playerOptions)) state.playerOptions = payload.playerOptions
   state.debug.visibleTextShown = true
   state.debug.postprocessPending = false
   state.debug.pendingPostprocess = null
   state.debug.status = '生成中'
   state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
-  state.debug.note = '正文已显示；Postprocess 会进入独立队列，不阻塞下一轮输入。'
+  state.debug.note = '正文和候选项已显示；PostprocessSummary 稍后后台更新。'
 
   renderConversation({ scrollTarget: 'latest-assistant-start' })
   renderOptions()
+  saveState()
   renderReadingJumpControls()
   renderDebug()
   renderRetryStageButton()
@@ -3141,9 +3144,8 @@ function applyPostprocess(payload) {
     state.currentSituation = turnSummary
     state.outline = turnSummary
   }
-  state.optionalDisturbance = String(payload.可选扰动源 || payload.optionalDisturbance || '').trim()
   state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
-  state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
+  if (!payload.skipFeedbackMemoryUpdate) state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
   const statusPatch = payload.postprocess && typeof payload.postprocess === 'object' ? payload.postprocess : payload
   if (Array.isArray(payload.statusSchema)) {
     state.statusSchema = normalizeStatusSchema(payload.statusSchema)
@@ -3229,6 +3231,7 @@ async function compactHistorySummary(lines) {
       apiKey: getPipelineApiKey(),
       apiKeys: getPipelineApiKeys(),
       model: getActiveModel(),
+      pipelineModels: getPipelineModelsForRequest(),
       reasoningEffort: getRequestReasoningEffort(),
     }),
   })
@@ -3288,9 +3291,15 @@ async function importStoryFile(file) {
     imported = card
       ? convertCharacterCardFile(file.name, card)
       : { entries: [plainStoryEntry(file.name.replace(/\.[^.]+$/, ''), '未能从 PNG 人物卡中读取 chara 元数据。')], characters: [] }
-  } else {
+  } else if (/\.epub$/i.test(file.name)) {
+    originalText = await extractEpubText(file)
+    imported = parseStorybookFile(file.name, originalText, { type: 'novel-excerpt' })
+  } else if (/\.json$/i.test(file.name)) {
     originalText = await file.text()
     imported = parseStorybookFile(file.name, originalText)
+  } else {
+    originalText = limitNovelText(await file.text())
+    imported = parseStorybookFile(file.name, originalText, { type: 'novel-excerpt' })
   }
 
   await persistStoryAsset(file.name, imported, { originalBase64, originalText })
@@ -3328,7 +3337,7 @@ function arrayBufferToBase64(arrayBuffer) {
   return btoa(binary)
 }
 
-function parseStorybookFile(filename, text) {
+function parseStorybookFile(filename, text, options = {}) {
   const cleanName = filename.replace(/\.[^.]+$/, '')
   if (/\.json$/i.test(filename)) {
     try {
@@ -3352,14 +3361,118 @@ function parseStorybookFile(filename, text) {
       ? sections.map((section, index) => ({
       id: makeId(`story.${slug(cleanName)}.${index + 1}`),
       title: section.title,
-      type: 'markdown',
+      type: options.type || 'markdown',
       tags: [cleanName],
       content: section.content,
       enabled: true,
     }))
-      : [plainStoryEntry(cleanName, text)],
+      : [plainStoryEntry(cleanName, text, options.type || 'text')],
     characters: [],
   }
+}
+
+function limitNovelText(text) {
+  return String(text || '').replace(/\u0000/g, '').slice(0, novelImportCharacterLimit)
+}
+
+async function extractEpubText(file) {
+  const arrayBuffer = await file.arrayBuffer()
+  const entries = readZipEntries(arrayBuffer)
+  const readableEntries = entries
+    .filter(entry => /\.(xhtml|html|htm|xml|txt)$/i.test(entry.name))
+    .filter(entry => !/(^|\/)(META-INF|mimetype|toc\.ncx|container\.xml)(\/|$)/i.test(entry.name))
+    .sort((a, b) => epubEntrySortKey(a.name).localeCompare(epubEntrySortKey(b.name), undefined, { numeric: true }))
+  const chunks = []
+  for (const entry of readableEntries) {
+    if (chunks.join('\n\n').length >= novelImportCharacterLimit) break
+    const bytes = await readZipEntryBytes(entry)
+    const raw = new TextDecoder().decode(bytes)
+    const text = /\.(xhtml|html|htm|xml)$/i.test(entry.name) ? htmlToText(raw) : raw
+    const clean = text.replace(/\s+/g, ' ').trim()
+    if (clean) chunks.push(clean)
+  }
+  const excerpt = limitNovelText(chunks.join('\n\n'))
+  if (!excerpt) throw new Error('EPUB 未提取到可用正文。')
+  return excerpt
+}
+
+function readZipEntries(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer)
+  const view = new DataView(arrayBuffer)
+  let endOffset = -1
+  for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 65558); offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      endOffset = offset
+      break
+    }
+  }
+  if (endOffset < 0) throw new Error('EPUB 文件结构无效。')
+  const centralDirectorySize = view.getUint32(endOffset + 12, true)
+  const centralDirectoryOffset = view.getUint32(endOffset + 16, true)
+  const entries = []
+  let offset = centralDirectoryOffset
+  const end = centralDirectoryOffset + centralDirectorySize
+  while (offset < end && view.getUint32(offset, true) === 0x02014b50) {
+    const method = view.getUint16(offset + 10, true)
+    const compressedSize = view.getUint32(offset + 20, true)
+    const uncompressedSize = view.getUint32(offset + 24, true)
+    const nameLength = view.getUint16(offset + 28, true)
+    const extraLength = view.getUint16(offset + 30, true)
+    const commentLength = view.getUint16(offset + 32, true)
+    const localHeaderOffset = view.getUint32(offset + 42, true)
+    const name = new TextDecoder().decode(bytes.slice(offset + 46, offset + 46 + nameLength))
+    entries.push({ name, method, compressedSize, uncompressedSize, localHeaderOffset, bytes })
+    offset += 46 + nameLength + extraLength + commentLength
+  }
+  return entries
+}
+
+async function readZipEntryBytes(entry) {
+  const view = new DataView(entry.bytes.buffer)
+  const offset = entry.localHeaderOffset
+  if (view.getUint32(offset, true) !== 0x04034b50) throw new Error(`EPUB 条目无效：${entry.name}`)
+  const nameLength = view.getUint16(offset + 26, true)
+  const extraLength = view.getUint16(offset + 28, true)
+  const dataStart = offset + 30 + nameLength + extraLength
+  const compressed = entry.bytes.slice(dataStart, dataStart + entry.compressedSize)
+  if (entry.method === 0) return compressed
+  if (entry.method === 8) return inflateRawBytes(compressed, entry.uncompressedSize)
+  throw new Error(`EPUB 压缩格式不支持：${entry.name}`)
+}
+
+async function inflateRawBytes(bytes, expectedSize) {
+  if (!window.DecompressionStream) throw new Error('当前浏览器不支持解压 EPUB。')
+  for (const format of ['deflate-raw', 'deflate']) {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format))
+      const arrayBuffer = await new Response(stream).arrayBuffer()
+      const output = new Uint8Array(arrayBuffer)
+      if (!expectedSize || output.length === expectedSize) return output
+    } catch {
+      // try next format
+    }
+  }
+  throw new Error('EPUB 解压失败。')
+}
+
+function epubEntrySortKey(name) {
+  const normalized = name.toLowerCase()
+  const score = /chapter|chap|第.+章|正文|text|content/.test(normalized) ? '0' : '1'
+  return `${score}/${normalized}`
+}
+
+function htmlToText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<\/(p|div|h[1-6]|section|article|li|br)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
 }
 
 async function parsePngCharacterCard(arrayBuffer) {
@@ -3629,11 +3742,11 @@ function splitMarkdownSections(text) {
   return sections
 }
 
-function plainStoryEntry(title, text) {
+function plainStoryEntry(title, text, type = 'text') {
   return {
     id: makeId(`story.${slug(title)}`),
     title,
-    type: 'text',
+    type,
     tags: [title],
     content: text,
     enabled: true,
@@ -3682,4 +3795,9 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#096;')
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) return window.CSS.escape(String(value))
+  return String(value).replace(/["\\]/g, '\\$&')
 }
