@@ -29,6 +29,16 @@ const pipelineStageLabels = {
   narrator: '叙事者',
   postprocess: '反馈/总结',
 }
+const fallbackGenerationPipeline = {
+  mode: 'director+feedback+narrator+summary-queued+recall-worker',
+  note: 'Director 生成计划；Feedback 审查导演计划；Narrator 输出正文和候选项；Summary 后台更新总结和状态；RecallWorker 旁路预取旧知识问答。',
+  stages: [
+    { stage: 'director', label: 'Director' },
+    { stage: 'planFeedback', label: 'Feedback' },
+    { stage: 'narrator', label: 'Narrator' },
+    { stage: 'postprocessSummary', label: 'Summary' },
+  ],
+}
 const narrativePerspectiveOptions = new Set(['first_person', 'third_person'])
 const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势']
 const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势', '位置']
@@ -42,12 +52,16 @@ let generationBusy = false
 let persistController = null
 let activeStreamController = null
 let postprocessQueueRunning = false
-let historyCompactionRunning = false
 let pendingModelSelection = null
 let pendingPipelineModelSelection = null
 let pendingApiKeyProviderSelection = 'deepseek'
 let pendingNarrativePerspectiveSelection = null
 let storyInitializationTimer = null
+let pipelineDebugTimer = null
+let recallWorkerPollTimer = null
+let recallWorkerPollDeadlineMs = 0
+let lastRecallWorkerEventId = ''
+const openingSummaryBackfillInFlight = new Set()
 let config = {
   model: defaultModel,
   baseUrl: 'https://api.deepseek.com',
@@ -55,6 +69,9 @@ let config = {
   providers: {
     deepseek: { baseUrl: 'https://api.deepseek.com', hasApiKey: false },
     infron: { baseUrl: 'https://llm.onerouter.pro/v1', hasApiKey: false },
+  },
+  pipelines: {
+    generation: fallbackGenerationPipeline,
   },
 }
 
@@ -67,7 +84,7 @@ const els = {
     initializer: document.querySelector('#pipelineInitializerModel'),
     director: document.querySelector('#pipelineDirectorModel'),
     narrator: document.querySelector('#pipelineNarratorModel'),
-    postprocess: document.querySelector('#pipelinePostprocessModel'),
+    postprocess: document.querySelector('#pipelineSummaryModel'),
   },
   applyModelSelectionButton: document.querySelector('#applyModelSelectionButton'),
   apiKeyProviderSelect: document.querySelector('#apiKeyProviderSelect'),
@@ -103,6 +120,7 @@ const els = {
   cancelNewGameButton: document.querySelector('#cancelNewGameButton'),
   importStoryAssetButton: document.querySelector('#importStoryAssetButton'),
   initializeStoryAssetButton: document.querySelector('#initializeStoryAssetButton'),
+  renameStoryAssetButton: document.querySelector('#renameStoryAssetButton'),
   deleteStoryAssetButton: document.querySelector('#deleteStoryAssetButton'),
   refreshStoryLibraryButton: document.querySelector('#refreshStoryLibraryButton'),
   storyLibraryFileInput: document.querySelector('#storyLibraryFileInput'),
@@ -110,6 +128,8 @@ const els = {
   libraryAssetList: document.querySelector('#libraryAssetList'),
   libraryPreview: document.querySelector('#libraryPreview'),
   storySettingsForm: document.querySelector('#storySettingsForm'),
+  reviseStorySettingsButton: document.querySelector('#reviseStorySettingsButton'),
+  applyStorySettingsToCurrentButton: document.querySelector('#applyStorySettingsToCurrentButton'),
   saveStorySettingsButton: document.querySelector('#saveStorySettingsButton'),
   storyProgramConfigInput: document.querySelector('#storyProgramConfigInput'),
   closeStoryLibraryButton: document.querySelector('#closeStoryLibraryButton'),
@@ -141,7 +161,8 @@ async function init() {
   await loadServerState()
   applyLegacyMigrations()
   render()
-  processPostprocessQueue()
+  processSummaryQueue()
+  ensureRecallWorkerForLatestTurn()
 }
 
 function defaultStory(name = '未选择故事') {
@@ -159,6 +180,8 @@ function defaultStory(name = '未选择故事') {
     chapterSummary: '',
     outline: '',
     physicalConstraints: [],
+    keyInfo: [],
+    longTermState: {},
     directorStyle: '',
     narratorStyle: '',
     playerFeedback: '',
@@ -172,6 +195,7 @@ function defaultStory(name = '未选择故事') {
     statusSchema: fallbackStatusSchema,
     statusRoster: [],
     statusState: {},
+    itemState: {},
     globalContext: '',
     playerOptions: [],
     postprocessQueue: [],
@@ -278,11 +302,8 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
   const messages = stripOpeningMessages(Array.isArray(raw?.messages) ? raw.messages : [], openingText)
   const existingChapterSummary = cleanHistoricalGlobalContext(String(raw?.chapterSummary || raw?.currentSituation || ''))
   const existingGlobalContext = cleanHistoricalGlobalContext(String(raw?.globalContext || ''))
-  const openingHistory = openingTurnHistory(openingText)
-  const openingHistoryLine = openingHistory ? `- ${openingHistory}` : ''
-  const hasNoInteraction = messages.length === 0
-  const chapterSummary = hasNoInteraction && isOpeningHistorySummary(existingChapterSummary, openingHistory) ? '' : existingChapterSummary
-  const globalContext = hasNoInteraction && isOpeningHistorySummary(existingGlobalContext, openingHistoryLine) ? '' : existingGlobalContext
+  const chapterSummary = existingChapterSummary
+  const globalContext = existingGlobalContext
   const retiredKeys = [
     'current' + 'Physical' + 'Environment',
     'current' + 'Physical' + 'Environment' + 'Forbidden',
@@ -311,6 +332,8 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     chapterSummary,
     outline: String(raw?.outline || openingText || ''),
     physicalConstraints: normalizePhysicalConstraints(raw?.physicalConstraints),
+    keyInfo: normalizeKeyInfo(raw?.keyInfo),
+    longTermState: normalizeLongTermState(raw?.longTermState, raw),
     directorStyle: String(raw?.directorStyle || ''),
     narratorStyle: String(raw?.narratorStyle || ''),
     playerFeedback: String(raw?.playerFeedback || ''),
@@ -324,9 +347,10 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     statusSchema: normalizeStatusSchema(raw?.statusSchema),
     statusRoster: normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []),
     statusState: normalizeStatusState(raw?.statusState, normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []), Array.isArray(raw?.characters) ? raw.characters : [], normalizeStatusSchema(raw?.statusSchema)),
+    itemState: normalizeItemState(raw?.itemState),
     globalContext,
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
-    postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.map(normalizePostprocessJob).filter(Boolean) : [],
+    postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.map(normalizeSummaryJob).filter(Boolean) : [],
     model: normalizePersistedModel(raw?.model, modelVersion) || base.model,
     lastTurnSnapshot: normalizeTurnSnapshot(raw?.lastTurnSnapshot),
     debug,
@@ -398,6 +422,46 @@ function openingTurnHistory(openingText) {
   return /^第0轮[:：]/.test(text) ? text : `第0轮：${text}`
 }
 
+function hasOpeningSummaryLine(summary) {
+  const current = String(summary || '').trim()
+  return /(^|\n)-?\s*第0轮[:：]/.test(current)
+}
+
+function prependOpeningSummary(summary, openingSummary) {
+  const current = String(summary || '').trim()
+  const text = String(openingSummary || '').trim()
+  if (!text || hasOpeningSummaryLine(current)) return current
+  return [`- 第0轮：${text}`, current].filter(Boolean).join('\n')
+}
+
+function needsOpeningSummaryBackfill(story = state) {
+  if (!story) return false
+  if (!String(story.openingText || '').trim()) return false
+  return !hasOpeningSummaryLine(story.chapterSummary || story.globalContext)
+}
+
+async function ensureOpeningSummaryBackfill() {
+  const target = state
+  if (!needsOpeningSummaryBackfill(target)) return
+  if (openingSummaryBackfillInFlight.has(target.id)) return
+  openingSummaryBackfillInFlight.add(target.id)
+  renderStoryTracking()
+  try {
+    const openingSummary = await summarizeOpeningTextForHistory(target.openingText, target)
+    if (!openingSummary || state.id !== target.id) return
+    state.chapterSummary = prependOpeningSummary(state.chapterSummary, openingSummary)
+    state.globalContext = prependOpeningSummary(state.globalContext, openingSummary)
+    if (!String(state.currentSituation || '').trim() || state.currentSituation === state.openingText) {
+      state.currentSituation = openingSummary
+    }
+    saveState()
+    renderStoryTracking()
+  } finally {
+    openingSummaryBackfillInFlight.delete(target.id)
+    if (state.id === target.id) renderStoryTracking()
+  }
+}
+
 function isOpeningHistorySummary(value, openingHistory) {
   const text = String(value || '').replace(/^-\s*/, '').trim()
   const opening = String(openingHistory || '').replace(/^-\s*/, '').trim()
@@ -448,15 +512,52 @@ function normalizePhysicalConstraints(value) {
     .slice(0, 5)
 }
 
-function parseStatusSchemaFields(value) {
-  const items = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n|[,，、]/) : []
-  return items.map(item => normalizeStatusFieldName(String(item || '').replace(/^[-*]\s*/, '').split(/[：:]/)[0])).filter(Boolean)
+function normalizeKeyInfo(value) {
+  const items = Array.isArray(value) ? value : typeof value === 'string' && value.trim() ? value.split(/\r?\n/) : []
+  return [...new Set(items
+    .map(item => String(item || '').replace(/^[-*]\s*/, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .map(item => item.length > 120 ? item.slice(0, 120).trim() : item)
+  )].slice(0, 8)
 }
 
-function normalizeStatusFieldName(value) {
-  const text = String(value || '').trim()
-  if (text === '对玩家看法' || text === '对玩家态度') return '对当前操控人物看法'
-  return text
+function normalizeLongTermState(value, fallback = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return {
+    characterStatus: normalizeStatusState(source.characterStatus || source.人物状态 || fallback.statusState, normalizeStatusRoster(fallback.statusRoster, Array.isArray(fallback.characters) ? fallback.characters : []), Array.isArray(fallback.characters) ? fallback.characters : [], normalizeStatusSchema(fallback.statusSchema)),
+    keyItems: normalizeItemState(source.keyItems || source.itemState || source.关键道具 || fallback.itemState),
+    keyInfo: normalizeKeyInfo(source.keyInfo || source.关键信息 || fallback.keyInfo),
+    physicalConstraints: normalizePhysicalConstraints(source.physicalConstraints || source.物理约束 || fallback.physicalConstraints),
+  }
+}
+
+function buildLongTermStateFromState() {
+  return normalizeLongTermState(state.longTermState, {
+    statusSchema: state.statusSchema,
+    statusRoster: state.statusRoster,
+    statusState: state.statusState,
+    itemState: state.itemState,
+    keyInfo: state.keyInfo,
+    physicalConstraints: state.physicalConstraints,
+    characters: state.characters,
+  })
+}
+
+function buildLongTermStateFromStory(story) {
+  return normalizeLongTermState(story?.longTermState, {
+    statusSchema: story?.statusSchema,
+    statusRoster: story?.statusRoster,
+    statusState: story?.statusState,
+    itemState: story?.itemState,
+    keyInfo: story?.keyInfo,
+    physicalConstraints: story?.physicalConstraints,
+    characters: story?.characters,
+  })
+}
+
+function parseStatusSchemaFields(value) {
+  const items = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/\r?\n|[,，、]/) : []
+  return items.map(item => String(item || '').replace(/^[-*]\s*/, '').split(/[：:]/)[0].trim()).filter(Boolean)
 }
 
 function normalizeStatusSchema(value, fallback = fallbackStatusSchema) {
@@ -488,52 +589,42 @@ function isValidStatusSubjectName(name) {
 
 function normalizeStatusState(value, roster, characters = [], schema = fallbackStatusSchema) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
-  const byName = new Map(characters.map(character => [String(character.name || '').trim(), character]))
   const output = {}
-  for (const name of roster) {
-    const record = source[name] && typeof source[name] === 'object' ? source[name] : {}
-    const character = byName.get(name)
+  for (const name of Array.isArray(roster) ? roster : []) {
+    const record = source[name] && typeof source[name] === 'object' && !Array.isArray(source[name]) ? source[name] : {}
     output[name] = {}
     for (const field of normalizeStatusSchema(schema)) {
-      output[name][field] = statusFieldValue(field, record, character, name)
+      output[name][field] = String(record[field] ?? '')
     }
   }
   return output
 }
 
-function statusFieldValue(field, record, character, name) {
-  if (record[field] !== undefined && record[field] !== null) return String(record[field])
-  const fallbackByField = {
-    性别: record.gender || character?.gender,
-    身份: record.role || character?.role || '',
-    位置: record.location || character?.location,
-    外显状态: record.health || character?.health,
-    外貌: record.appearance || character?.appearance,
-    性格: record.personality || character?.personality,
-    情绪: record.mood || character?.mood,
-    对当前操控人物看法: record.对当前操控人物看法 || record.对玩家看法 || record.对玩家态度 || record.trust || character?.trust || '',
+function normalizeItemState(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const output = {}
+  const fieldAliases = {
+    holder: '持有人',
+    owner: '持有人',
+    carrier: '持有人',
+    location: '位置',
+    place: '位置',
   }
-  return String(fallbackByField[field] || '')
-}
-
-function mergeStatusSchema(current, patch) {
-  return normalizeStatusSchema([...parseStatusSchemaFields(current), ...parseStatusSchemaFields(patch)])
-}
-
-function mergeStatusRoster(current, patch, characters = [], statePatch = {}) {
-  const patchNames = statePatch && typeof statePatch === 'object' && !Array.isArray(statePatch) ? Object.keys(statePatch).filter(isValidStatusSubjectName) : []
-  return normalizeStatusRoster([...(Array.isArray(current) ? current : []), ...(Array.isArray(patch) ? patch : []), ...patchNames], characters)
-}
-
-function mergeStatusState(current, patch, roster, characters = [], schema = fallbackStatusSchema) {
-  const base = normalizeStatusState(current, roster, characters, schema)
-  const delta = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {}
-  for (const [name, record] of Object.entries(delta)) {
-    if (!isValidStatusSubjectName(name)) continue
-    if (!roster.includes(name) || !record || typeof record !== 'object') continue
-    base[name] = { ...(base[name] || {}), ...Object.fromEntries(Object.entries(record).map(([key, value]) => [normalizeStatusFieldName(key), String(value ?? '').trim()]).filter(([, value]) => value)) }
+  const allowed = new Set(['持有人', '位置'])
+  for (const [name, raw] of Object.entries(source).slice(0, 16)) {
+    const itemName = String(name || '').trim()
+    if (itemName.length < 2 || /^(环境|场景|人物|玩家|当前操控人物|未知|其他|物品|道具|无)$/i.test(itemName)) continue
+    const record = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+    const item = {}
+    for (const [field, rawValue] of Object.entries(record)) {
+      const normalizedField = fieldAliases[field] || String(field || '').trim()
+      const text = String(rawValue ?? '').trim()
+      if (!allowed.has(normalizedField) || !text) continue
+      item[normalizedField] = text
+    }
+    if (Object.keys(item).length) output[itemName] = item
   }
-  return base
+  return output
 }
 
 function normalizeFeedbackType(type) {
@@ -628,6 +719,9 @@ function applyLegacyMigrations() {
     story.statusSchema = normalizeStatusSchema(story.statusSchema)
     story.statusRoster = normalizeStatusRoster(story.statusRoster, story.characters)
     story.statusState = normalizeStatusState(story.statusState, story.statusRoster, story.characters, story.statusSchema)
+    story.itemState = normalizeItemState(story.itemState)
+    story.keyInfo = normalizeKeyInfo(story.keyInfo)
+    story.longTermState = buildLongTermStateFromStory(story)
   }
   if (!shouldPersistMultiSpatial && !shouldSwitchToReviewerPatch && !shouldRemoveSpatialStatusPanel && !shouldPersistMultiCharacterStatus) return
   appState.multiSpatialMigration = true
@@ -696,10 +790,12 @@ function beginActiveStream() {
 function abortActiveStream() {
   if (activeStreamController) activeStreamController.abort()
   activeStreamController = null
+  stopPipelineDebugTimer()
 }
 
 function finishActiveStream(controller) {
   if (activeStreamController === controller) activeStreamController = null
+  refreshPipelineDebugTimer()
 }
 
 function makeId(prefix) {
@@ -827,6 +923,7 @@ function normalizeRuntimeConfig(raw) {
   return {
     model: normalizeModel(raw?.model || defaultModel),
     pipelineModels: raw?.pipelineModels || getPipelineModelsForRequest(raw?.model || defaultModel),
+    pipelines: normalizeRuntimePipelines(raw?.pipelines),
     baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
     hasApiKey: Boolean(raw?.hasApiKey || raw?.providers?.deepseek?.hasApiKey),
     providers: {
@@ -840,6 +937,33 @@ function normalizeRuntimeConfig(raw) {
       },
     },
   }
+}
+
+function normalizeRuntimePipelines(raw) {
+  const generation = raw?.generation && typeof raw.generation === 'object' ? raw.generation : {}
+  return {
+    generation: {
+      mode: String(generation.mode || fallbackGenerationPipeline.mode),
+      note: String(generation.note || fallbackGenerationPipeline.note),
+      stages: Array.isArray(generation.stages) ? generation.stages : fallbackGenerationPipeline.stages,
+    },
+    postprocess: raw?.postprocess && typeof raw.postprocess === 'object' ? raw.postprocess : null,
+  }
+}
+
+function runtimeGenerationPipeline() {
+  return config?.pipelines?.generation || fallbackGenerationPipeline
+}
+
+function pendingPipelineProgressRows(pipeline) {
+  return (Array.isArray(pipeline?.stages) ? pipeline.stages : [])
+    .filter(item => item && item.stage)
+    .map(item => ({
+      stage: item.stage,
+      label: item.label || item.stage,
+      status: 'pending',
+      message: '',
+    }))
 }
 
 function bindEvents() {
@@ -901,28 +1025,22 @@ function bindEvents() {
     applyModelSelection()
   })
 
-  els.clearApiKeyButton.addEventListener('click', () => {
-    localStorage.removeItem(apiKeyStorageKeyForProvider(selectedApiKeyProviderForManagement()))
-    els.apiKeyInput.value = ''
-    renderModelManagementPage()
-    renderConnection()
+  els.clearApiKeyButton.addEventListener('click', async () => {
+    await clearProviderApiKey(selectedApiKeyProviderForManagement())
   })
 
   els.closeModelManagementButton.addEventListener('click', () => {
     closeModelManagementPage()
   })
 
-  els.apiKeyButton.addEventListener('click', () => {
+  els.apiKeyButton.addEventListener('click', async () => {
     const provider = selectedApiKeyProviderForManagement()
     const key = els.apiKeyInput.value.trim()
     if (provider === 'deepseek' && key && !/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) {
       alert('API Key 格式不对。DeepSeek key 通常以 sk- 开头，请重新粘贴完整 key。')
       return
     }
-    if (key) localStorage.setItem(apiKeyStorageKeyForProvider(provider), key)
-    else localStorage.removeItem(apiKeyStorageKeyForProvider(provider))
-    renderModelManagementPage()
-    renderConnection()
+    await saveProviderApiKey(provider, key)
   })
 
   els.modelSelect.addEventListener('change', event => {
@@ -1016,6 +1134,10 @@ function bindEvents() {
     initializeSelectedStoryAsset()
   })
 
+  els.renameStoryAssetButton.addEventListener('click', () => {
+    renameSelectedStoryAsset()
+  })
+
   els.deleteStoryAssetButton.addEventListener('click', () => {
     deleteSelectedStoryAsset()
   })
@@ -1027,6 +1149,14 @@ function bindEvents() {
 
   els.saveStorySettingsButton.addEventListener('click', () => {
     saveSelectedStorySettings()
+  })
+
+  els.applyStorySettingsToCurrentButton.addEventListener('click', () => {
+    applySelectedStorySettingsToCurrentStory()
+  })
+
+  els.reviseStorySettingsButton.addEventListener('click', () => {
+    reviseSelectedStorySettings()
   })
 
   els.closeStoryLibraryButton.addEventListener('click', () => {
@@ -1124,11 +1254,39 @@ function renderDebug() {
     planFeedback: debug.planFeedback,
     narrator: debug.narrator,
     postprocessSummary: debug.postprocessSummary,
+    recallWorker: debug.recallWorkerEvents,
   }
   if (Object.values(payload).some(Boolean)) {
     lines.push('', 'stages:', baselineLogText(JSON.stringify(payload, null, 2)))
   }
   els.debugOutput.textContent = lines.join('\n')
+}
+
+function hasRunningPipelineStage() {
+  const progress = Array.isArray(state.debug?.progress) ? state.debug.progress : []
+  return progress.some(item => item?.status === 'running')
+}
+
+function refreshPipelineDebugTimer() {
+  if (hasRunningPipelineStage()) {
+    if (!pipelineDebugTimer) {
+      pipelineDebugTimer = setInterval(() => {
+        if (!hasRunningPipelineStage()) {
+          stopPipelineDebugTimer()
+          return
+        }
+        renderDebug()
+      }, 500)
+    }
+    return
+  }
+  stopPipelineDebugTimer()
+}
+
+function stopPipelineDebugTimer() {
+  if (!pipelineDebugTimer) return
+  clearInterval(pipelineDebugTimer)
+  pipelineDebugTimer = null
 }
 
 function baselineLogText(value) {
@@ -1305,10 +1463,12 @@ function renderStoryLibraryAssets() {
     els.libraryAssetList.innerHTML = '<p class="meta no-indent">还没有故事资料。先导入人物卡、故事书或世界书。</p>'
     if (els.libraryPreview) els.libraryPreview.innerHTML = ''
     renderStorySettingsForm(null)
+    els.renameStoryAssetButton.disabled = true
     els.deleteStoryAssetButton.disabled = true
     return
   }
   preserveSelectedLibraryAsset()
+  els.renameStoryAssetButton.disabled = !selectedLibraryAssetId
   els.deleteStoryAssetButton.disabled = !selectedLibraryAssetId
 
   els.libraryAssetList.innerHTML = storyLibraryAssets.map(asset => `
@@ -1365,9 +1525,48 @@ async function deleteSelectedStoryAsset() {
   }
 }
 
+async function renameSelectedStoryAsset() {
+  syncSelectedLibraryAssetFromDom()
+  const asset = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
+  if (!asset) {
+    alert('请先选择一个故事资料。')
+    return
+  }
+  const currentName = assetDefaultStoryName(asset)
+  const nextName = prompt('输入新的故事资料名', currentName)?.trim()
+  if (!nextName || nextName === currentName) return
+  els.renameStoryAssetButton.disabled = true
+  setStoryLibraryStatus(`正在改名：${currentName}。`, 'running')
+  try {
+    const response = await fetch(`/api/story-assets/${encodeURIComponent(asset.id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceName: nextName }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || '故事资料改名失败')
+    await loadStoryLibrary()
+    selectedLibraryAssetId = payload.asset?.id || asset.id
+    if (selectedNewGameAssetId === asset.id) {
+      const selected = storyLibraryAssets.find(item => item.id === asset.id)
+      if (selected) els.newGameName.value = assetDefaultStoryName(selected)
+    }
+    renderStoryLibraryAssets()
+    renderNewGameAssets()
+    setStoryLibraryStatus(`已改名：${nextName}。`, 'done')
+  } catch (error) {
+    setStoryLibraryStatus(error.message, 'error')
+    alert(error.message)
+  } finally {
+    els.renameStoryAssetButton.disabled = storyLibraryAssets.length === 0
+  }
+}
+
 function renderStorySettingsForm(asset) {
   const config = storyProgramConfigForEdit(asset)
   const disabled = !asset?.programConfig
+  els.reviseStorySettingsButton.disabled = disabled
+  els.applyStorySettingsToCurrentButton.disabled = disabled || !state?.id
   els.saveStorySettingsButton.disabled = disabled
   els.storyProgramConfigInput.disabled = disabled
   els.storyProgramConfigInput.value = asset?.programConfig
@@ -1388,7 +1587,6 @@ function storyProgramConfigForEdit(asset) {
     statusRoster: normalizeStatusRoster(config.statusRoster),
     statusState: normalizeStatusState(config.statusState, normalizeStatusRoster(config.statusRoster), [], normalizeStatusSchema(config.statusSchema)),
     initialPlayerOptions: Array.isArray(config.initialPlayerOptions) ? config.initialPlayerOptions : [],
-    globalContextSeed: String(config.globalContextSeed || ''),
   }
 }
 
@@ -1424,6 +1622,119 @@ async function saveSelectedStorySettings() {
   } finally {
     const selected = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
     els.saveStorySettingsButton.disabled = !selected?.programConfig
+  }
+}
+
+async function applySelectedStorySettingsToCurrentStory() {
+  syncSelectedLibraryAssetFromDom()
+  const asset = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
+  if (!asset) {
+    alert('请先选择一个故事资料。')
+    return
+  }
+  if (!asset.programConfig) {
+    alert('这个故事还没有初始化，不能应用到当前存档。')
+    return
+  }
+  let patch
+  try {
+    patch = parseEditableJson(els.storyProgramConfigInput.value || '{}')
+  } catch (error) {
+    alert(`JSON 格式错误：${error.message}`)
+    return
+  }
+  const originalText = els.applyStorySettingsToCurrentButton.textContent
+  els.applyStorySettingsToCurrentButton.disabled = true
+  els.applyStorySettingsToCurrentButton.textContent = '应用中'
+  setStoryLibraryStatus('正在保存故事设定并应用到当前存档。', 'running')
+  try {
+    const config = await saveStoryAssetProgramConfig(asset, patch)
+    applyProgramConfigToCurrentStory(config, asset)
+    await loadStoryLibrary()
+    renderStoryLibraryAssets()
+    renderNewGameAssets()
+    saveState()
+    render()
+    setStoryLibraryStatus(`已应用到当前存档：${state.name}。`, 'done')
+  } catch (error) {
+    setStoryLibraryStatus(error.message, 'error')
+    alert(error.message)
+  } finally {
+    const selected = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
+    els.applyStorySettingsToCurrentButton.textContent = originalText
+    els.applyStorySettingsToCurrentButton.disabled = !selected?.programConfig || !state?.id
+  }
+}
+
+function applyProgramConfigToCurrentStory(config, asset) {
+  if (!state?.id) throw new Error('当前没有可应用的存档。')
+  state.worldview = String(config.worldview || '')
+  state.directorStyle = String(config.directorStyle || '')
+  state.narratorStyle = String(config.narratorStyle || '')
+  if (asset?.id) state.storyAssetId = String(asset.id)
+  if (asset?.programConfigFile || config.programConfigFile) {
+    state.programConfigFile = String(asset?.programConfigFile || config.programConfigFile || '')
+  }
+  state.debug = {
+    ...(state.debug || {}),
+    appliedProgramConfig: {
+      storyAssetId: String(asset?.id || ''),
+      appliedAt: new Date().toISOString(),
+      fields: ['worldview', 'directorStyle', 'narratorStyle'],
+    },
+  }
+}
+
+async function reviseSelectedStorySettings() {
+  syncSelectedLibraryAssetFromDom()
+  const asset = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
+  if (!asset) {
+    alert('请先选择一个故事资料。')
+    return
+  }
+  if (!asset.programConfig) {
+    alert('这个故事还没有初始化，不能反馈修改。')
+    return
+  }
+  const revisionFeedback = prompt('写下你对初始化结果的不满意或修改要求。')?.trim()
+  if (!revisionFeedback) return
+
+  const originalText = els.reviseStorySettingsButton.textContent
+  els.reviseStorySettingsButton.disabled = true
+  els.reviseStorySettingsButton.textContent = '修改中'
+  setStoryLibraryStatus('正在按反馈修改初始化配置。', 'running')
+  try {
+    const response = await fetch(`/api/story-assets/${encodeURIComponent(asset.id)}/program-config/revise`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        revisionFeedback,
+        model: getActiveModel(),
+        pipelineModels: getPipelineModelsForRequest(),
+        apiKey: getPipelineApiKey(),
+        apiKeys: getPipelineApiKeys(),
+        reasoningEffort: getRequestReasoningEffort(),
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || '初始化反馈修改失败')
+    asset.programConfig = payload.config
+    await loadStoryLibrary()
+    renderStoryLibraryAssets()
+    renderNewGameAssets()
+    state.debug = {
+      ...(state.debug || {}),
+      initializerRevision: payload.config,
+    }
+    renderDebug()
+    setStoryLibraryStatus(`已按反馈修改：${assetDefaultStoryName(asset)}。`, 'done')
+  } catch (error) {
+    setStoryLibraryStatus(error.message, 'error')
+    alert(error.message)
+  } finally {
+    const selected = storyLibraryAssets.find(item => item.id === selectedLibraryAssetId)
+    els.reviseStorySettingsButton.textContent = originalText
+    els.reviseStorySettingsButton.disabled = !selected?.programConfig
   }
 }
 
@@ -1579,12 +1890,14 @@ async function startNewGameFromAsset(asset, requestedName, requestedControlledNa
   }
   story.controlledCharacterName = controlledCharacterName
   story.openingText = String(init.openingText || extractOpeningText(asset.entries || []))
-  const openingSummary = String(story.openingText || '').trim()
+  const openingText = String(story.openingText || '').trim()
+  const openingSummary = await summarizeOpeningTextForHistory(openingText, { ...init, assetId: asset.id })
   story.worldview = String(init.worldview || '')
-  story.currentSituation = openingSummary
-  story.chapterSummary = ''
-  story.outline = openingSummary
+  story.currentSituation = openingSummary || openingText
+  story.chapterSummary = openingSummary ? `- 第0轮：${openingSummary}` : ''
+  story.outline = openingSummary || openingText
   story.physicalConstraints = []
+  story.keyInfo = []
   story.directorStyle = String(init.directorStyle || '')
   story.narratorStyle = String(init.narratorStyle || '')
   story.playerFeedback = ''
@@ -1596,16 +1909,57 @@ async function startNewGameFromAsset(asset, requestedName, requestedControlledNa
   story.statusRoster = normalizeStatusRoster(init.statusRoster, story.characters)
   if (controlledCharacterName && !story.statusRoster.includes(controlledCharacterName)) story.statusRoster.unshift(controlledCharacterName)
   story.statusState = normalizeStatusState(init.statusState, story.statusRoster, story.characters, story.statusSchema)
-  story.globalContext = ''
+  story.itemState = normalizeItemState(init.itemState)
+  story.longTermState = buildLongTermStateFromStory(story)
+  story.globalContext = story.chapterSummary
   story.messages = []
   story.playerOptions = normalizeInitialPlayerOptions(init.initialPlayerOptions || init.playerOptions)
   story.debug = {}
-  appState.stories.push(story)
+  appState.stories = [story]
   appState.currentStoryId = story.id
   state = story
   saveState()
   render()
   els.newGameDialog.close()
+}
+
+async function summarizeOpeningTextForHistory(openingText, config = {}) {
+  const text = String(openingText || '').trim()
+  const existingSummary = String(config.openingSummary || '').trim()
+  if (existingSummary) return existingSummary
+  if (!text) return ''
+  try {
+    const response = await fetch('/api/opening-summary', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        assetId: String(config.assetId || config.storyAssetId || ''),
+        openingText: text,
+        storyContext: String(config.worldview || ''),
+        model: getActiveModel(),
+        pipelineModels: getPipelineModelsForRequest(),
+        apiKey: getPipelineApiKey(),
+        apiKeys: getPipelineApiKeys(),
+        reasoningEffort: getRequestReasoningEffort(),
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || '开场摘要失败')
+    const summary = String(payload.summary || '').trim()
+    if (summary && payload.config && typeof config === 'object') {
+      config.openingSummary = summary
+    }
+    return summary || summarizeOpeningTextLocally(text)
+  } catch {
+    return summarizeOpeningTextLocally(text)
+  }
+}
+
+function summarizeOpeningTextLocally(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  const sentence = text.match(/^(.{1,160}?[。！？!?])/u)?.[1] || text
+  return sentence.slice(0, 160).trim()
 }
 
 async function initializeSelectedStoryAsset() {
@@ -1972,8 +2326,7 @@ async function loadSaveSlot(id) {
     const savedStory = payload.slot?.state?.story || payload.slot?.state
     if (!savedStory || typeof savedStory !== 'object') throw new Error('存档内容无效。')
     const loadedStory = normalizeStory(savedStory, payload.slot?.name || '读取存档')
-    appState.stories = appState.stories.filter(story => story.id !== loadedStory.id)
-    appState.stories.push(loadedStory)
+    appState.stories = [loadedStory]
     appState.currentStoryId = loadedStory.id
     state = getCurrentStory()
     saveState()
@@ -2045,15 +2398,78 @@ function apiKeyStorageKeyForProvider(provider) {
 }
 
 function getLocalApiKey(provider = currentProvider()) {
-  return localStorage.getItem(apiKeyStorageKeyForProvider(provider)) || ''
+  void provider
+  return ''
 }
 
 function getPipelineApiKey() {
-  return getLocalApiKey(currentProvider())
+  return ''
 }
 
 function getPipelineApiKeys() {
-  return Object.fromEntries(providerOptions.map(provider => [provider, getLocalApiKey(provider)]))
+  return {}
+}
+
+async function refreshRuntimeConfig() {
+  config = await fetchRuntimeConfig()
+}
+
+async function saveProviderApiKey(provider, key) {
+  const normalizedProvider = normalizeProvider(provider)
+  if (!key) {
+    await clearProviderApiKey(normalizedProvider)
+    return
+  }
+  els.apiKeyButton.disabled = true
+  els.modelManagementStatus.textContent = `正在保存 ${providerLabel(normalizedProvider)} Key 到后台。`
+  els.modelManagementStatus.dataset.tone = ''
+  try {
+    const response = await fetch('/api/provider-api-key', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: normalizedProvider, apiKey: key }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || 'API Key 保存失败')
+    els.apiKeyInput.value = ''
+    await refreshRuntimeConfig()
+    renderModelManagementPage()
+    renderConnection()
+    els.modelManagementStatus.textContent = `${providerLabel(normalizedProvider)} Key 已保存到后台。`
+    els.modelManagementStatus.dataset.tone = 'done'
+  } catch (error) {
+    els.modelManagementStatus.textContent = error.message
+    els.modelManagementStatus.dataset.tone = 'error'
+  } finally {
+    els.apiKeyButton.disabled = false
+  }
+}
+
+async function clearProviderApiKey(provider) {
+  const normalizedProvider = normalizeProvider(provider)
+  els.clearApiKeyButton.disabled = true
+  els.modelManagementStatus.textContent = `正在清除 ${providerLabel(normalizedProvider)} 后台 Key。`
+  els.modelManagementStatus.dataset.tone = ''
+  try {
+    const response = await fetch('/api/provider-api-key', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: normalizedProvider }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(payload.error || 'API Key 清除失败')
+    els.apiKeyInput.value = ''
+    await refreshRuntimeConfig()
+    renderModelManagementPage()
+    renderConnection()
+    els.modelManagementStatus.textContent = `${providerLabel(normalizedProvider)} 后台 Key 已清除。`
+    els.modelManagementStatus.dataset.tone = 'done'
+  } catch (error) {
+    els.modelManagementStatus.textContent = error.message
+    els.modelManagementStatus.dataset.tone = 'error'
+  } finally {
+    els.clearApiKeyButton.disabled = false
+  }
 }
 
 function selectedModelForManagement() {
@@ -2099,7 +2515,7 @@ function getRequestReasoningEffort() {
 }
 
 function hasRuntimeApiKey(provider = currentProvider()) {
-  return Boolean(getLocalApiKey(provider) || getProviderConfig(provider).hasApiKey)
+  return Boolean(getProviderConfig(provider).hasApiKey)
 }
 
 function renderModelManagementPage() {
@@ -2120,10 +2536,10 @@ function renderModelManagementPage() {
   }
   els.apiKeyProviderSelect.innerHTML = providerOptions.map(provider => `<option value="${escapeAttr(provider)}">${escapeHtml(providerLabel(provider))}</option>`).join('')
   els.apiKeyProviderSelect.value = apiKeyProvider
-  els.apiKeyHelp.textContent = `${providerLabel(apiKeyProvider)} Key 只保存在当前浏览器本地。`
+  els.apiKeyHelp.textContent = `${providerLabel(apiKeyProvider)} Key 保存在后台本地文件，不回显明文。${hasRuntimeApiKey(apiKeyProvider) ? '当前已配置。' : '当前未配置。'}`
   els.apiKeyLabel.textContent = `${providerLabel(apiKeyProvider)} Key`
   els.apiKeyInput.placeholder = apiKeyProvider === 'deepseek' ? 'sk-...' : '粘贴 API Key'
-  els.apiKeyInput.value = getLocalApiKey(apiKeyProvider)
+  els.apiKeyInput.value = ''
   const appliedPipelineModels = normalizePipelineModelOverrides(appState.pipelineModels)
   const hasPendingChange = model !== appliedModel
     || JSON.stringify(pipelineModels) !== JSON.stringify(appliedPipelineModels)
@@ -2142,17 +2558,24 @@ function renderStatusPanel() {
   const controlledHtml = controlledCharacterName
     ? `<p class="meta no-indent">当前操控：${escapeHtml(controlledCharacterName)} · ${escapeHtml(narrativePerspectiveLabel(appState.narrativePerspective))}</p>`
     : '<p class="meta no-indent">当前操控：未选择</p>'
-  if (!state.statusRoster?.length) {
-    els.statusPanelView.innerHTML = `${controlledHtml}<p class="meta no-indent">人物状态为空</p>`
+  const longTermState = buildLongTermStateFromState()
+  if (!Object.keys(longTermState.characterStatus || {}).length && !Object.keys(longTermState.keyItems || {}).length && !longTermState.keyInfo.length && !longTermState.physicalConstraints.length) {
+    els.statusPanelView.innerHTML = `${controlledHtml}<p class="meta no-indent">长期变量为空</p>`
     return
   }
-  els.statusPanelView.innerHTML = `${controlledHtml}<pre class="status-json">${escapeHtml(JSON.stringify(state.statusState || {}, null, 2))}</pre>`
+  els.statusPanelView.innerHTML = `${controlledHtml}<p class="meta no-indent">长期变量</p><pre class="status-json">${escapeHtml(JSON.stringify(longTermState, null, 2))}</pre>`
 }
 
 function renderStoryTracking() {
   const summary = state.chapterSummary || deriveGlobalContextBlock('summary')
+  if (needsOpeningSummaryBackfill()) {
+    void ensureOpeningSummaryBackfill()
+  }
+  const backfillHint = needsOpeningSummaryBackfill() && openingSummaryBackfillInFlight.has(state.id)
+    ? '\n- 第0轮：正在调用模型生成开场白总结...'
+    : ''
   els.storyTrackingView.innerHTML = `
-    ${renderTrackerSection('历史总结', formatHistoricalSummaryForTracker(summary) || '暂无历史总结。')}
+    ${renderTrackerSection('历史总结', formatHistoricalSummaryForTracker(`${backfillHint}\n${summary}`) || '暂无历史总结。')}
     ${state.playerFeedback ? renderTrackerSection('用户反馈', state.playerFeedback) : ''}
     ${renderFeedbackMemory() ? renderTrackerSection('上轮反重复提醒', renderFeedbackMemory()) : ''}
   `
@@ -2412,9 +2835,20 @@ function renderOpeningMessage() {
     <article class="message assistant opening-message" data-message-index="-1" data-message-role="opening">
       <small>AGENT · 第0轮</small>
       ${name ? `<h2 class="opening-title">${escapeHtml(name)}</h2>` : ''}
-      ${worldview ? `<section class="opening-worldview"><strong>世界观</strong><p>${escapeHtml(worldview)}</p></section>` : ''}
-      ${opening ? `<section class="opening-text"><strong>开场白</strong><p>${escapeHtml(opening)}</p></section>` : ''}
+      ${renderOpeningSection('世界观', worldview)}
+      ${renderOpeningSection('开场白', opening)}
     </article>
+  `
+}
+
+function renderOpeningSection(label, value) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return `
+    <section class="opening-section">
+      <strong>${escapeHtml(label)}</strong>
+      <div class="message-body">${renderDecoratedText(text, { role: 'assistant' })}</div>
+    </section>
   `
 }
 
@@ -2447,11 +2881,11 @@ function renderRegenerateButton() {
 }
 
 function renderRetryStageButton() {
-  const pending = getPendingPostprocess()
+  const pending = getPendingSummary()
   const canContinueGeneration = state.debug?.status === 'error' && Boolean(getRegenerationSnapshot())
   els.retryStageButton.disabled = generationBusy || (!pending && !canContinueGeneration)
   els.retryStageButton.title = pending
-    ? '上一轮正文已生成，但 Postprocess 未完成。点击只重试后处理。'
+    ? '上一轮正文已生成，但 Summary 未完成。点击只重试Summary。'
     : canContinueGeneration
       ? '按当前状态重新执行未完成流程。'
       : '没有未完成阶段。'
@@ -2473,7 +2907,7 @@ function completedAssistantTurnCount() {
   return state.messages.filter(message => message.role === 'assistant').length
 }
 
-function normalizePostprocessJob(value) {
+function normalizeSummaryJob(value) {
   if (!value || typeof value !== 'object') return null
   const playerInput = String(value.playerInput || '').trim()
   const finalText = String(value.finalText || '').trim()
@@ -2490,8 +2924,8 @@ function normalizePostprocessJob(value) {
   }
 }
 
-function enqueuePostprocessJob(job) {
-  const normalized = normalizePostprocessJob(job)
+function enqueueSummaryJob(job) {
+  const normalized = normalizeSummaryJob(job)
   if (!normalized) return
   state.postprocessQueue = Array.isArray(state.postprocessQueue) ? state.postprocessQueue : []
   if (!state.postprocessQueue.some(item => item.id === normalized.id)) state.postprocessQueue.push(normalized)
@@ -2526,13 +2960,14 @@ async function regenerateLastTurn() {
 }
 
 async function continueUnfinishedTurn() {
-  const pending = getPendingPostprocess()
+  const pending = getPendingSummary()
   if (pending) {
-    await retryPendingPostprocess(pending)
+    await retryPendingSummary(pending)
     return
   }
   const recovery = state.debug?.postprocessRecoveryBase
   const director = state.debug?.director
+  const planFeedback = state.debug?.planFeedback
   const snapshot = getRegenerationSnapshot()
   if (state.debug?.status === 'error' && recovery?.playerInput && snapshot?.playerInput) {
     restoreTurnSnapshot(snapshot)
@@ -2542,6 +2977,7 @@ async function continueUnfinishedTurn() {
       requestPayload: {
         ...recovery,
         director: director && typeof director === 'object' ? director : recovery.director,
+        planFeedback: planFeedback && typeof planFeedback === 'object' ? planFeedback : recovery.planFeedback,
         apiKey: getPipelineApiKey(),
         apiKeys: getPipelineApiKeys(),
         reasoningEffort: getRequestReasoningEffort(),
@@ -2578,17 +3014,17 @@ function rollbackUnfinishedTurn() {
   render()
 }
 
-function getPendingPostprocess() {
+function getPendingSummary() {
   const queuedError = Array.isArray(state.postprocessQueue) ? state.postprocessQueue.find(item => item?.status === 'error') : null
   if (queuedError) return queuedError
-  const pending = state.debug?.pendingPostprocess
+  const pending = state.debug?.pendingSummary
   if (!state.debug?.postprocessPending) return null
-  if (!pending || typeof pending !== 'object') return buildPendingPostprocessFromState()
+  if (!pending || typeof pending !== 'object') return buildPendingSummaryFromState()
   if (!String(pending.finalText || '').trim()) return null
   return pending
 }
 
-function buildPendingPostprocessFromState() {
+function buildPendingSummaryFromState() {
   const playerFeedback = syncPlayerFeedbackFromInput()
   const messages = Array.isArray(state.messages) ? state.messages : []
   let assistantIndex = -1
@@ -2623,6 +3059,9 @@ function buildPendingPostprocessFromState() {
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
+    itemState: state.itemState,
+    keyInfo: state.keyInfo,
+    longTermState: buildLongTermStateFromState(),
     controlledCharacterName: state.controlledCharacterName,
     playerOptions: state.playerOptions,
     physicalConstraints: state.physicalConstraints,
@@ -2638,12 +3077,12 @@ function buildPendingPostprocessFromState() {
   }
 }
 
-async function retryPendingPostprocess(pending) {
+async function retryPendingSummary(pending) {
   const streamController = beginActiveStream()
   setBusy(true)
-  state.debug.status = '重试 Postprocess'
+  state.debug.status = '重试 Summary'
   state.debug.error = ''
-  state.debug.note = '正在重试上一轮未完成的 Postprocess；完成后会补上状态、总结和反重复提醒。'
+  state.debug.note = '正在重试上一轮未完成的 Summary；完成后会补上状态、总结和反重复提醒。'
   render()
 
   try {
@@ -2662,30 +3101,31 @@ async function retryPendingPostprocess(pending) {
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}))
-      throw new Error(payload.error || 'Postprocess 重试失败')
+      throw new Error(payload.error || 'Summary 重试失败')
     }
     const payload = await readNdjsonStream(response, handlePipelineEvent)
-    if (!payload) throw new Error('Postprocess 重试失败：没有收到最终结果。')
+    if (!payload) throw new Error('Summary 重试失败：没有收到最终结果。')
 
     removeTrailingErrorMessages()
     state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
     state.debug.status = 'done'
     state.debug.postprocessPending = false
-    state.debug.pendingPostprocess = null
+    state.debug.pendingSummary = null
     state.debug.postprocessRecoveryBase = null
     state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
     if (payload.postprocessSummary) state.debug.postprocessSummary = payload.postprocessSummary
     if (payload.planFeedback) state.debug.planFeedback = payload.planFeedback
     if (pending.id) state.postprocessQueue = (state.postprocessQueue || []).filter(item => item.id !== pending.id)
     setPreferredModel(payload.model || getActiveModel())
-    applyPostprocess(payload)
-    persistPostprocessResult()
+    applySummary(payload)
+    persistSummaryResult()
+    startRecallWorkerPolling(completedAssistantTurnCount())
   } catch (error) {
     if (streamController.signal.aborted) return
     state.debug.status = 'error'
     state.debug.postprocessPending = true
     state.debug.error = error.message
-    state.debug.note = 'Postprocess 仍未完成。可再次点击“继续未完成”。'
+    state.debug.note = 'Summary 仍未完成。可再次点击“继续未完成”。'
     if (pending.id) {
       const queued = (state.postprocessQueue || []).find(item => item.id === pending.id)
       if (queued) {
@@ -2702,7 +3142,7 @@ async function retryPendingPostprocess(pending) {
   }
 }
 
-async function processPostprocessQueue() {
+async function processSummaryQueue() {
   if (postprocessQueueRunning) return
   state.postprocessQueue = Array.isArray(state.postprocessQueue) ? state.postprocessQueue : []
   const job = state.postprocessQueue.find(item => item?.status === 'queued' || item?.status === 'error')
@@ -2713,13 +3153,13 @@ async function processPostprocessQueue() {
   state.debug = {
     ...(state.debug || {}),
     postprocessPending: false,
-    pendingPostprocess: null,
+    pendingSummary: null,
     note: job.summaryOnly
-      ? 'PostprocessSummary 正在后台更新总结和状态；不阻塞下一轮输入。'
-      : 'PostprocessSummary 正在后台更新总结和状态；不阻塞下一轮输入。',
+      ? 'Summary 正在后台更新总结和状态；不阻塞下一轮输入。'
+      : 'Summary 正在后台更新总结和状态；不阻塞下一轮输入。',
   }
   saveState()
-  renderPostprocessSideEffects()
+  renderSummarySideEffects()
 
   try {
     const response = await fetch('/api/postprocess-stream', {
@@ -2736,33 +3176,34 @@ async function processPostprocessQueue() {
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}))
-      throw new Error(payload.error || 'Postprocess 队列任务失败')
+      throw new Error(payload.error || 'Summary 队列任务失败')
     }
     const payload = await readNdjsonStream(response, handlePipelineEvent)
-    if (!payload) throw new Error('Postprocess 队列任务失败：没有收到最终结果。')
+    if (!payload) throw new Error('Summary 队列任务失败：没有收到最终结果。')
     state.postprocessQueue = state.postprocessQueue.filter(item => item.id !== job.id)
     state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
     if (payload.postprocessSummary) state.debug.postprocessSummary = payload.postprocessSummary
     if (payload.planFeedback) state.debug.planFeedback = payload.planFeedback
     state.debug.postprocessPending = false
-    state.debug.pendingPostprocess = null
-    state.debug.note = 'Postprocess 队列已完成一个任务。'
+    state.debug.pendingSummary = null
+    state.debug.note = 'Summary 队列已完成一个任务。'
     setPreferredModel(payload.model || getActiveModel())
-    applyPostprocess(payload)
-    persistPostprocessResult()
+    applySummary(payload)
+    persistSummaryResult()
+    startRecallWorkerPolling(completedAssistantTurnCount())
   } catch (error) {
     job.status = 'error'
     job.error = error.message
     job.updatedAt = new Date().toISOString()
     state.debug.postprocessPending = true
-    state.debug.pendingPostprocess = job
-    state.debug.note = 'Postprocess 队列任务失败；可点击“继续未完成”重试，不影响继续游戏。'
+    state.debug.pendingSummary = job
+    state.debug.note = 'Summary 队列任务失败；可点击“继续未完成”重试，不影响继续游戏。'
     state.debug.error = error.message
     saveState()
-    renderPostprocessSideEffects()
+    renderSummarySideEffects()
   } finally {
     postprocessQueueRunning = false
-    if (state.postprocessQueue?.some(item => item?.status === 'queued')) processPostprocessQueue()
+    if (state.postprocessQueue?.some(item => item?.status === 'queued')) processSummaryQueue()
   }
 }
 
@@ -2770,24 +3211,25 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requ
   const streamController = beginActiveStream()
   setBusy(true)
   const startedAt = Date.now()
+  const generationPipeline = runtimeGenerationPipeline()
   if (snapshot) state.lastTurnSnapshot = snapshot
   state.messages.push({ role: 'user', content: playerInput })
   state.debug = {
     status: modeLabel,
     startedAt,
-    pipelineMode: 'director+planfeedback+narrator+summary-queued',
+    pipelineMode: generationPipeline.mode,
     note: modeLabel === 'regenerating'
       ? '正在回滚并重新生成本次对话；会使用当前模型和配置完整重跑。'
       : modeLabel === 'continuing'
         ? '继续未完成：按当前状态重新执行未完成流程。'
-        : 'PlanFeedback 会先审查导演计划；Narrator 接收整改要求后输出正文和候选项；PostprocessSummary 后台更新总结和状态。',
+        : generationPipeline.note,
     visibleTextShown: false,
     postprocessPending: false,
-    progress: [],
+    progress: pendingPipelineProgressRows(generationPipeline),
     director: null,
     narrator: null,
     postprocess: null,
-    pendingPostprocess: null,
+    pendingSummary: null,
     postprocessRecoveryBase: null,
   }
   els.playerInput.value = ''
@@ -2797,7 +3239,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requ
     const effectiveRequestPayload = requestPayload || buildGenerateRequestPayload(playerInput)
     const requestModel = normalizeModel(effectiveRequestPayload.model || getActiveModel())
     setPreferredModel(requestModel)
-    state.debug.postprocessRecoveryBase = sanitizePostprocessRecoveryBase(effectiveRequestPayload)
+    state.debug.postprocessRecoveryBase = sanitizeSummaryRecoveryBase(effectiveRequestPayload)
     const response = await fetch('/api/generate-stream', {
       method: 'POST',
       signal: streamController.signal,
@@ -2819,10 +3261,18 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requ
     }
     state.playerOptions = Array.isArray(payload.playerOptions) ? payload.playerOptions : state.playerOptions
     state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
-    state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
+    if (Array.isArray(payload.physicalConstraints)) {
+      state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints)
+    }
+    if (Array.isArray(payload.keyInfo)) {
+      state.keyInfo = normalizeKeyInfo(payload.keyInfo)
+    }
+    if (payload.longTermState && typeof payload.longTermState === 'object') {
+      state.longTermState = normalizeLongTermState(payload.longTermState, state)
+    }
     state.debug.status = 'done'
     state.debug.postprocessPending = false
-    state.debug.pendingPostprocess = null
+    state.debug.pendingSummary = null
     state.debug.postprocessRecoveryBase = null
     state.debug.pipelineMode = payload.pipelineMode
     state.debug.director = payload.director
@@ -2832,11 +3282,12 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requ
     state.debug.postprocess = null
     state.directorHistory = appendDirectorHistory(state.directorHistory, payload.director)
     setPreferredModel(payload.model || requestModel)
-    enqueuePostprocessJob(payload.pendingPostprocess)
+    enqueueSummaryJob(payload.pendingSummary)
     saveState()
     render()
     scrollToLatestAssistantStart()
-    processPostprocessQueue()
+    processSummaryQueue()
+    startRecallWorkerPolling(completedAssistantTurnCount())
   } catch (error) {
     if (streamController.signal.aborted) return
     state.debug.status = 'error'
@@ -2844,7 +3295,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requ
     markRunningPipelineStageError(error.message)
     if (state.debug.visibleTextShown) {
       state.debug.postprocessPending = true
-      state.debug.pendingPostprocess = buildPendingPostprocessFromState()
+      state.debug.pendingSummary = buildPendingSummaryFromState()
       state.debug.note = '正文已显示，但前台反馈或后台总结未完成。点击“继续未完成”补上候选项、总结和状态。'
     } else {
       state.messages.push({ role: 'error', content: error.message })
@@ -2877,6 +3328,9 @@ function buildGenerateRequestPayload(playerInput) {
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
+    itemState: state.itemState,
+    keyInfo: state.keyInfo,
+    longTermState: buildLongTermStateFromState(),
     controlledCharacterName: state.controlledCharacterName,
     model: getActiveModel(),
     pipelineModels: getPipelineModelsForRequest(),
@@ -2961,7 +3415,7 @@ function restoreTurnSnapshot(snapshot) {
   state.model = getActiveModel()
 }
 
-function sanitizePostprocessRecoveryBase(payload) {
+function sanitizeSummaryRecoveryBase(payload) {
   const { apiKey, apiKeys, ...safePayload } = payload
   return deepClone(safePayload)
 }
@@ -2976,6 +3430,8 @@ function pickRegenerableStoryState(story) {
     'chapterSummary',
     'outline',
     'physicalConstraints',
+    'keyInfo',
+    'longTermState',
     'directorStyle',
     'narratorStyle',
     'playerFeedback',
@@ -2989,6 +3445,7 @@ function pickRegenerableStoryState(story) {
     'statusSchema',
     'statusRoster',
     'statusState',
+    'itemState',
     'globalContext',
     'playerOptions',
     'debug',
@@ -3033,6 +3490,118 @@ async function readNdjsonStream(response, onEvent) {
   }
 
   return finalPayload
+}
+
+function startRecallWorkerPolling(turnIndex = completedAssistantTurnCount(), durationMs = 90_000) {
+  const normalizedTurn = Math.max(0, Math.floor(Number(turnIndex) || 0))
+  if (!state.id || !normalizedTurn) return
+  recallWorkerPollDeadlineMs = Math.max(recallWorkerPollDeadlineMs, Date.now() + durationMs)
+  pollRecallWorkerEvents(normalizedTurn)
+  if (recallWorkerPollTimer) return
+  recallWorkerPollTimer = setInterval(() => {
+    if (Date.now() > recallWorkerPollDeadlineMs) {
+      stopRecallWorkerPolling()
+      return
+    }
+    pollRecallWorkerEvents(normalizedTurn)
+  }, 1500)
+}
+
+function stopRecallWorkerPolling() {
+  if (!recallWorkerPollTimer) return
+  clearInterval(recallWorkerPollTimer)
+  recallWorkerPollTimer = null
+}
+
+async function pollRecallWorkerEvents(turnIndex = completedAssistantTurnCount()) {
+  try {
+    const params = new URLSearchParams({
+      storyId: state.id || '',
+      storyName: state.name || '',
+      turnIndex: String(turnIndex),
+    })
+    if (lastRecallWorkerEventId) params.set('after', lastRecallWorkerEventId)
+    const response = await fetch(`/api/recall-worker-events?${params.toString()}`)
+    if (!response.ok) return []
+    const payload = await response.json().catch(() => ({}))
+    applyRecallWorkerEvents(payload.events)
+    return Array.isArray(payload.events) ? payload.events : []
+  } catch {
+    // RecallWorker 是旁路调试信息，轮询失败不影响主游戏流程。
+    return []
+  }
+}
+
+async function ensureRecallWorkerForLatestTurn() {
+  const pending = buildPendingSummaryFromState()
+  if (!pending) return
+  const turnIndex = completedAssistantTurnCount()
+  await pollRecallWorkerEvents(turnIndex)
+  if (hasRecallWorkerEventForTurn(turnIndex)) {
+    startRecallWorkerPolling(turnIndex, 30_000)
+    return
+  }
+  try {
+    const response = await fetch('/api/recall-worker/run', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...pending,
+        basis: 'frontend-retry',
+        apiKey: getPipelineApiKey(),
+        apiKeys: getPipelineApiKeys(),
+        model: getActiveModel(),
+        pipelineModels: getPipelineModelsForRequest(),
+        reasoningEffort: getRequestReasoningEffort(),
+      }),
+    })
+    if (response.ok) startRecallWorkerPolling(turnIndex)
+  } catch {
+    // 旁路召回可重试，刷新后会再次尝试。
+  }
+}
+
+function hasRecallWorkerEventForTurn(turnIndex) {
+  const target = Math.max(0, Math.floor(Number(turnIndex) || 0))
+  return (state.debug?.recallWorkerEvents || []).some(event => Math.floor(Number(event?.createdAtTurn)) === target)
+}
+
+function applyRecallWorkerEvents(events) {
+  if (!Array.isArray(events) || !events.length) return
+  state.debug = state.debug || {}
+  const known = new Set((state.debug.recallWorkerEvents || []).map(item => String(item.id || '')))
+  const fresh = events
+    .filter(event => event && typeof event === 'object')
+    .filter(event => event.id && !known.has(String(event.id)))
+  if (!fresh.length) return
+
+  state.debug.recallWorkerEvents = [
+    ...(Array.isArray(state.debug.recallWorkerEvents) ? state.debug.recallWorkerEvents : []),
+    ...fresh,
+  ].slice(-8)
+  lastRecallWorkerEventId = String(fresh[fresh.length - 1].id || lastRecallWorkerEventId)
+
+  const progress = Array.isArray(state.debug.progress) ? state.debug.progress : []
+  let row = progress.find(item => item.stage === 'recall')
+  if (!row) {
+    row = { stage: 'recall', label: 'RecallWorker', status: 'pending', logs: [] }
+    progress.push(row)
+  }
+  row.label = 'RecallWorker'
+  row.status = 'done'
+  row.logs = Array.isArray(row.logs) ? row.logs : []
+  for (const event of fresh) {
+    const basis = event.basis || 'recall'
+    row.logs.push(`${basis}｜${JSON.stringify(event.output || {})}`)
+  }
+  row.logs = row.logs.slice(-8)
+  row.message = '旁路召回已完成，JSON 已写入下方 stages。'
+  row.updatedAt = fresh[fresh.length - 1].createdAt || new Date().toISOString()
+  row.updatedAtMs = Date.parse(row.updatedAt) || Date.now()
+  row.endedAtMs = row.updatedAtMs
+  state.debug.progress = progress
+  saveState()
+  renderDebug()
 }
 
 function handlePipelineEvent(event) {
@@ -3082,6 +3651,7 @@ function handlePipelineEvent(event) {
 
   state.debug.progress = progress
   renderDebug()
+  refreshPipelineDebugTimer()
 }
 
 function markRunningPipelineStageError(message) {
@@ -3097,6 +3667,7 @@ function markRunningPipelineStageError(message) {
   row.updatedAtMs = now
   row.endedAtMs = now
   state.debug.progress = progress
+  refreshPipelineDebugTimer()
 }
 
 function applyVisibleTextEvent(event) {
@@ -3114,10 +3685,10 @@ function applyVisibleTextEvent(event) {
   if (Array.isArray(payload.playerOptions)) state.playerOptions = payload.playerOptions
   state.debug.visibleTextShown = true
   state.debug.postprocessPending = false
-  state.debug.pendingPostprocess = null
+  state.debug.pendingSummary = null
   state.debug.status = '生成中'
   state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
-  state.debug.note = '正文和候选项已显示；PostprocessSummary 稍后后台更新。'
+  state.debug.note = '正文和候选项已显示；Summary 稍后后台更新。'
 
   renderConversation({ scrollTarget: 'latest-assistant-start' })
   renderOptions()
@@ -3131,7 +3702,7 @@ function applyVisibleTextEvent(event) {
   els.regenerateButton.textContent = '重新生成本次对话'
 }
 
-function applyPostprocess(payload) {
+function applySummary(payload) {
   const turnSummary = String(payload.turnSummary || '').trim()
   const labeledTurnSummary = labelTurnSummary(turnSummary, completedAssistantTurnCount())
   const contextLines = []
@@ -3144,26 +3715,27 @@ function applyPostprocess(payload) {
     state.currentSituation = turnSummary
     state.outline = turnSummary
   }
-  state.physicalConstraints = normalizePhysicalConstraints(payload.physicalConstraints || state.physicalConstraints)
   if (!payload.skipFeedbackMemoryUpdate) state.feedbackMemory = mergeFeedbackMemory(state.feedbackMemory, payload)
-  const statusPatch = payload.postprocess && typeof payload.postprocess === 'object' ? payload.postprocess : payload
   if (Array.isArray(payload.statusSchema)) {
-    state.statusSchema = normalizeStatusSchema(payload.statusSchema)
-  } else {
-    state.statusSchema = mergeStatusSchema(state.statusSchema, statusPatch.statusSchemaPatch)
+    state.statusSchema = payload.statusSchema
   }
   if (Array.isArray(payload.statusRoster)) {
-    state.statusRoster = normalizeStatusRoster(payload.statusRoster, state.characters)
-  } else {
-    state.statusRoster = mergeStatusRoster(state.statusRoster, statusPatch.statusRosterPatch, state.characters, statusPatch.statusStatePatch)
+    state.statusRoster = payload.statusRoster
   }
-  state.statusRoster = mergeStatusRoster(state.statusRoster, statusPatch.statusRosterPatch, state.characters, statusPatch.statusStatePatch)
   if (payload.statusState && typeof payload.statusState === 'object') {
-    state.statusState = normalizeStatusState(payload.statusState, state.statusRoster, state.characters, state.statusSchema)
-  } else {
-    state.statusState = mergeStatusState(state.statusState, statusPatch.statusStatePatch, state.statusRoster, state.characters, state.statusSchema)
+    state.statusState = payload.statusState
   }
-  state.statusState = mergeStatusState(state.statusState, statusPatch.statusStatePatch, state.statusRoster, state.characters, state.statusSchema)
+  if (payload.itemState && typeof payload.itemState === 'object') {
+    state.itemState = normalizeItemState(payload.itemState)
+  }
+  if (Array.isArray(payload.keyInfo)) {
+    state.keyInfo = normalizeKeyInfo(payload.keyInfo)
+  }
+  if (payload.longTermState && typeof payload.longTermState === 'object') {
+    state.longTermState = normalizeLongTermState(payload.longTermState, state)
+  } else {
+    state.longTermState = buildLongTermStateFromState()
+  }
 }
 
 function labelTurnSummary(summary, turnIndex) {
@@ -3203,56 +3775,6 @@ function buildHistoricalSummaryForRequest() {
   return formatHistorySummaryLines(lines.slice(0, -5))
 }
 
-function maybeCompactHistorySummary() {
-  if (historyCompactionRunning) return
-  const lines = parseHistorySummaryLines(state.globalContext || state.chapterSummary)
-  if (lines.length < 20) return
-  historyCompactionRunning = true
-  compactHistorySummary(lines).catch(error => {
-    state.debug = {
-      ...(state.debug || {}),
-      note: `历史总结压缩失败：${error.message}`,
-    }
-    saveState()
-    renderPostprocessSideEffects()
-  }).finally(() => {
-    historyCompactionRunning = false
-  })
-}
-
-async function compactHistorySummary(lines) {
-  const sourceLines = lines.slice(0, 10)
-  const retainedLines = lines.slice(10)
-  const response = await fetch('/api/history-compact', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      historyLines: sourceLines,
-      apiKey: getPipelineApiKey(),
-      apiKeys: getPipelineApiKeys(),
-      model: getActiveModel(),
-      pipelineModels: getPipelineModelsForRequest(),
-      reasoningEffort: getRequestReasoningEffort(),
-    }),
-  })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error || '历史总结压缩失败')
-  const compactedLines = Array.isArray(payload.historyLines)
-    ? payload.historyLines.map(line => String(line || '').trim().replace(/^-\s*/, '')).filter(Boolean)
-    : []
-  if (!payload.compacted || compactedLines.length !== 2) throw new Error('历史总结压缩失败：返回结构不完整')
-  const nextSummary = formatHistorySummaryLines([...compactedLines, ...retainedLines])
-  state.globalContext = nextSummary
-  state.chapterSummary = nextSummary
-  state.debug = {
-    ...(state.debug || {}),
-    historyCompact: payload.raw || payload,
-    note: `历史总结已压缩：前 10 条变为 ${compactedLines.length} 条，其余 ${retainedLines.length} 条保留。`,
-  }
-  saveState()
-  renderPostprocessSideEffects()
-}
-
 function removeTrailingErrorMessages() {
   while (state.messages[state.messages.length - 1]?.role === 'error') {
     state.messages.pop()
@@ -3261,7 +3783,8 @@ function removeTrailingErrorMessages() {
 
 function setBusy(isBusy) {
   generationBusy = isBusy
-  const postprocessPending = Boolean(getPendingPostprocess())
+  if (!isBusy) refreshPipelineDebugTimer()
+  const postprocessPending = Boolean(getPendingSummary())
   const canContinueGeneration = state.debug?.status === 'error' && Boolean(getRegenerationSnapshot())
   const canRollback = Boolean(normalizeTurnSnapshot(state.lastTurnSnapshot))
   els.sendButton.disabled = isBusy
@@ -3766,13 +4289,12 @@ function persistAndRender() {
   render()
 }
 
-function persistPostprocessResult() {
+function persistSummaryResult() {
   saveState()
-  renderPostprocessSideEffects()
-  maybeCompactHistorySummary()
+  renderSummarySideEffects()
 }
 
-function renderPostprocessSideEffects() {
+function renderSummarySideEffects() {
   renderStatusPanel()
   renderStoryTracking()
   renderOptions()

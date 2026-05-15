@@ -84,6 +84,7 @@
           <div class="library-actions">
             <button id="importStoryAssetButton" class="ghost-button" type="button">导入故事资料</button>
             <button id="initializeStoryAssetButton" class="ghost-button" type="button">初始化选中故事</button>
+            <button id="renameStoryAssetButton" class="ghost-button" type="button">改名</button>
             <button id="deleteStoryAssetButton" class="ghost-button" type="button">删除选中资料</button>
             <button id="refreshStoryLibraryButton" class="ghost-button" type="button">刷新</button>
             <button id="closeStoryLibraryButton" class="ghost-button" type="button">返回游戏</button>
@@ -102,7 +103,11 @@
           <section id="storySettingsForm" class="story-settings-form" aria-label="故事设定编辑">
             <div class="story-settings-head">
               <h4>Program Config JSON</h4>
-              <button id="saveStorySettingsButton" class="ghost-button" type="button">保存 JSON</button>
+              <div class="button-row">
+                <button id="reviseStorySettingsButton" class="ghost-button" type="button">反馈修改</button>
+                <button id="applyStorySettingsToCurrentButton" class="ghost-button" type="button">应用到当前存档</button>
+                <button id="saveStorySettingsButton" class="ghost-button" type="button">保存 JSON</button>
+              </div>
             </div>
             <label>
               <span>直接编辑完整 JSON</span>
@@ -154,8 +159,8 @@
               <select id="pipelineNarratorModel"></select>
             </label>
             <label>
-              <span>反馈/总结</span>
-              <select id="pipelinePostprocessModel"></select>
+              <span>反馈 / 总结</span>
+              <select id="pipelineSummaryModel"></select>
             </label>
             <p class="dialog-note">留空表示跟随当前模型。</p>
             <button id="applyModelSelectionButton" class="primary-button" type="button">确定</button>
@@ -173,7 +178,7 @@
               <span id="apiKeyLabel">API Key</span>
               <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-..." />
             </label>
-            <p id="apiKeyHelp" class="dialog-note">Key 保存在当前浏览器本地。</p>
+            <p id="apiKeyHelp" class="dialog-note">Key 保存在后台本地文件，不回显明文。</p>
             <div class="dialog-actions left-actions">
               <button id="apiKeyButton" class="ghost-button" type="button">保存 Key</button>
               <button id="clearApiKeyButton" class="ghost-button" type="button">清除当前 Key</button>

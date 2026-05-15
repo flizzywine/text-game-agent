@@ -11,21 +11,25 @@
 ```text
 Initializer -> 人物状态 / 世界观 / 开场正文 / 初始选项
 
-主链路：玩家输入 + 最近正文 + 当前状态 + 上轮反馈提醒 + 上轮物理约束 -> Director -> PlanFeedback -> Narrator -> 返回正文和候选项
+主链路：玩家输入 + 最近正文 + `longTermState` + 上轮反馈提醒 + 已完成召回缓存 -> Director -> Feedback -> Narrator -> 返回正文和候选项
                                                                                                       |
                                                                                                       v
-后台链路：PostprocessQueue -> PostprocessSummary
+后台链路：SummaryQueue -> Summary
+
+旁路链路：RecallWorker -> recall-cache.json
 ```
 
 - Initializer：故事导入后的初始化加工，只生成程序需要的初始结构。
 - 用户输入：每轮玩家自由输入，是 Director 和 Narrator 的当前触发点。
-- 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。提供给 Director、PlanFeedback、Narrator；Director 用于判断已发生细节和阶段顺序，PlanFeedback 用于提前发现拖沓和重复，Narrator 用于反重复。
-- 上轮反重复提醒：PlanFeedback 产生本轮整改要求，程序同时保存少量反馈为 `feedbackMemory`，只注入下一轮 Director。
-- 上轮物理约束：Director 每轮接收上一轮 `physicalConstraints`，继承仍成立的纯物理限制，输出本轮新的 `physicalConstraints` 供下一轮使用。
-- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。当前核心字段是 `plotDrive / sceneOutcome / mainPresentation / supportingPresentation / narrativeStyle / physicalConstraints`。不要恢复 `plotGoal`、`plotStep`、`plotFrame`、`writingPlan`、`beat1/beat2/beat3/ending`。
-- PlanFeedback：在 Narrator 前运行，接收世界观、长期总结、最近正文和本轮 Director 计划，输出 `文字细节重复`、`剧情设计重复`、`剧情速度拖沓` 和 `叙事整改要求`；不接收最近 Director 计划，不把旧导演意图当成叙事事实；不维护人物状态，不写正文，不生成候选项。
-- Narrator：按导演计划和 PlanFeedback 写玩家可见正文；不更新状态；生成候选项；可以在 `draftText` 内少量使用 Markdown 强调，前端直接渲染，不再使用 `renderAnnotations` 原文匹配。正文生成后前端定位到最新一轮正文开头，不跳到全文末尾。
-- PostprocessSummary：正文显示后进入独立队列，只看最终正文、玩家输入和当前人物状态，更新本轮事实总结、人物状态字段补丁、人物名单补丁、人物状态补丁；不做反馈，不改正文。
+- 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。Director 只读取最近 1 轮用于连接上下文；Feedback 和 Narrator 读取较完整最近正文，Feedback 用于提前发现拖沓和重复，Narrator 用于承接近处细节和反重复。
+- 上轮反重复提醒：Feedback 产生本轮整改要求，程序同时保存少量反馈为 `feedbackMemory`，只注入下一轮 Director。`feedbackMemory` 属于 L0.5 临时状态，不是 L1 长期事实总结。
+- 物理约束：Director 和 Narrator 只读取 `longTermState.physicalConstraints`，不得更新它；Summary 根据最终正文输出新的 `physicalConstraints`，程序合并回 `longTermState`。
+- 用户反馈：`playerFeedback` 属于 L0.5 人工反馈状态，不是 L2 世界设定，也不是 L1 历史事实；可持续生效，但用户可随时修改。
+- RecallWorker：旁路运行，不阻塞 Director、Narrator 或 Summary。它在正文输出后、Summary 完成后被触发，读取最近上下文、长历史和 `longTermState`，先提出可能会用到的旧知识问题并锁定旧正文轮次，程序加载这些轮次的完整 `story.txt` 正文，再压成问题-答案对，写入 `recall-cache.json`。下一轮 Narrator 只读取已经完成的缓存；缓存没准备好就当作无召回。不写剧情建议，不做一致性检查，不注入完整旧正文。
+- Director：只做本轮计划，输出压缩 JSON；不写正文，不输出推理报告。当前核心字段是 `plotDrive / sceneOutcome / mainPresentation / supportingPresentation / narrativeStyle`。Director 看得最远但最粗，读取世界观、全量 L1 历史总结、`longTermState` 和最近 1 轮 L0；最近 1 轮只用于连接上下文，不用于细节复写；不读远处 L0 原文。不要恢复 `recallTurns`、`plotGoal`、`plotStep`、`plotFrame`、`writingPlan`、`beat1/beat2/beat3/ending`，也不要让 Director 输出 `physicalConstraints`。
+- Feedback：在 Narrator 前运行，接收短世界观、最近正文和本轮 Director 计划，输出 `文字细节重复`、`剧情设计重复`、`剧情速度拖沓` 和 `叙事整改要求`；不接收长期总结、召回 L0 或最近 Director 计划，不把旧导演意图当成叙事事实；不维护人物状态，不写正文，不生成候选项。
+- Narrator：按导演计划和 Feedback 写玩家可见正文；不更新状态；生成候选项；可以在 `draftText` 内少量使用 Markdown 强调，前端直接渲染，不再使用 `renderAnnotations` 原文匹配。正文生成后前端定位到最新一轮正文开头，不跳到全文末尾。
+- Summary：正文显示后进入独立队列，只看玩家输入、最终正文和 `longTermState`，更新本轮事实总结、人物状态、关键道具状态、关键信息和物理约束；总结模块看得最近，只总结本轮实际发生的内容，不把远处旧事实重新写成本轮事实；不做反馈，不改正文。
 - `plotDrive` 是当前唯一剧情推动字段。它同时承担“剧情为什么会动”和“如何推动”的作用。可选值包括：`欲望追求`、`阻力碰撞`、`信息落差`、`关系张力`、`外部压力`、`价值抉择`、`因果回响`、`身份错位`、`危机逼近`、`资源争夺`、`一笔带过`。不要恢复独立 `plotGoal`。
 
 ## 当前状态设计
@@ -51,27 +55,27 @@ Initializer -> 人物状态 / 世界观 / 开场正文 / 初始选项
 - Initializer 输出 `playableCharacters`，开局时用户从重要人物里选择操控谁；`playableCharacters/statusRoster/statusState` 都只写具体人物名，不写“玩家”。
 - 前端必须展示当前操控人物。叙事人称是前端可选配置，默认 `第一人称限知`；切到 `第三人称限知` 时才用人物名/她/他叙述当前操控人物。无论哪种人称，单轮正文不得在“我”和人物名/她/他之间来回切换。
 - 默认 roster 内人物都 active。
-- PostprocessSummary 只输出 `statusSchemaPatch`、`statusRosterPatch`、`statusStatePatch`。
+- Summary 只输出 `turnSummary`、`statusSchemaPatch`、`statusRosterPatch`、`statusStatePatch`、`itemStatePatch`。
 - 前端人物状态栏直接显示 JSON，不格式化成卡片。
 - 不恢复 `statusPanel`、`statusPanelSchema`、`statusSubject`。
 
 ## 反馈提醒设计
 
-PlanFeedback 只保留三个反馈字段，并额外生成本轮 `叙事整改要求`：
+Feedback 只保留三个反馈字段，并额外生成本轮 `叙事整改要求`：
 
 - `文字细节重复`
 - `剧情设计重复`
 - `剧情速度拖沓`
 
-`文字细节重复` 只承担文面、句式、动作、感官词和同类描写的反重复提醒，注入本轮 Narrator，并保存给后续 Director。`剧情设计重复` 只对照最近正文和本轮 Director 计划，提醒 Narrator 本轮避开已经写出来的重复装置；最近 Director 计划不再输入 PlanFeedback，旧导演意图不算事实。`剧情速度拖沓` 检查最近正文和本轮 Director 计划是否继续停留在低价值过渡、寒暄、等待、移动、解释、重复反应、原地对峙，缺少新信息、新压力、新关系变化、场景阶段变化或可行动的新局面；拖沓时提示本轮必须加快剧情速度，使用 `一笔带过` 或直接引入新压力/新信息/新场景阶段，不得继续原场景对峙。
+`文字细节重复` 只承担文面、句式、动作、感官词和同类描写的反重复提醒，注入本轮 Narrator，并保存给后续 Director。`剧情设计重复` 只对照最近正文和本轮 Director 计划，提醒 Narrator 本轮避开已经写出来的重复装置；最近 Director 计划不再输入 Feedback，旧导演意图不算事实。`剧情速度拖沓` 检查最近正文和本轮 Director 计划是否继续停留在低价值过渡、寒暄、等待、移动、解释、重复反应、原地对峙，缺少新信息、新压力、新关系变化、场景阶段变化或可行动的新局面；拖沓时提示本轮必须加快剧情速度，使用 `一笔带过` 或直接引入新压力/新信息/新场景阶段，不得继续原场景对峙。
 
-候选项由 Narrator 生成，因为 Narrator 已经接收 PlanFeedback，能让选项配合本轮整改后的正文。每轮固定三条：延续当前场景但必须产生变化；玩家操控人物主动推动当前场景尽快收束；引入第三方或外部变化来迫使当前场景结束或进入新阶段。剧情拖沓时，三条都必须服务于加速收束，不给继续等待、试探、原地对峙的选项。
+候选项由 Narrator 生成，因为 Narrator 已经接收 Feedback，能让选项配合本轮整改后的正文。每轮固定三条：延续当前场景但必须产生变化；玩家操控人物主动推动当前场景尽快收束；引入第三方或外部变化来迫使当前场景结束或进入新阶段。剧情拖沓时，三条都必须服务于加速收束，不给继续等待、试探、原地对峙的选项。
 
 反馈提醒存入 `feedbackMemory`，只保留 1 轮，最多 6 条，超过后顶掉最早的一条。禁词表直接注入 Narrator，当轮约束正文，不再交给反馈器延迟处理。剧情拖沓的具体加速方向直接写入 `剧情速度拖沓`。不要恢复合并版 `qualityFeedback` 状态字段，也不要恢复 `违背约束`、`节奏不足`、`导演推进不足`、`导演物理违背` 等反馈字段。
 
-当前结论：反馈放在 Narrator 之后会滞后一轮，无法立刻修正拖沓。现在把反馈前移成 PlanFeedback，让它审查 Director 计划后直接注入 Narrator；这样不增加修订轮，也能让本轮正文吸收速度、重复和细节密度提醒。
+当前结论：反馈放在 Narrator 之后会滞后一轮，无法立刻修正拖沓。现在把反馈前移成 Feedback，让它审查 Director 计划后直接注入 Narrator；这样不增加修订轮，也能让本轮正文吸收速度、重复和细节密度提醒。
 
-未来目标：模型速度足够快后，再把质量检查和修订做成每轮必做。当前 PlanFeedback 只做事前审查，不做正文修订；更完整的未来流水线：
+未来目标：模型速度足够快后，再把质量检查和修订做成每轮必做。当前 Feedback 只做事前审查，不做正文修订；更完整的未来流水线：
 
 ```text
 Director -> Narrator -> Critic -> Revision -> Memory
@@ -80,7 +84,7 @@ Director -> Narrator -> Critic -> Revision -> Memory
 - `Critic`：只检查质量，输出可执行质量提醒；重点看导演是否通过 `plotDrive` 推动局面、叙事是否违反物理约束或世界状态、是否重复、太短、太水、文风漂移。
 - `Revision`：每轮默认运行，立即吸收 `Critic` 的提醒，只修正文，不更新状态。
 - `Memory`：只负责长期总结、人物状态补丁、剧情方向骨架更新。
-- Postprocess 这个名字后续可以消失，或拆成 `Critic` / `Memory`。
+- 后续如果速度足够，可以把质量检查和记忆更新拆成 `Critic` / `Memory`。
 
 当前暂时不做；只把它作为速度提升后的下一阶段架构目标。
 
@@ -102,33 +106,52 @@ Director beat 已废弃。当前思路是：长期连贯性由世界观、人物
 - `directorStyle`
 - `narratorStyle`
 
-当前游玩状态只能通过开始新游戏、玩家输入后的 PostprocessSummary、存档读取或明确的状态编辑功能改变。不要恢复 `applyProgramConfigToCurrentStory` 这类同步函数。
+当前游玩状态只能通过开始新游戏、玩家输入后的 Summary、存档读取或明确的状态编辑功能改变。不要恢复 `applyProgramConfigToCurrentStory` 这类同步函数。
 
-后处理异步化已经落地为 PostprocessQueue。正文生成完成后立即返回给玩家，同时把本轮正文放入后台队列：
+后处理异步化已经落地为 SummaryQueue。正文生成完成后立即返回给玩家，同时把本轮正文放入后台队列：
 
 ```text
-主链路：玩家输入 -> Director -> PlanFeedback -> Narrator -> 返回正文和候选项
-后台链路：PostprocessQueue -> PostprocessSummary 更新长期总结/人物状态
+主链路：玩家输入 -> Director -> Feedback -> Narrator -> 返回正文和候选项
+后台链路：SummaryQueue -> Summary 更新长期总结/人物状态
+旁路链路：RecallWorker 更新 recall-cache.json
 ```
 
-- 最近正文作为热记忆同步保存，继续提供给下一轮 Director 和 Narrator。
-- 长期总结和人物状态作为冷记忆异步更新，允许滞后一轮或几轮。
-- Postprocess 失败只停在队列里等待重试，不阻塞玩家继续游戏。
-- 每轮完成后入队一个 postprocess job；后台按顺序消费，每个 job 内部分成 Summary 和 Feedback 两次调用，避免旧总结覆盖新状态。
-- 反馈提醒只持续 1 轮；PlanFeedback 每轮都会重新生成，旧反馈不应长期形成惯性噪音。
+- 最近正文作为热记忆同步保存；最近 1 轮提供给 Director 连接上下文，较完整最近正文继续提供给 Feedback 和 Narrator。
+- L1 每轮事实总结和当前状态作为冷记忆异步更新，允许滞后一轮或几轮。当前状态统一为 `longTermState`，包含 `characterStatus`、`keyItems`、`keyInfo`、`physicalConstraints`；旧字段 `statusState`、`itemState`、`physicalConstraints` 保留为存档兼容和前端同步字段。`planFeedback`、`feedbackMemory`、`playerFeedback` 都是 L0.5，但不并入 `longTermState`。
+- Summary 失败只停在队列里等待重试，不阻塞玩家继续游戏。
+- 每轮完成后入队一个 summary job；后台按顺序消费，避免旧总结覆盖新状态。
+- 反馈提醒只持续 1 轮；Feedback 每轮都会重新生成，旧反馈不应长期形成惯性噪音。
 
-长期总结压缩规则：最近 5 轮不进入历史总结上下文。历史总结达到 20 条时触发压缩，但只压缩第 1-10 条为 2 条摘要；第 11-20 条原样保留。压缩后结构为：`2 条摘要 + 原第 11-20 条`。
+L1 每轮事实索引文件不删除、不覆盖。它保持 `第X轮：总结内容` 的轮次定位。每隔 10 轮，SummaryL2 把对应 10 条 L1 压成一条 `turn-summaries-l2.txt` 里的 L2 区间总结。第 25 轮开始，程序层在 `longHistoricalSummary` 中用 `第1-10轮` L2 替换 1-10 轮 L1；第 35 轮替换 11-20 轮；之后每隔 10 轮推进一次。L1/L2 文件都保留，替换只发生在 prompt 渲染层。RecallWorker 和 Director 读取替换后的长历史；Narrator 只读取短 L1 窗口，默认不看远；最近 5 轮由最近正文承担，不进入旧正文召回范围。
 
 导演粒度粗化是未来实验，不直接写进当前 prompt。目标是减少无意义的小选择：要求每轮至少产生一个比较明显的局面变化或信息状态变化，并允许 Director 代劳玩家的合理连续行动，直到产生新变化再停。但这次直接写入 Director / Narrator 后质量下降，后续要用更小范围 A/B 测试，不要一次性替换当前稳定 prompt。
 
-世界书召回暂时不做。场景模块也已删除，不要恢复。
+旧世界书召回暂时不做。场景模块也已删除，不要恢复。
 
 - 不做实体提名、别名匹配、词条限量、向量检索或独立世界书索引。
-- 不维护 `prompts/scene-modules`，不提供场景模块 UI，不让 PostprocessFeedback 选择 `selectedSceneModules`。
+- 不维护 `prompts/scene-modules`，不提供场景模块 UI，不让 Feedback 选择 `selectedSceneModules`。
 
-情节库和高级导演是未来路线图，当前不做。思路是从完整小说中抽取可复用的情节单元，形成情节库，再用类似 skill 的机制按当前局面动态加载少量剧情参考，引导后续剧情推进。它提供事件结构、冲突推进、角色关系变化和阶段性转折。
+召回已经从 Director 和前台主链路拆出。当前实现是旁路 `RecallWorker`：它读取最近上下文、长历史和 `longTermState`，先提出可能会用到的旧知识问题，并从 L1/L2 历史里锁定需要回看的旧轮次；程序加载这些轮次的完整 `story.txt` 正文，再让 RecallQA 根据完整轮次输出问题-答案对，写入 `recall-cache.json`。下一轮 Narrator 只读取已完成缓存，不等待召回现场运行。最近 5 轮不进入旧正文召回范围。每次 RecallWorker 完成或报错都要写入 `recall-worker-events.jsonl`，前端全局流水线轮询展示这些 JSON；刷新页面会先读取已完成事件，当前轮缺事件时会请求后端重新触发 RecallWorker，避免刷新或服务器重启后断连。
 
-未来高级导演模块：初始化阶段预先生成剧情库，每个剧情单元包含准入条件、剧情大纲正文、结束条件。后处理判断当前是否需要新的剧情大纲；需要时调用高级导演查阅剧情库，选出或生成下一个剧情大纲，再注入低级 Director。低级 Director 只负责把高级剧情大纲落到本轮动态叙事计划。
+多次召回是否必要是未来待办，当前不实现。某些旧细节可能需要多轮递进：第一轮只发现缺历史证据，第二轮根据新问题扩大检索，后续再按人物、地点、物品、承诺、伤势、关系变化或伏笔继续追查。暂时保持一次 RecallWorker，先观察命中质量；未来再评估是否支持连续召回、召回查询改写和召回结果去重，避免一次性塞入过多上下文。
+
+如果轮数增长到 L1 也过长，再考虑三层记忆和两次召回：先在更高层粗召回候选时间段或章节，再用 L1 精召回具体 L0 轮次。这个方案复杂度明显更高，当前不做，只作为远期待办。
+
+关键道具状态已进入当前实现。人物状态只能解决“谁在哪里、姿势如何、外显状态如何”，关键道具也会造成长期一致性问题，例如手机、信件、钥匙、武器、药物、录音设备在 A/B/C 之间转移后，后续正文容易混乱。`longTermState.keyItems` 只追踪少量关键道具的持有人和位置；不要扩展成完整物品系统，也不要追踪普通背景道具。
+
+状态层裁剪是未来待办，当前不实现。后续可以把 L0.5 的人物状态和物品状态按当前场景裁剪：只加载在场人物、当前交互相关人物、当前场景可触达或剧情相关的关键道具。目标是减少上下文，而不是建立完整场景索引；不要引入复杂实体检索或向量检索。
+
+`longTermState.keyInfo` 关键信息状态已进入当前实现。它属于 L0.5，不是 L1；由 Summary 自行维护，用来保存跨轮持续重要但不适合写进人物状态、物品状态或逐轮 L1 的信息，例如当前隐含目标、关键误会、关系暗线、场景内未解决的重要事实。它应随正文变化增删改，避免无限增长。
+
+Prompt 去重精简是未来待办，当前不实现。现在各模块 prompt 里混入了较多重复约束，后续应系统审查 `prompts/*.md`，合并重复规则、删除过时约束、把跨模块共识沉到更短的共享原则里。目标是减少上下文噪音，不改变当前流水线行为；精简前先保存当前可用版本，精简后跑契约测试和实际生成对照。
+
+人物称呼视角是未来待办，当前不实现。同一角色需要区分内部标准名和当前操控人物视角下的称谓，例如角色名是“由依子”，但当前操控人物应称她为“妈妈”，正文和对话不应机械使用标准名。
+
+情节库和高级导演是未来路线图，当前不做。高级导演定位已经明确：它接在当前 Director 前面，看得比 Director 更远、更粗，只负责宏观剧情方向，不负责本轮细节。未来主链路可以是 `HighLevelDirector -> Director -> Feedback -> Narrator`，召回继续作为旁路缓存。
+
+未来高级导演模块：读取更远的 L1/L2、少量宏观 L0.5 状态，以及可选剧情库；判断当前处于哪个长期阶段、是否需要切换剧情大段、哪条关系线或冲突线应该推进、是否需要引入新的剧情压力。它不读取 L0 原文，不写正文，不输出细节 beat，只给低级 Director 一个宏观方向。低级 Director 继续负责把这个方向落成本轮 `plotDrive`、`sceneOutcome`、呈现方式和叙事风格；旧 L0 由 RecallWorker 旁路预取给 Narrator。
+
+剧情引导是未来待办，当前不做。用户可写入希望剧情靠近的方向，作为一个可修改的软约束输入给 Director，例如关系修复、揭露阴谋、离开当前场景、推进某条人物线。它不是玩家本轮输入，也不是硬性剧情目标；作用是防止剧情长期滑向用户不想看的方向，让导演在每轮动态计划中逐步靠拢。
 
 当前不要实现抽取器、情节索引、向量检索、剧情召回接口、高级导演调用链，也不要让 Director 直接输出情节库条目；先保留为后续剧情驱动能力的路线图。
 
@@ -139,8 +162,8 @@ Prompt 文件直接在 `prompts/` 上层：
 - `initializer.md`
 - `director.md`
 - `narrator.md`
-- `postprocess-summary.md`
-- `postprocess-feedback.md`
+- `summary.md`
+- `feedback.md`
 
 风格绑定在故事配置 JSON 里：
 
@@ -154,11 +177,13 @@ Prompt 文件直接在 `prompts/` 上层：
 - `prompts/导演风格/*.md`
 - `prompts/叙事风格/*.md`
 
-输入变量用 `{{变量名}}`。变量顺序按稳定性排序：越稳定、越不需要每轮重新理解的内容越靠前；当前玩家输入和最终正文靠后。Postprocess 必须接收世界观，因为合理性判断依赖世界观。
+输入变量用 `{{变量名}}`。变量顺序按稳定性排序：越稳定、越不需要每轮重新理解的内容越靠前；当前玩家输入和最终正文靠后。世界观很短但信息密度高，可以作为短 L2 导向给 Narrator、Feedback、Summary；Summary 仍不接收长历史或召回 L0，只看本轮输入、最终正文、当前状态和短世界观。
 
 运行时只维护根目录 `prompts/*.md` 这一份 prompt。不要恢复 `基准` / `繁花` profile 目录、`active-profile.txt`、prompt 版本切换 API 或前端选择器。
 
 所有实际 LLM 请求都不发送 `system` role。Prompt 模板中的 `# System Message` 段会并入同一条 `user` 消息，避免不同 profile 在 role 层面产生不可控差异。
+
+Hard Rule 删除是未来待办，当前不实现。用户观察到 `prompts/hard-rule.md` 效果可能不明显，后续应先保存当前可用版本，再删除 hard rule 注入、删除/改写对应 prompt 契约测试，最后验证生成质量和内容拦截表现。不要在未保存版本的情况下直接删。
 
 ## 模型策略
 
@@ -168,7 +193,7 @@ Prompt 文件直接在 `prompts/` 上层：
 - 新增供应商时先扩展模型目录和 provider 配置，不要散落硬编码分支。
 - API Key 按供应商保存；Key 只保存在浏览器本地或本机 `.env.local`，不提交到 Git。
 
-模型管理默认是一个“当前模型”打完整条流水线。允许用户给 Initializer / Director / Narrator / Postprocess 单独覆盖模型；留空表示跟随当前模型。不要暗中把某个阶段切到 Pro。
+模型管理默认是一个“当前模型”打完整条流水线。允许用户给 Initializer / Director / Narrator / Summary/Feedback 单独覆盖模型；留空表示跟随当前模型。不要暗中把某个阶段切到 Pro。
 
 模型管理同时承载叙事人称选择：`第一人称限知` / `第三人称限知`。这是写作视角，不是世界内人物；不要把它写入人物状态。
 
@@ -178,9 +203,17 @@ Prompt 文件直接在 `prompts/` 上层：
 
 当前结论：DeepSeek v4 flash + 单一 prompt 是默认策略。除非重新实测，不要恢复“把繁花 hard rule 放入 system”或“弱 system + 强 user”的旧规避方案。当前统一 user-only 输入，减少 role 差异带来的排查成本。
 
+## 当前待办
+
+继续未完成的阶段断点需要补齐。当前实现主要复用已完成的 Director 计划，Feedback、Narrator、Summary、RecallWorker 的中间结果没有完整断点缓存。后续应做成按阶段恢复：已经完成的阶段可见保存，刷新、重启或失败后从下一个未完成阶段继续。
+
+这个断点缓存只用于同一轮故障恢复，不是隐藏 LLM 结果缓存，不做跨轮命中复用，不跳过正常新一轮调用。保存内容必须能在全局流水线或调试状态中看到，便于排查。
+
+前端右侧“上轮反重复提醒”展示需要删除。`feedbackMemory` 仍作为内部状态注入下一轮 Director，但不应常驻显示在右侧栏，避免挤占人物状态、关键道具、关键信息等更重要的排查空间。
+
 ## 不要恢复
 
-- Director / Narrator / Postprocess 缓存。
+- Director / Narrator / Summary/Feedback 缓存。
 - 下一轮预热。
 - `director-prewarm`、`prewarm-cancel` 接口。
 - 任何隐藏的 LLM 结果缓存、命中复用、后台预取或失败 fallback。省下的十几秒不值得牺牲排查确定性；每轮都应重新调用模型，并把请求、返回和错误落到可检查日志。

@@ -422,23 +422,16 @@ button:disabled {
   line-height: 1.25;
 }
 
-.opening-worldview,
-.opening-text {
+.opening-section {
   display: grid;
   gap: 6px;
   margin-top: 10px;
 }
 
-.opening-worldview strong,
-.opening-text strong {
+.opening-section > strong {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12px;
-}
-
-.opening-worldview p,
-.opening-text p {
-  margin: 0;
 }
 
 .option-tray {
