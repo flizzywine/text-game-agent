@@ -31,7 +31,7 @@ const pipelineStageLabels = {
 }
 const fallbackGenerationPipeline = {
   mode: 'director+feedback+narrator+summary-queued+recall-worker',
-  note: 'Director 生成计划；Feedback 审查导演计划；Narrator 输出正文和候选项；Summary 后台更新总结和状态；RecallWorker 旁路预取旧知识问答。',
+  note: 'Director 生成计划；Feedback 审查导演计划；Narrator 输出正文和候选项；Summary 后台更新总结和状态；RecallWorker 旁路选择旧轮次并预取最多两轮正文。',
   stages: [
     { stage: 'director', label: 'Director' },
     { stage: 'planFeedback', label: 'Feedback' },
@@ -1254,12 +1254,32 @@ function renderDebug() {
     planFeedback: debug.planFeedback,
     narrator: debug.narrator,
     postprocessSummary: debug.postprocessSummary,
-    recallWorker: debug.recallWorkerEvents,
+    recallWorker: normalizeRecallWorkerEventsForDisplay(debug.recallWorkerEvents),
   }
   if (Object.values(payload).some(Boolean)) {
     lines.push('', 'stages:', baselineLogText(JSON.stringify(payload, null, 2)))
   }
   els.debugOutput.textContent = lines.join('\n')
+}
+
+function normalizeRecallWorkerEventsForDisplay(events) {
+  if (!Array.isArray(events)) return events
+  return events.map(event => ({
+    ...event,
+    output: normalizeRecallWorkerOutputForDisplay(event?.output),
+  }))
+}
+
+function normalizeRecallWorkerOutputForDisplay(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return output
+  const { questions, qa, ...rest } = output
+  const normalized = { ...rest }
+  if (Array.isArray(output.turnRequests)) {
+    normalized.turnRequests = output.turnRequests
+  } else if (Array.isArray(questions)) {
+    normalized.turnRequests = questions
+  }
+  return normalized
 }
 
 function hasRunningPipelineStage() {
@@ -1291,6 +1311,9 @@ function stopPipelineDebugTimer() {
 
 function baselineLogText(value) {
   return String(value ?? '')
+    .replaceAll('"questions"', '"turnRequests"')
+    .replace(/,\s*"qa"\s*:\s*\[\]/g, '')
+    .replace(/\{\s*"qa"\s*:\s*\[\]\s*,\s*/g, '{')
     .replaceAll('花色观察', '人物状态')
     .replaceAll('花色特性', '状态字段')
     .replaceAll('花语计划', '导演计划')
@@ -3592,10 +3615,10 @@ function applyRecallWorkerEvents(events) {
   row.logs = Array.isArray(row.logs) ? row.logs : []
   for (const event of fresh) {
     const basis = event.basis || 'recall'
-    row.logs.push(`${basis}｜${JSON.stringify(event.output || {})}`)
+    row.logs.push(`${basis}｜${JSON.stringify(normalizeRecallWorkerOutputForDisplay(event.output) || {})}`)
   }
   row.logs = row.logs.slice(-8)
-  row.message = '旁路召回已完成，JSON 已写入下方 stages。'
+  row.message = '旁路召回已完成，旧正文轮次结果已写入下方 stages。'
   row.updatedAt = fresh[fresh.length - 1].createdAt || new Date().toISOString()
   row.updatedAtMs = Date.parse(row.updatedAt) || Date.now()
   row.endedAtMs = row.updatedAtMs

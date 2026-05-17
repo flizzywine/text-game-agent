@@ -7,6 +7,7 @@ import {
   appendTurnSummary,
   appendTurnSummaryL2,
   buildRecallEvidenceBlock,
+  buildRecallSnippetBlock,
   extractRecallKeywords,
   rawTurnStoryTextPath,
   readStoryTurnsByIndex,
@@ -141,6 +142,30 @@ describe('raw turn recall', () => {
     expect(results[0].text).toContain('第2轮 玩家输入')
     expect(results[0].text).toContain('第2轮 正文')
     expect(buildRecallEvidenceBlock(results)).toContain('story.txt#第2轮:')
+  })
+
+  it('renders at most two old L0 turns as recall snippets for injection', () => {
+    const file = makeTempFile()
+    for (const turnIndex of [2, 4, 6]) {
+      appendRawTurnLog(file, {
+        storyId: 'story-a',
+        storyName: '测试故事',
+        turnIndex,
+        playerInput: `我追问第${turnIndex}轮的信件。`,
+        finalText: `第${turnIndex}轮旧正文里写到信件、钥匙和母亲的细节。`,
+        createdAt: '2026-05-15T00:00:00.000Z',
+      })
+    }
+
+    const turns = readStoryTurnsByIndex(file, [2, 4, 6])
+    const block = buildRecallSnippetBlock(turns)
+
+    expect(block).toContain('story.txt#第2轮')
+    expect(block).toContain('story.txt#第4轮')
+    expect(block).not.toContain('story.txt#第6轮')
+    expect(block).toContain('旧正文摘录')
+    expect(block).toContain('第2轮 玩家输入')
+    expect(block).toContain('第4轮 正文')
   })
 
   it('keeps L1 and L2 files intact while replacing old L1 blocks only for long-history prompt rendering', () => {

@@ -32,6 +32,7 @@ import {
   readTurnSummaries,
   readTurnSummaryL2,
   readStoryTurnsByIndex,
+  buildRecallSnippetBlock,
   renderHistoricalSummariesWithL2,
   renderStoryTextEntry,
   renderTurnSummariesFile,
@@ -294,7 +295,7 @@ const generationPipeline: {
   stages: Array<{ stage: RuntimePipelineStage; label: string }>
 } = {
   mode: 'director+feedback+narrator+summary-queued+recall-worker',
-  note: 'Director 生成计划；Feedback 审查导演计划；Narrator 输出正文和候选项；Summary 后台更新总结和状态；RecallWorker 旁路预取旧知识问答。',
+  note: 'Director 生成计划；Feedback 审查导演计划；Narrator 输出正文和候选项；Summary 后台更新总结和状态；RecallWorker 旁路选择旧轮次并预取最多两轮正文。',
   stages: [
     { stage: 'director', label: 'Director' },
     { stage: 'planFeedback', label: 'Feedback' },
@@ -2791,10 +2792,10 @@ interface RecallQuestion {
   turnIndexes: number[]
 }
 
-interface RecallQa {
-  question: string
-  answer: string
-  sources: string[]
+interface RecallSnippet {
+  source: string
+  turnIndex: number
+  text: string
 }
 
 interface RecallCache {
@@ -2802,7 +2803,7 @@ interface RecallCache {
   createdAtTurn: number
   basis: string
   questions: RecallQuestion[]
-  qa: RecallQa[]
+  snippets: RecallSnippet[]
   resultCount: number
 }
 
@@ -2818,12 +2819,15 @@ const recallWorkerInFlight = new Set<string>()
 
 function normalizeRecallQuestions(value: unknown): RecallQuestion[] {
   const record = compactRecord(value)
+  const directTurnIndexes = normalizeRecallTurnIndexes(firstPresent(record, ['turnIndexes', 'turns', 'turnIndex', '轮次', '回看轮次']))
+  if (directTurnIndexes.length) {
+    return [{ question: '', turnIndexes: directTurnIndexes }]
+  }
   const source = Array.isArray(record.questions) ? record.questions : []
   return source
     .map(item => {
       const itemRecord = compactRecord(item)
       const question = compactText(itemRecord.question || itemRecord.问题, 160)
-      if (!question) return null
       const turnIndexes = normalizeRecallTurnIndexes(firstPresent(itemRecord, ['turnIndexes', 'turns', 'turnIndex', '轮次', '回看轮次']))
       if (!turnIndexes.length) return null
       return { question, turnIndexes }
@@ -2844,25 +2848,28 @@ function normalizeRecallTurnIndexes(value: unknown): number[] {
   return Array.from(new Set(indexes)).slice(0, 2)
 }
 
-function normalizeRecallQa(value: unknown): RecallQa[] {
+function normalizeRecallSnippets(value: unknown): RecallSnippet[] {
   const record = compactRecord(value)
-  const source = Array.isArray(record.qa) ? record.qa : []
+  const source = Array.isArray(record.snippets) ? record.snippets : []
   return source
     .map(item => {
       const itemRecord = compactRecord(item)
-      const question = compactText(itemRecord.question || itemRecord.问题, 160)
-      const answer = compactText(itemRecord.answer || itemRecord.答案, 240)
-      const sources = compactStringArray(itemRecord.sources || itemRecord.source || itemRecord.来源, 4, 80)
-      if (!question || !answer) return null
-      return { question, answer, sources }
+      const sourceRef = compactText(itemRecord.source || itemRecord.来源, 100)
+      const turnIndex = Math.floor(Number(itemRecord.turnIndex ?? itemRecord.轮次))
+      const text = String(itemRecord.text || itemRecord.正文 || '').trim()
+      if (!sourceRef || !Number.isFinite(turnIndex) || !text) return null
+      return { source: sourceRef, turnIndex, text: compactText(text, 1800) }
     })
-    .filter((item): item is RecallQa => Boolean(item))
-    .slice(0, 3)
+    .filter((item): item is RecallSnippet => Boolean(item))
+    .slice(0, 2)
 }
 
-function renderRecallQaForPrompt(value: RecallQa[]): string {
+function renderRecallSnippetsForPrompt(value: RecallSnippet[]): string {
   if (!value.length) return '（无）'
-  return JSON.stringify({ qa: value })
+  return value.map(item => [
+    `## 旧正文摘录：${item.source}`,
+    item.text,
+  ].join('\n')).join('\n\n')
 }
 
 function recallCachePath(rawFile: string): string {
@@ -2914,14 +2921,14 @@ function normalizeRecallCache(value: unknown): RecallCache | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const createdAtTurn = Math.floor(Number(record.createdAtTurn))
-  const qa = normalizeRecallQa(record)
-  if (!Number.isFinite(createdAtTurn) || !qa.length) return null
+  const snippets = normalizeRecallSnippets(record)
+  if (!Number.isFinite(createdAtTurn) || !snippets.length) return null
   return {
     createdAt: String(record.createdAt || ''),
     createdAtTurn,
     basis: String(record.basis || ''),
     questions: normalizeRecallQuestions(record),
-    qa,
+    snippets,
     resultCount: Math.max(0, Math.floor(Number(record.resultCount || 0))),
   }
 }
@@ -2938,20 +2945,8 @@ function readRecallCacheForPrompt(input: PipelineContext, currentTurnIndex: numb
   if (!cache || cache.createdAtTurn >= currentTurnIndex) return { cache: null, evidence: '（无）' }
   return {
     cache,
-    evidence: renderRecallQaForPrompt(cache.qa),
+    evidence: renderRecallSnippetsForPrompt(cache.snippets),
   }
-}
-
-function renderRecallSearchEvidence(questions: RecallQuestion[], results: RecallResult[]): string {
-  if (!questions.length || !results.length) return '（无）'
-  return JSON.stringify({
-    questions,
-    evidence: results.map(result => ({
-      source: result.source,
-      turnIndex: result.turnIndex,
-      text: compactText(result.text, 2600),
-    })),
-  })
 }
 
 function directorPlanSource(value: Record<string, unknown>): Record<string, unknown> {
@@ -3171,7 +3166,7 @@ function buildRecallQaPromptPayload(input: GenerateRequest, context: ReturnType<
   }
 }
 
-async function runRecallQa(
+async function runRecallSnippets(
   input: GenerateRequest,
   context: ReturnType<typeof buildRuntimeBlocks>,
   options: {
@@ -3180,21 +3175,21 @@ async function runRecallQa(
     currentTurnIndex: number
   },
   emit: (event: PipelineEvent) => void,
-): Promise<{ questions: RecallQuestion[]; qa: RecallQa[]; results: RecallResult[]; evidence: string; output: Record<string, unknown> }> {
-  emit({ type: 'stage_start', stage: 'recall', label: 'RecallQA', message: '召回：分析最近上下文，提出需要检索旧正文的问题。' })
+): Promise<{ questions: RecallQuestion[]; snippets: RecallSnippet[]; results: RecallResult[]; evidence: string; output: Record<string, unknown> }> {
+  emit({ type: 'stage_start', stage: 'recall', label: 'Recall', message: '召回：根据压缩历史决定最多两轮旧正文。' })
   const questionPayload = buildRecallQaPromptPayload(input, context, {
     playerInput: options.playerInput,
   })
-  const questionResult = await callModelWithPublicTrace('recall', 'RecallQA', promptMessages(questionPayload.system, questionPayload.user), { temperature: 0.2, apiKey: pipelineApiKeyForModel(input, options.model), model: options.model, maxTokens: 1200, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
-    '公开日志：正在判断本轮是否需要查旧正文。',
-    '公开日志：正在把历史需要转成具体问题。',
-    '公开日志：RecallQA 仍在等待模型返回问题列表。',
+  const questionResult = await callModelWithPublicTrace('recall', 'Recall', promptMessages(questionPayload.system, questionPayload.user), { temperature: 0.2, apiKey: pipelineApiKeyForModel(input, options.model), model: options.model, maxTokens: 1200, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
+    '公开日志：正在判断是否需要翻旧正文。',
+    '公开日志：正在从压缩历史里选择最多两轮旧正文。',
+    '公开日志：Recall 仍在等待模型返回轮次列表。',
   ])
   const questions = normalizeRecallQuestions(questionResult.json)
   if (!questions.length) {
-    const json = { questions: [], qa: [] }
-    emit({ type: 'stage_result', stage: 'recall', label: 'RecallQA', message: '召回完成：本轮不需要检索旧正文。', json })
-    return { questions: [], qa: [], results: [], evidence: '（无）', output: json }
+    const json = { turnRequests: [], snippets: [] }
+    emit({ type: 'stage_result', stage: 'recall', label: 'Recall', message: '召回完成：本轮不需要注入旧正文。', json })
+    return { questions: [], snippets: [], results: [], evidence: '（无）', output: json }
   }
 
   const cutoff = options.currentTurnIndex - 5
@@ -3202,30 +3197,14 @@ async function runRecallQa(
     .filter(turnIndex => turnIndex < cutoff)
     .slice(0, 2)
   const results = readStoryTurnsByIndex(storyRawTurnLogFile(input.storyId, input.storyName), turnIndexes)
-  if (!results.length) {
-    const qa = questions.map(question => ({
-      question: question.question,
-      answer: '未找到明确答案',
-      sources: [],
-    }))
-    const json = { questions, qa, loadedTurnIndexes: turnIndexes, resultCount: 0 }
-    emit({ type: 'stage_result', stage: 'recall', label: 'RecallQA', message: '召回完成：已提出问题，但原文未命中。', json })
-    return { questions, qa, results: [], evidence: renderRecallQaForPrompt(qa), output: json }
-  }
-
-  const answerPayload = buildRecallQaPromptPayload(input, context, {
-    playerInput: options.playerInput,
-    searchEvidence: renderRecallSearchEvidence(questions, results),
-  })
-  const answerResult = await callModelWithPublicTrace('recall', 'RecallQA', promptMessages(answerPayload.system, answerPayload.user), { temperature: 0.2, apiKey: pipelineApiKeyForModel(input, options.model), model: options.model, maxTokens: 1500, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
-    '公开日志：正在根据 story.txt 完整轮次回答问题。',
-    '公开日志：正在压缩成问题-答案对。',
-    '公开日志：RecallQA 仍在等待模型返回问答。',
-  ])
-  const qa = normalizeRecallQa(answerResult.json)
-  const json = { questions, qa, loadedTurnIndexes: turnIndexes, resultCount: results.length }
-  emit({ type: 'stage_result', stage: 'recall', label: 'RecallQA', message: '召回完成：问答对已注入后续生成。', json })
-  return { questions, qa, results, evidence: renderRecallQaForPrompt(qa), output: json }
+  const snippets = results.slice(0, 2).map(result => ({
+    source: result.source,
+    turnIndex: result.turnIndex,
+    text: compactText(result.text, 1800),
+  }))
+  const json = { turnRequests: questions, snippets, loadedTurnIndexes: turnIndexes, resultCount: results.length }
+  emit({ type: 'stage_result', stage: 'recall', label: 'Recall', message: snippets.length ? '召回完成：旧正文摘录已准备给后续 Director/Narrator。' : '召回完成：已选择轮次，但原文未命中。', json })
+  return { questions, snippets, results, evidence: buildRecallSnippetBlock(results), output: json }
 }
 
 function appendCurrentTurnForRecall(recentTurns: ConversationItem[] | undefined, playerInput: string, finalText: string): ConversationItem[] {
@@ -3260,7 +3239,7 @@ function triggerRecallWorker(
         turnIndex: options.currentTurnIndex,
       }
       const context = buildRuntimeBlocks(workerInput)
-      const result = await runRecallQa(workerInput, context, {
+      const result = await runRecallSnippets(workerInput, context, {
         model: options.model,
         playerInput: options.playerInput,
         currentTurnIndex: options.currentTurnIndex,
@@ -3270,13 +3249,13 @@ function triggerRecallWorker(
         basis: options.basis,
         output: result.output,
       })
-      if (!result.qa.length) return
+      if (!result.snippets.length) return
       writeRecallCache(workerInput, {
         createdAt: new Date().toISOString(),
         createdAtTurn: options.currentTurnIndex,
         basis: options.basis,
         questions: result.questions,
-        qa: result.qa,
+        snippets: result.snippets,
         resultCount: result.results.length,
       })
     } catch (error) {
@@ -3284,8 +3263,8 @@ function triggerRecallWorker(
         createdAtTurn: options.currentTurnIndex,
         basis: options.basis,
         output: {
-          questions: [],
-          qa: [],
+          turnRequests: [],
+          snippets: [],
           error: error instanceof Error ? error.message : String(error),
         },
       })
@@ -3583,8 +3562,8 @@ async function generate(
       source: cachedRecall.cache ? 'cache' : 'none',
       createdAtTurn: cachedRecall.cache?.createdAtTurn ?? null,
       basis: cachedRecall.cache?.basis || '',
-      questions: cachedRecall.cache?.questions || [],
-      qa: cachedRecall.cache?.qa || [],
+      turnRequests: cachedRecall.cache?.questions || [],
+      snippets: cachedRecall.cache?.snippets || [],
       resultCount: cachedRecall.cache?.resultCount || 0,
     },
     playerOptions: normalizePlayerOptions(narrator.json.playerOptions),

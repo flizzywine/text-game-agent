@@ -257,6 +257,17 @@ export function buildRecallEvidenceBlock(results: RecallResult[]): string {
   }).join('\n')
 }
 
+export function buildRecallSnippetBlock(results: RecallResult[], maxTurns = 2, maxCharsPerTurn = 1800): string {
+  const picked = results.slice(0, Math.max(0, Math.floor(maxTurns)))
+  if (!picked.length) return '（无）'
+  return picked.map(result => {
+    return [
+      `## 旧正文摘录：${result.source}`,
+      compactRecallText(result.text, maxCharsPerTurn),
+    ].join('\n')
+  }).join('\n\n')
+}
+
 function escapeExtendedRegex(value: string): string {
   return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
 }
