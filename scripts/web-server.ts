@@ -81,7 +81,6 @@ interface PipelineContext {
   storyName?: string
   globalContext?: string
   storyContext?: string
-  playerFeedback?: string
   controlledCharacterName?: string
   feedbackText?: string
   planFeedback?: unknown
@@ -892,34 +891,7 @@ function unwrapSaveStateEnvelope(value: unknown): unknown {
 }
 
 function mergeSaveStateForWrite(existing: unknown, incoming: unknown): unknown {
-  if (!isPlainRecord(existing) || !isPlainRecord(incoming)) return incoming
-  if (!Array.isArray(existing.stories) || !Array.isArray(incoming.stories)) return incoming
-  const existingById = new Map<string, Record<string, unknown>>()
-  for (const story of existing.stories) {
-    if (!isPlainRecord(story)) continue
-    const id = String(story.id || '')
-    if (id) existingById.set(id, story)
-  }
-  return {
-    ...incoming,
-    stories: incoming.stories.map(story => {
-      const id = isPlainRecord(story) ? String(story.id || '') : ''
-      return mergeStoryForWrite(existingById.get(id), story)
-    }),
-  }
-}
-
-function mergeStoryForWrite(existing: Record<string, unknown> | undefined, incoming: unknown): unknown {
-  if (!existing || !isPlainRecord(incoming)) return incoming
-  const existingFeedbackAt = Date.parse(String(existing.playerFeedbackUpdatedAt || existing.updatedAt || ''))
-  const incomingFeedbackAt = Date.parse(String(incoming.playerFeedbackUpdatedAt || incoming.updatedAt || ''))
-  if (Number.isFinite(existingFeedbackAt) && Number.isFinite(incomingFeedbackAt) && existingFeedbackAt > incomingFeedbackAt) {
-    return {
-      ...incoming,
-      playerFeedback: String(existing.playerFeedback || ''),
-      playerFeedbackUpdatedAt: String(existing.playerFeedbackUpdatedAt || existing.updatedAt || ''),
-    }
-  }
+  void existing
   return incoming
 }
 
@@ -3483,7 +3455,6 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number,
   directorUser: string
 } {
   const feedbackMemory = String(input.feedbackText || '').trim()
-  const playerFeedback = String(input.playerFeedback || '').trim() || '（无）'
   const directorStyle = String(input.directorStyle || '').trim() || '（无）'
   const turnIndex = normalizeTurnIndex(input.turnIndex, input.recentTurns)
   const playerInput = input.playerInput.trim()
@@ -3496,7 +3467,6 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number,
     recallEvidence: String(input.recallEvidence || '').trim() || '（无）',
     feedbackMemory,
     recentTurns: context.recentTurns,
-    playerFeedback,
     directorStyle,
     playerInput,
   })
@@ -3666,7 +3636,6 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
   narratorUser: string
 } {
   const narratorStyle = String(input.narratorStyle || '').trim() || '（无）'
-  const playerFeedback = String(input.playerFeedback || '').trim() || '（无）'
   const playerInput = options.playerInput || input.playerInput.trim()
   const narratorMessages = renderPromptMessagePair('narrator.md', {
     storyContext: options.context.storyContext || '（无）',
@@ -3677,7 +3646,6 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
     planFeedback: renderPlanFeedbackForNarrator(options.planFeedback),
     recentTurns: options.context.recentTurns,
     narratorStyle,
-    playerFeedback,
     playerInput,
   })
   const narratorSystem = narratorMessages.system
@@ -3707,7 +3675,6 @@ function buildOptionStrategistPromptPayload(input: GenerateRequest, options: {
 } {
   const optionMessages = renderPromptMessagePair('option-strategist.md', {
     storyContext: options.context.storyContext || '（无）',
-    playerFeedback: String(input.playerFeedback || '').trim() || '（无）',
     directorStyle: String(input.directorStyle || '').trim() || '（无）',
     narratorStyle: String(input.narratorStyle || '').trim() || '（无）',
     longHistoricalSummary: options.context.longHistoricalSummary || '（无）',

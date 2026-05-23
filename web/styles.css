@@ -144,12 +144,6 @@ button:disabled {
   width: 170px;
 }
 
-.feedback-entry-button.active {
-  border-color: var(--red);
-  color: var(--red);
-  background: rgba(166, 55, 45, 0.08);
-}
-
 #modelSelect {
   width: 150px;
 }
@@ -668,14 +662,6 @@ button:disabled {
 
 .wide-dialog {
   width: min(860px, calc(100vw - 28px));
-}
-
-.feedback-dialog {
-  width: min(520px, calc(100vw - 28px));
-}
-
-.feedback-dialog textarea {
-  min-height: 180px;
 }
 
 .app-dialog::backdrop {

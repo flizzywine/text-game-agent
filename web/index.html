@@ -20,7 +20,6 @@
             <button id="newStoryButton" class="ghost-button" type="button">开始新游戏</button>
             <button id="saveArchiveButton" class="ghost-button" type="button">保存游戏</button>
             <button id="loadArchiveButton" class="ghost-button" type="button">读取存档</button>
-            <button id="playerFeedbackButton" class="ghost-button feedback-entry-button" type="button">用户反馈</button>
             <button id="modelManagementButton" class="ghost-button" type="button">模型管理</button>
           </div>
         </div>
@@ -220,18 +219,6 @@
         <div id="saveSlotsList" class="save-slot-list"></div>
         <div class="dialog-actions">
           <button value="cancel" type="button" id="closeSaveSlotsButton" class="ghost-button">关闭</button>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="playerFeedbackDialog" class="app-dialog feedback-dialog">
-      <form method="dialog" id="playerFeedbackForm">
-        <h3>用户反馈</h3>
-        <p class="dialog-note">这条反馈会保存在当前游戏里，持续影响后续生成；清空后停止。</p>
-        <textarea id="playerFeedbackInput" rows="7" placeholder="写下你对剧情、文风、节奏或角色表现的不满。"></textarea>
-        <div class="dialog-actions">
-          <button id="clearPlayerFeedbackButton" class="ghost-button" type="button">清空</button>
-          <button id="closePlayerFeedbackButton" type="submit">确定</button>
         </div>
       </form>
     </dialog>

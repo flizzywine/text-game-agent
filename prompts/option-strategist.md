@@ -5,9 +5,6 @@
 ## 世界观
 {{storyContext}}
 
-## 用户反馈
-{{playerFeedback}}
-
 ## 导演风格
 {{directorStyle}}
 

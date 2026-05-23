@@ -24,7 +24,6 @@ Initializer -> 人物状态 / 世界观 / 开场正文 / 初始选项
 - 最近正文：保留第 0 轮和最近 5 轮交互；第 0 轮会随着轮数推进被挤掉。Director 读取最近正文只做场景审查：判断是否拖沓、重复、已经兑现，不得被文面惯性牵引成原地续写。Narrator 读取较完整最近正文，用于承接近处细节和反重复。
 - 上轮反重复提醒：Director 内置审查产生整改字段，程序保存少量反馈为 `feedbackMemory`，只注入下一轮 Director。`feedbackMemory` 属于 L0.5 临时状态，不是 L1 长期事实总结。
 - 物理约束：Director 和 Narrator 只读取 `longTermState.physicalConstraints`，不得更新它；Summary 根据最终正文输出新的 `physicalConstraints`，程序合并回 `longTermState`。
-- 用户反馈：`playerFeedback` 属于 L0.5 人工反馈状态，不是 L2 世界设定，也不是 L1 历史事实；可持续生效，但用户可随时修改。
 - RecallWorker：旁路运行，不阻塞 Director、Narrator 或 Summary。它在正文输出后、Summary 完成后被触发，读取最近上下文、长历史和 `longTermState`，判断下轮是否需要回看较早正文，并锁定最多两轮旧正文轮次；程序加载这些轮次的完整 `story.txt` 正文摘录，写入 `recall-cache.json`。下一轮 Director 和 Narrator 只读取已经完成的旧正文缓存；缓存没准备好就当作无召回。不写剧情建议，不做一致性检查，不生成问答答案。
 - Director：只做方向执行、场景审查、过渡依据和写法种子，输出压缩 JSON；不写正文，不输出推理报告。当前核心字段是 `sceneTransition / sceneOutcome / narrativeStyle`，并内置 `文字细节重复 / 剧情设计重复 / 剧情速度拖沓 / 叙事整改要求`。候选项已经框定宏观剧情方向，Director 不再重新设计未来剧情，只把用户实际选中的那一条宏观方向落成本轮可写计划；未选中的候选方向不进入 Director。不要恢复独立 Feedback 调用，也不要恢复 `recallTurns`、`plotGoal`、`plotDrive`、`plotStep`、`plotFrame`、`writingPlan`、`mainPresentation`、`supportingPresentation`、`beat1/beat2/beat3/ending`，也不要让 Director 输出 `physicalConstraints`。
 - Narrator：按导演计划和 Director 内置审查写玩家可见正文；不更新状态；不生成候选项；可以在 `draftText` 内少量使用 Markdown 强调，前端直接渲染，不再使用 `renderAnnotations` 原文匹配。正文生成后前端定位到最新一轮正文开头，不跳到全文末尾。
@@ -113,7 +112,7 @@ Director beat 已废弃。当前思路是：长期连贯性由世界观、人物
 ```
 
 - 最近正文作为热记忆同步保存；上轮 L1 总结提供给 Director 做承接锚点，较完整最近正文提供给 Director 做场景审查，并提供给 Narrator 做近处承接。
-- L1 每轮事实总结和当前状态作为冷记忆异步更新，允许滞后一轮或几轮。当前状态统一为 `longTermState`，包含 `characterStatus`、`keyInfo`、`physicalConstraints`；旧字段 `statusState`、`itemState`、`physicalConstraints` 保留为存档兼容和前端同步字段。`planFeedback`、`feedbackMemory`、`playerFeedback` 都是 L0.5，但不并入 `longTermState`。
+- L1 每轮事实总结和当前状态作为冷记忆异步更新，允许滞后一轮或几轮。当前状态统一为 `longTermState`，包含 `characterStatus`、`keyInfo`、`physicalConstraints`；旧字段 `statusState`、`itemState`、`physicalConstraints` 保留为存档兼容和前端同步字段。`planFeedback`、`feedbackMemory` 都是 L0.5，但不并入 `longTermState`。
 - Summary 失败只停在队列里等待重试，不阻塞玩家继续游戏。
 - 每轮完成后入队一个 summary job；后台按顺序消费，避免旧总结覆盖新状态。
 - 反馈提醒只持续 1 轮；Director 每轮都会重新生成内置审查，旧反馈不应长期形成惯性噪音。

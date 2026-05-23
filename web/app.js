@@ -105,9 +105,6 @@ const els = {
   newStoryButton: document.querySelector('#newStoryButton'),
   saveArchiveButton: document.querySelector('#saveArchiveButton'),
   loadArchiveButton: document.querySelector('#loadArchiveButton'),
-  playerFeedbackButton: document.querySelector('#playerFeedbackButton'),
-  playerFeedbackDialog: document.querySelector('#playerFeedbackDialog'),
-  playerFeedbackForm: document.querySelector('#playerFeedbackForm'),
   saveSlotsDialog: document.querySelector('#saveSlotsDialog'),
   saveSlotsForm: document.querySelector('#saveSlotsForm'),
   saveSlotsList: document.querySelector('#saveSlotsList'),
@@ -149,9 +146,6 @@ const els = {
   sendButton: document.querySelector('#sendButton'),
   statusPanelView: document.querySelector('#statusPanelView'),
   storyTrackingView: document.querySelector('#storyTrackingView'),
-  playerFeedbackInput: document.querySelector('#playerFeedbackInput'),
-  clearPlayerFeedbackButton: document.querySelector('#clearPlayerFeedbackButton'),
-  closePlayerFeedbackButton: document.querySelector('#closePlayerFeedbackButton'),
   toggleDebugButton: document.querySelector('#toggleDebugButton'),
   debugOutput: document.querySelector('#debugOutput'),
   emptyConversationTemplate: document.querySelector('#emptyConversationTemplate'),
@@ -189,8 +183,6 @@ function defaultStory(name = '未选择故事') {
     longTermState: {},
     directorStyle: '',
     narratorStyle: '',
-    playerFeedback: '',
-    playerFeedbackUpdatedAt: '',
     plotLines: [],
     feedbackMemory: [],
     directorHistory: [],
@@ -340,8 +332,6 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     longTermState: normalizeLongTermState(raw?.longTermState, raw),
     directorStyle: String(raw?.directorStyle || ''),
     narratorStyle: String(raw?.narratorStyle || ''),
-    playerFeedback: String(raw?.playerFeedback || ''),
-    playerFeedbackUpdatedAt: String(raw?.playerFeedbackUpdatedAt || raw?.updatedAt || ''),
     plotLines: Array.isArray(raw?.plotLines) ? raw.plotLines : [],
     feedbackMemory: normalizeFeedbackMemory(raw?.feedbackMemory),
     directorHistory: normalizeDirectorHistory(raw?.directorHistory),
@@ -677,12 +667,7 @@ function mergeFeedbackMemory(existing, payload) {
 }
 
 function renderDirectorFeedbackMemory() {
-  return [renderPlayerFeedbackForPrompt(), renderFeedbackMemory(state.feedbackMemory, 'director')].filter(Boolean).join('\n')
-}
-
-function renderPlayerFeedbackForPrompt() {
-  const text = String(state.playerFeedback || '').trim()
-  return text ? `- [用户反馈｜持续] ${baselineLogText(text)}` : ''
+  return renderFeedbackMemory(state.feedbackMemory, 'director')
 }
 
 function normalizeDirectorHistory(value) {
@@ -1042,31 +1027,6 @@ function bindEvents() {
     }
   })
 
-  els.playerFeedbackInput.addEventListener('input', event => {
-    setPlayerFeedback(String(event.target.value || '').trim())
-  })
-
-  els.playerFeedbackInput.addEventListener('change', () => {
-    syncPlayerFeedbackFromInput()
-  })
-
-  els.clearPlayerFeedbackButton.addEventListener('click', () => {
-    setPlayerFeedback('')
-    els.playerFeedbackInput.value = ''
-    render()
-  })
-
-  els.playerFeedbackButton.addEventListener('click', () => {
-    renderPlayerFeedbackInput()
-    els.playerFeedbackDialog.showModal()
-    els.playerFeedbackInput.focus()
-  })
-
-  els.playerFeedbackForm.addEventListener('submit', () => {
-    syncPlayerFeedbackFromInput()
-    render()
-  })
-
   els.modelManagementButton.addEventListener('click', () => {
     openModelManagementPage()
   })
@@ -1242,7 +1202,6 @@ function render() {
   renderStoryControls()
   renderStatusPanel()
   renderStoryTracking()
-  renderPlayerFeedbackInput()
   renderConversation()
   renderOptions()
   renderReadingJumpControls()
@@ -1252,26 +1211,6 @@ function render() {
   state.model = getActiveModel()
   els.modelSelect.value = state.model
   renderDebug()
-}
-
-function renderPlayerFeedbackInput() {
-  if (document.activeElement === els.playerFeedbackInput) return
-  els.playerFeedbackInput.value = String(state.playerFeedback || '')
-  const hasFeedback = Boolean(String(state.playerFeedback || '').trim())
-  els.playerFeedbackButton.classList.toggle('active', hasFeedback)
-  els.playerFeedbackButton.title = hasFeedback ? '用户反馈已生效' : '添加用户反馈'
-}
-
-function syncPlayerFeedbackFromInput() {
-  const text = String(els.playerFeedbackInput?.value || '').trim()
-  if (state.playerFeedback !== text) setPlayerFeedback(text)
-  return text
-}
-
-function setPlayerFeedback(text) {
-  state.playerFeedback = String(text || '').trim()
-  state.playerFeedbackUpdatedAt = new Date().toISOString()
-  saveState()
 }
 
 function renderDebug() {
@@ -1981,7 +1920,6 @@ async function startNewGameFromAsset(asset, requestedName, requestedControlledNa
   story.keyInfo = []
   story.directorStyle = String(init.directorStyle || '')
   story.narratorStyle = String(init.narratorStyle || '')
-  story.playerFeedback = ''
   story.plotLines = []
   story.feedbackMemory = []
   story.storyAssetId = String(asset.id || '')
@@ -2672,7 +2610,6 @@ function renderStoryTracking() {
     : ''
   els.storyTrackingView.innerHTML = `
     ${renderTrackerSection('历史总结', formatHistoricalSummaryForTracker(`${backfillHint}\n${summary}`) || '暂无历史总结。')}
-    ${state.playerFeedback ? renderTrackerSection('用户反馈', state.playerFeedback) : ''}
     ${renderFeedbackMemory() ? renderTrackerSection('上轮反重复提醒', renderFeedbackMemory()) : ''}
   `
 }
@@ -3051,7 +2988,6 @@ function enqueueSummaryJob(job) {
 async function submitTurn() {
   const playerInput = els.playerInput.value.trim()
   if (!playerInput) return
-  syncPlayerFeedbackFromInput()
   const missingProviders = requiredProvidersForPipeline().filter(provider => !hasRuntimeApiKey(provider))
   if (missingProviders.length) {
     alert(`请先配置 ${missingProviders.map(providerLabel).join('、')} API Key。`)
@@ -3142,7 +3078,6 @@ function getPendingSummary() {
 }
 
 function buildPendingSummaryFromState() {
-  const playerFeedback = syncPlayerFeedbackFromInput()
   const messages = Array.isArray(state.messages) ? state.messages : []
   let assistantIndex = -1
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -3184,7 +3119,6 @@ function buildPendingSummaryFromState() {
     physicalConstraints: state.physicalConstraints,
     globalContext: buildHistoricalSummaryForRequest(),
     feedbackText: renderDirectorFeedbackMemory(),
-    playerFeedback,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
     turnIndex: completedAssistantTurnCount(),
@@ -3429,7 +3363,6 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requ
 }
 
 function buildGenerateRequestPayload(playerInput) {
-  const playerFeedback = syncPlayerFeedbackFromInput()
   return {
     storyId: state.id,
     storyName: state.name,
@@ -3437,7 +3370,6 @@ function buildGenerateRequestPayload(playerInput) {
     storyContext: buildStoryContextForRequest(),
     globalContext: buildHistoricalSummaryForRequest(),
     feedbackText: renderDirectorFeedbackMemory(),
-    playerFeedback,
     physicalConstraints: state.physicalConstraints,
     directorStyle: state.directorStyle,
     narratorStyle: state.narratorStyle,
@@ -3555,8 +3487,6 @@ function pickRegenerableStoryState(story) {
     'longTermState',
     'directorStyle',
     'narratorStyle',
-    'playerFeedback',
-    'playerFeedbackUpdatedAt',
     'plotLines',
     'feedbackMemory',
     'directorHistory',
