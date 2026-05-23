@@ -45,7 +45,7 @@
           <div id="conversation" class="conversation"></div>
           <div id="optionTray" class="option-tray"></div>
           <form id="playForm" class="composer">
-            <textarea id="playerInput" rows="2" placeholder="输入你的行动、对话或想法"></textarea>
+          <textarea id="playerInput" rows="2" placeholder="输入剧情方向、场景调度、行动或对话"></textarea>
             <div class="composer-actions">
               <button id="retryStageButton" class="ghost-button" type="button">继续未完成</button>
               <button id="rollbackTurnButton" class="ghost-button" type="button">回退上一轮</button>
@@ -142,8 +142,7 @@
             <label>
               <span>叙事人称</span>
               <select id="narrativePerspectiveSelect">
-                <option value="first_person">第一人称限知</option>
-                <option value="third_person">第三人称限知</option>
+                <option value="third_person">全知第三人称</option>
               </select>
             </label>
             <label>
@@ -159,7 +158,11 @@
               <select id="pipelineNarratorModel"></select>
             </label>
             <label>
-              <span>反馈 / 总结</span>
+              <span>选项策略</span>
+              <select id="pipelineOptionStrategistModel"></select>
+            </label>
+            <label>
+              <span>Summary</span>
               <select id="pipelineSummaryModel"></select>
             </label>
             <p class="dialog-note">留空表示跟随当前模型。</p>
@@ -197,7 +200,7 @@
           <input id="newGameName" placeholder="默认使用故事资料名" />
         </label>
         <label>
-          <span>操控人物</span>
+          <span>初始焦点人物</span>
           <select id="newGamePlayerCharacter"></select>
         </label>
         <div id="storyAssetList" class="asset-list"></div>

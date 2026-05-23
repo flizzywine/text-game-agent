@@ -436,26 +436,25 @@ button:disabled {
 
 .option-tray {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  overflow-x: auto;
+  max-height: calc(44px * 3 + 8px * 2 + 20px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 10px 14px;
   border-top: 1px solid var(--line);
   background: rgba(230, 223, 209, 0.72);
 }
 
 .option-button {
-  flex: 0 0 min(260px, 72vw);
-  min-height: 58px;
+  width: 100%;
+  min-height: 44px;
   padding: 9px 11px;
   border: 1px solid var(--line);
   background: rgba(255, 252, 244, 0.9);
   color: var(--ink);
   text-align: left;
-}
-
-.option-button strong {
-  display: block;
-  color: var(--red);
 }
 
 .option-button span {
@@ -562,8 +561,8 @@ button:disabled {
 }
 
 .tracker-section pre {
-  max-height: 150px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

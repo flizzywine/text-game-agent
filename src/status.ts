@@ -24,7 +24,7 @@ export function parseStatusSchemaFields(value: unknown): string[] {
 
 export function normalizeStatusFieldName(value: unknown): string {
   const text = String(value || '').trim()
-  if (text === '对玩家看法' || text === '对玩家态度') return '对当前操控人物看法'
+  if (text === '对玩家看法' || text === '对玩家态度' || text === '对当前操控人物看法' || text === '对当前焦点人物看法') return ''
   return text
 }
 
@@ -82,7 +82,6 @@ function statusFieldValue(field: string, record: Record<string, unknown>, charac
     外貌: record.appearance || character?.appearance,
     性格: record.personality || character?.personality,
     情绪: record.mood || character?.mood,
-    对当前操控人物看法: record.对当前操控人物看法 || record.对玩家看法 || record.对玩家态度 || record.trust || character?.trust || '',
   }
   return String(fallbackByField[field] || '')
 }

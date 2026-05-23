@@ -3,7 +3,6 @@ import http from 'http'
 import path from 'path'
 import crypto from 'crypto'
 import { parseJsonObject } from '../src/jsonObjectParser'
-import { mergeItemState, renderItemState } from '../src/itemState'
 import {
   mergeLongTermState,
   normalizeKeyInfo,
@@ -184,7 +183,9 @@ interface OpeningSummaryRequest extends PipelineContext {
 }
 
 interface PlayerOption {
-  inputText: string
+  type?: string
+  direction?: string
+  inputText?: string
 }
 
 interface StoryProgramConfig {
@@ -236,8 +237,8 @@ interface LlmCallMetrics {
 }
 
 interface PipelineEvent {
-  type: 'stage_start' | 'stage_tick' | 'stage_result' | 'stage_skip' | 'visible_text'
-  stage: 'initializer' | 'recall' | 'director' | 'planFeedback' | 'narrator' | 'postprocess' | 'postprocessSummary'
+  type: 'stage_start' | 'stage_tick' | 'stage_result' | 'stage_skip' | 'visible_text' | 'visible_text_delta'
+  stage: 'initializer' | 'recall' | 'director' | 'narrator' | 'optionStrategist' | 'postprocess' | 'postprocessSummary'
   label: string
   message?: string
   json?: Record<string, unknown> | null
@@ -259,7 +260,7 @@ interface SaveSlotRecord {
 }
 
 type ModelProvider = 'deepseek' | 'infron'
-type PipelineStage = 'initializer' | 'director' | 'narrator' | 'postprocess'
+type PipelineStage = 'initializer' | 'director' | 'narrator' | 'optionStrategist' | 'summary'
 type RuntimePipelineStage = PipelineEvent['stage']
 
 const rootDir = process.cwd()
@@ -288,18 +289,18 @@ const modelCatalog: Array<{ id: string; label: string; provider: ModelProvider }
   { id: infronGemini31FlashLiteModel, label: 'Gemini 3.1 Flash Lite | Infron', provider: 'infron' },
 ]
 const modelIds = new Set(modelCatalog.map(item => item.id))
-const pipelineStages: PipelineStage[] = ['initializer', 'director', 'narrator', 'postprocess']
+const pipelineStages: PipelineStage[] = ['initializer', 'director', 'narrator', 'optionStrategist', 'summary']
 const generationPipeline: {
   mode: string
   note: string
   stages: Array<{ stage: RuntimePipelineStage; label: string }>
 } = {
-  mode: 'director+feedback+narrator+summary-queued+recall-worker',
-  note: 'Director 生成计划；Feedback 审查导演计划；Narrator 输出正文和候选项；Summary 后台更新总结和状态；RecallWorker 旁路选择旧轮次并预取最多两轮正文。',
+  mode: 'director-audit+narrator+option-strategist+summary-queued+recall-worker',
+  note: 'Director 融合场景审查和方向执行，不再单独运行 Feedback；Narrator 输出正文；OptionStrategist 生成战略候选项；Summary 后台更新总结和状态；RecallWorker 旁路选择旧轮次并预取最多两轮正文。',
   stages: [
     { stage: 'director', label: 'Director' },
-    { stage: 'planFeedback', label: 'Feedback' },
     { stage: 'narrator', label: 'Narrator' },
+    { stage: 'optionStrategist', label: 'OptionStrategist' },
     { stage: 'postprocessSummary', label: 'Summary' },
   ],
 }
@@ -316,12 +317,14 @@ const narratorTimeoutMs = Number(process.env.NARRATOR_TIMEOUT_MS || 120_000)
 const postprocessTimeoutMs = Number(process.env.POSTPROCESS_TIMEOUT_MS || 120_000)
 const providerFetchRetryCount = Number(process.env.LLM_FETCH_RETRY_COUNT || 2)
 const providerFetchRetryDelayMs = Number(process.env.LLM_FETCH_RETRY_DELAY_MS || 1200)
+const structuredJsonRetryCount = Number(process.env.STRUCTURED_JSON_RETRY_COUNT || 1)
 const providerConnectivityTimeoutMs = Number(process.env.PROVIDER_CONNECTIVITY_TIMEOUT_MS || 30_000)
 const providerSpeedTestTimeoutMs = Number(process.env.PROVIDER_SPEED_TEST_TIMEOUT_MS || 100_000)
 const defaultMaxTokens = Number(process.env.LLM_MAX_TOKENS || 8192)
 const initializerMaxTokens = Number(process.env.INITIALIZER_MAX_TOKENS || defaultMaxTokens)
 const directorMaxTokens = Number(process.env.DIRECTOR_MAX_TOKENS || 6000)
 const narratorMaxTokens = Number(process.env.NARRATOR_MAX_TOKENS || 12000)
+const optionStrategistMaxTokens = Number(process.env.OPTION_STRATEGIST_MAX_TOKENS || 1200)
 const postprocessMaxTokens = Number(process.env.POSTPROCESS_MAX_TOKENS || defaultMaxTokens)
 const port = Number(process.env.PORT || 4173)
 const localEnv = readDotEnv(path.join(rootDir, '.env.local'))
@@ -354,7 +357,10 @@ function buildPipelineModels(requestedModel = defaultModel, overrides?: unknown)
   const selectedModel = normalizeModel(requestedModel)
   const record = overrides && typeof overrides === 'object' ? overrides as Record<string, unknown> : {}
   return Object.fromEntries(
-    pipelineStages.map(stage => [stage, record[stage] ? normalizeModel(record[stage]) : selectedModel]),
+    pipelineStages.map(stage => {
+      const value = record[stage] || (stage === 'summary' ? record.postprocess : '')
+      return [stage, value ? normalizeModel(value) : selectedModel]
+    }),
   ) as Record<PipelineStage, string>
 }
 
@@ -413,7 +419,14 @@ function normalizeReasoningEffort(value: unknown): string {
 }
 
 function estimateTokens(text: string): number {
-  return Math.max(1, Math.ceil(String(text || '').length / 1.8))
+  const value = String(text || '')
+  const cjk = (value.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length
+  const kana = (value.match(/[\u3040-\u30ff]/g) || []).length
+  const hangul = (value.match(/[\uac00-\ud7af]/g) || []).length
+  const nonCjkText = value.replace(/[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/g, ' ')
+  const asciiWords = (nonCjkText.match(/[A-Za-z0-9_]+(?:[-'][A-Za-z0-9_]+)*/g) || []).length
+  const punctuation = (value.match(/[^\s\w\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/g) || []).length
+  return Math.max(1, Math.ceil(cjk + kana + hangul + asciiWords * 1.35 + punctuation * 0.4))
 }
 
 function linkAbortSignal(controller: AbortController, signal: AbortSignal | undefined, onAbort: () => void): () => void {
@@ -1042,7 +1055,6 @@ function renderStoryDebugReadme(story: Record<string, unknown>, entries: RawTurn
   const messages = Array.isArray(story.messages) ? story.messages : []
   const lastEntry = entries[entries.length - 1]
   const statusRoster = Array.isArray(story.statusRoster) ? story.statusRoster.map(String).join('、') : ''
-  const itemState = isPlainRecord(story.itemState) ? JSON.stringify(story.itemState, null, 2) : '（无）'
   return [
     `# ${name}`,
     '',
@@ -1052,7 +1064,7 @@ function renderStoryDebugReadme(story: Record<string, unknown>, entries: RawTurn
     `- 消息数：${messages.length}`,
     `- 更新时间：${String(story.updatedAt || '') || '（无）'}`,
     `- 故事资料：${String(story.storyAssetId || '') || '（无）'}`,
-    `- 当前操控人物：${String(story.controlledCharacterName || '') || '（未指定）'}`,
+    `- 当前焦点人物：${String(story.controlledCharacterName || '') || '（未指定）'}`,
     `- 追踪人物：${statusRoster || '（无）'}`,
     '',
     '## 文件',
@@ -1060,12 +1072,6 @@ function renderStoryDebugReadme(story: Record<string, unknown>, entries: RawTurn
     '- `story.json`：这个故事的完整前端状态',
     '- `memory/story.txt`：按轮次展开的玩家输入 + 正文，用于召回排查',
     '- `memory/raw-turns.jsonl`：结构化轮次日志',
-    '',
-    '## 当前关键道具',
-    '',
-    '```json',
-    itemState,
-    '```',
     '',
     '## 最近一轮',
     '',
@@ -1525,6 +1531,54 @@ function readPromptFile(filePath: string): string {
   return (index >= 0 ? content.slice(index + marker.length) : content).trim()
 }
 
+function promptVersion(): string {
+  const hash = crypto.createHash('sha256')
+  const files = promptFiles(promptDir)
+  for (const file of files) {
+    hash.update(path.relative(promptDir, file))
+    hash.update('\0')
+    hash.update(fs.readFileSync(file))
+    hash.update('\0')
+  }
+  return hash.digest('hex').slice(0, 16)
+}
+
+function promptFiles(dir: string): string[] {
+  const files: string[] = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const filePath = path.join(dir, entry.name)
+    if (entry.isDirectory()) files.push(...promptFiles(filePath))
+    if (entry.isFile() && filePath.endsWith('.md')) files.push(filePath)
+  }
+  return files.sort()
+}
+
+function clearPromptRuntimeCache(input: Record<string, unknown> = {}): Record<string, unknown> {
+  const removed: string[] = []
+  const removeIfExists = (filePath: string): void => {
+    if (!fs.existsSync(filePath)) return
+    fs.rmSync(filePath, { force: true })
+    removed.push(path.relative(rootDir, filePath))
+  }
+  const storyId = String(input.storyId || '').trim()
+  const storyName = String(input.storyName || '').trim()
+  if (storyId || storyName) {
+    const memoryDir = path.dirname(storyRawTurnLogFile(storyId, storyName))
+    for (const filename of ['recall-cache.json', 'recall-worker-events.jsonl', 'turn-summaries-l2.txt']) {
+      removeIfExists(path.join(memoryDir, filename))
+    }
+  }
+  const currentMemoryDir = path.join(currentAutoSlotDir(), 'memory')
+  for (const filename of ['recall-cache.json', 'recall-worker-events.jsonl', 'turn-summaries-l2.txt']) {
+    removeIfExists(path.join(currentMemoryDir, filename))
+  }
+  return {
+    ok: true,
+    promptVersion: promptVersion(),
+    removed,
+  }
+}
+
 function isInsidePath(parent: string, child: string): boolean {
   const relative = path.relative(parent, child)
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
@@ -1548,30 +1602,6 @@ function renderCharacters(characters: CharacterState[] = []): string {
 
 function renderConversation(turns: ConversationItem[] = []): string {
   return turns.slice(-20).map(turn => `${turn.role === 'user' ? '用户输入' : '正文'}：${turn.content}`).join('\n\n')
-}
-
-function renderRecentConversationByAssistantTurns(turns: ConversationItem[] = [], assistantTurnCount = 1): string {
-  const items = Array.isArray(turns) ? turns.filter(turn => String(turn.content || '').trim()) : []
-  let assistantCount = 0
-  let start = items.length
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (items[index]?.role === 'assistant') assistantCount += 1
-    start = index
-    if (assistantCount >= assistantTurnCount && (index === 0 || items[index - 1]?.role !== 'user')) break
-  }
-  return renderConversation(items.slice(start))
-}
-
-function renderLatestConversationTurn(turns: ConversationItem[] = []): string {
-  const items = Array.isArray(turns) ? turns.filter(turn => String(turn.content || '').trim()) : []
-  const lastAssistantIndex = items.map(turn => turn.role).lastIndexOf('assistant')
-  if (lastAssistantIndex < 0) return ''
-  const start = lastAssistantIndex > 0 && items[lastAssistantIndex - 1]?.role === 'user'
-    ? lastAssistantIndex - 1
-    : lastAssistantIndex
-  return items.slice(start, lastAssistantIndex + 1)
-    .map(turn => `${turn.role === 'user' ? '用户输入' : '正文'}：${turn.content}`)
-    .join('\n\n')
 }
 
 function renderStorybook(entries: StorybookEntry[] = []): string {
@@ -1638,12 +1668,12 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
       id: 'character.main',
       name: '主角',
       gender: '未设定',
-      role: '可操控人物',
+      role: '初始焦点人物',
       mood: '待输入',
       location: '开场',
       health: '正常',
       trust: '',
-      notes: '初始化失败时生成的可操控人物占位；后续可在故事 JSON 中改名。',
+      notes: '初始化失败时生成的初始焦点人物占位；后续可在故事 JSON 中改名。',
     }]
   const seedCharacters = baseCharacters
   const statusSchema = fallbackStatusSchema
@@ -1672,9 +1702,11 @@ function fallbackStoryInitialization(input: InitializeStoryRequest): StoryProgra
     directorStyle,
     narratorStyle,
     initialPlayerOptions: [
-      { inputText: '我先观察周围和对方的反应。' },
-      { inputText: '我开口问道：“现在是什么情况？”' },
-      { inputText: '我向前一步，试探性地接近当前互动对象。' },
+      { type: '推进', direction: '从当前局面进入一次明确的关系或目标推进' },
+      { type: '转折', direction: '引入一个改变判断的新信息、误判或外部压力' },
+      { type: '跳过', direction: '略过低价值余波，切到下一个场景或剧情节点' },
+      { type: '推进', direction: '把当前拉扯推向承诺、代价或可见结果' },
+      { type: '转折', direction: '让已有关系或信息压力改变下一轮重心' },
     ],
   }
 }
@@ -1689,6 +1721,36 @@ function readProgramConfig(assetDir: string): StoryProgramConfig | null {
   const configPath = path.join(assetDir, 'program-config.json')
   if (!fs.existsSync(configPath)) return null
   return JSON.parse(fs.readFileSync(configPath, 'utf-8')) as StoryProgramConfig
+}
+
+function readProgramConfigForStory(input: Pick<PipelineContext, 'storyId'>): StoryProgramConfig | null {
+  const assetDir = getStoryAssetDir(input.storyId)
+  return assetDir ? readProgramConfig(assetDir) : null
+}
+
+function applyLiveProgramConfig<T extends PipelineContext>(input: T): T {
+  const config = readProgramConfigForStory(input)
+  if (!config) return input
+  const worldview = String(config.worldview || '').trim()
+  const openingSummary = String(config.openingSummary || '').trim()
+  const storyContext = mergeLiveStoryContext(String(input.storyContext || ''), worldview)
+  return {
+    ...input,
+    storyContext: storyContext || input.storyContext,
+    globalContext: openingSummary ? `- 第0轮：${openingSummary}` : input.globalContext,
+    directorStyle: String(config.directorStyle || '').trim() || input.directorStyle,
+    narratorStyle: String(config.narratorStyle || '').trim() || input.narratorStyle,
+  }
+}
+
+function mergeLiveStoryContext(current: string, worldview: string): string {
+  const stableWorldview = String(worldview || '').trim()
+  const focusIndex = current.indexOf('## 当前焦点人物')
+  const focusBlock = focusIndex >= 0 ? current.slice(focusIndex).trim() : ''
+  return [
+    stableWorldview ? `## 世界观\n${stableWorldview}` : '',
+    focusBlock,
+  ].filter(Boolean).join('\n\n')
 }
 
 function writeProgramConfig(assetDir: string, config: StoryProgramConfig): void {
@@ -1722,7 +1784,7 @@ function updateStoryAssetProgramConfig(assetId: string, patch: Partial<StoryProg
       [],
       normalizeStatusSchema(patch.statusSchema ?? existing.statusSchema),
     ),
-    itemState: mergeItemState({}, patch.itemState ?? existing.itemState),
+    itemState: {},
     playableCharacters: normalizePlayableCharacters(patch.playableCharacters ?? existing.playableCharacters, patch.statusRoster ?? existing.statusRoster, [], existing.playableCharacters),
     initialPlayerOptions: Array.isArray(patch.initialPlayerOptions) ? patch.initialPlayerOptions : existing.initialPlayerOptions,
   }
@@ -1793,7 +1855,7 @@ function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
     '## 追踪人物',
     config.statusRoster.join('、') || '（无）',
     '',
-    '## 可操控人物',
+    '## 可选初始焦点人物',
     config.playableCharacters.join('、') || '（无）',
     '',
     '## 状态字段',
@@ -1801,9 +1863,6 @@ function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
     '',
     '## 初始人物状态',
     JSON.stringify(config.statusState, null, 2),
-    '',
-    '## 初始关键道具状态',
-    renderItemState(config.itemState),
     '',
     '## 导演风格',
     config.directorStyle || '（无）',
@@ -1813,7 +1872,7 @@ function renderProgramConfigMarkdown(config: StoryProgramConfig): string {
     '',
     '## 初始用户选项',
     config.initialPlayerOptions.length
-      ? config.initialPlayerOptions.map(option => `- ${option.inputText}`).join('\n')
+      ? config.initialPlayerOptions.map(option => `- ${option.direction || option.inputText || ''}`).join('\n')
       : '（无）',
     '',
   ].join('\n')
@@ -1839,7 +1898,7 @@ function normalizeProgramConfig(raw: Record<string, unknown>, fallback: StoryPro
     statusSchema: normalizeStatusSchema(raw.statusSchema ?? fallback.statusSchema),
     statusRoster: normalizeStatusRoster(raw.statusRoster ?? fallback.statusRoster, legacyCharacters),
     statusState: normalizeStatusState(raw.statusState ?? fallback.statusState, normalizeStatusRoster(raw.statusRoster ?? fallback.statusRoster, legacyCharacters), legacyCharacters, normalizeStatusSchema(raw.statusSchema ?? fallback.statusSchema)),
-    itemState: mergeItemState({}, raw.itemState ?? fallback.itemState),
+    itemState: {},
     playableCharacters: normalizePlayableCharacters(raw.playableCharacters, raw.statusRoster ?? fallback.statusRoster, legacyCharacters, fallback.playableCharacters),
     directorStyle: String(raw.directorStyle ?? fallback.directorStyle ?? ''),
     narratorStyle: String(raw.narratorStyle ?? fallback.narratorStyle ?? ''),
@@ -1854,18 +1913,20 @@ function normalizeInitialPlayerOptionsForConfig(value: unknown, fallback: unknow
   const options = normalizePlayerOptions(value) as PlayerOption[]
   const fallbackOptions = normalizePlayerOptions(fallback) as PlayerOption[]
   const defaults: PlayerOption[] = [
-    { inputText: '我先观察周围和对方的反应。' },
-    { inputText: '我开口问道：“现在是什么情况？”' },
-    { inputText: '我向前一步，试探性地接近当前互动对象。' },
+    { type: '推进', direction: '从当前局面进入一次明确的关系或目标推进' },
+    { type: '转折', direction: '引入一个改变判断的新信息、误判或外部压力' },
+    { type: '跳过', direction: '略过低价值余波，切到下一个场景或剧情节点' },
+    { type: '推进', direction: '把当前拉扯推向承诺、代价或可见结果' },
+    { type: '转折', direction: '让已有关系或信息压力改变下一轮重心' },
   ]
   const seen = new Set<string>()
   const merged = [...options, ...fallbackOptions, ...defaults].filter(option => {
-    const text = String(option?.inputText || '').trim()
+    const text = String(option?.direction || option?.inputText || '').trim()
     if (!text || seen.has(text)) return false
     seen.add(text)
     return true
   })
-  return merged.slice(0, 3)
+  return merged.slice(0, 5)
 }
 
 function renderStatusUpdateMaterial(playerInput: string, finalText: string): string {
@@ -1876,21 +1937,6 @@ function renderStatusUpdateMaterial(playerInput: string, finalText: string): str
     '【最终正文】',
     String(finalText || '').trim() || '（无）',
   ].join('\n')
-}
-
-function hasControlledCharacterStatusPatch(patch: unknown, controlledCharacterName: unknown): boolean {
-  const normalized = normalizeStatusStatePatchSubjects(patch, controlledCharacterName)
-  const controlled = normalizeControlledCharacterName(controlledCharacterName)
-  if (!controlled) return true
-  const record = normalized[controlled]
-  return Boolean(record && typeof record === 'object' && !Array.isArray(record) && Object.keys(record as Record<string, unknown>).length)
-}
-
-function requireControlledCharacterStatusPatch(summaryJson: Record<string, unknown>, controlledCharacterName: unknown): void {
-  const controlled = normalizeControlledCharacterName(controlledCharacterName)
-  if (!controlled) return
-  if (hasControlledCharacterStatusPatch(summaryJson.statusStatePatch, controlled)) return
-  throw new Error(`Summary 缺少当前操控人物“${controlled}”的 statusStatePatch。`)
 }
 
 function sanitizePlayerEntityText(value: string): string {
@@ -1943,7 +1989,7 @@ async function initializeStory(
     const result = await callModelWithPublicTrace('initializer', 'Initializer', promptMessages(initializerMessages.system, initializerMessages.user), { temperature: 0.4, apiKey: pipelineApiKeyForModel(input, model), model, maxTokens: initializerMaxTokens, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
       '公开日志：正在读取故事书、人物卡和世界书，去掉重复噪音。',
       '公开日志：正在抽取世界观、人物介绍和固定设定。',
-      '公开日志：正在写第一轮开场交互和 3 个用户初始选项。',
+      '公开日志：正在写第一轮开场交互和 5 个用户初始选项。',
       '公开日志：正在选择状态追踪人物，并生成人物状态 schema。',
       '公开日志：初始化层仍在等待模型返回 program-config。',
     ])
@@ -1965,41 +2011,73 @@ async function callModel(messages: ChatMessage[], options: { temperature: number
   const model = normalizeModel(options.model)
   const provider = providerForModel(model)
   const apiKey = providerApiKey(provider, options.apiKey)
-  const response = await requestModelContent(apiKey, messages, options.temperature, model, options.debugLabel || providerLabel(provider), options.maxTokens, options.signal, options.reasoningEffort)
-  const raw = response.raw
+  const label = options.debugLabel || providerLabel(provider)
+  const maxAttempts = Math.max(1, structuredJsonRetryCount + 1)
+  let combinedMetrics: LlmCallMetrics | null = null
+  let lastRaw = ''
+  let lastRepairedRaw = ''
+  let lastParseError: unknown = null
+  let lastRepairError: unknown = null
 
-  try {
-    return { raw, json: parseJsonObject(raw), metrics: response.metrics }
-  } catch (parseError) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await requestModelContent(apiKey, messages, options.temperature, model, label, options.maxTokens, options.signal, options.reasoningEffort)
+    combinedMetrics = mergeLlmCallMetrics(combinedMetrics, response.metrics)
+    const raw = response.raw
+    lastRaw = raw
+    lastRepairedRaw = ''
     let repairedRaw = ''
     try {
+      return { raw, json: parseJsonObject(raw), metrics: combinedMetrics }
+    } catch (parseError) {
+      lastParseError = parseError
+    }
+    try {
       const repaired = await repairJsonWithModel(apiKey, raw, model)
+      combinedMetrics = mergeLlmCallMetrics(combinedMetrics, repaired.metrics)
       repairedRaw = repaired.raw
+      lastRepairedRaw = repairedRaw
       return {
         raw: repairedRaw,
         json: parseJsonObject(repairedRaw),
-        metrics: {
-          ...response.metrics,
-          durationMs: response.metrics.durationMs + repaired.metrics.durationMs,
-          ttftMs: response.metrics.ttftMs,
-          inputTokens: response.metrics.inputTokens + repaired.metrics.inputTokens,
-          outputTokens: response.metrics.outputTokens + repaired.metrics.outputTokens,
-          totalTokens: response.metrics.totalTokens + repaired.metrics.totalTokens,
-          estimatedOutputTokens: response.metrics.estimatedOutputTokens + repaired.metrics.estimatedOutputTokens,
-        },
+        metrics: combinedMetrics,
       }
     } catch (repairError) {
-      const file = writeLlmDebugFile({
-        label: options.debugLabel || `${provider}-parse-failed`,
-        raw,
-        repairedRaw,
-        messages,
-        error: repairError,
-      })
-      const parseMessage = parseError instanceof Error ? parseError.message : String(parseError)
-      const repairMessage = repairError instanceof Error ? repairError.message : String(repairError)
-      throw new Error(`${parseMessage}；二次 JSON 修复也失败：${repairMessage}；原始返回已保存：${file}`)
+      lastRepairError = repairError
+      if (attempt < maxAttempts) {
+        writeLlmDebugFile({
+          label: `${label}-json-retry-${attempt}`,
+          raw,
+          repairedRaw,
+          messages,
+          error: repairError,
+        })
+        continue
+      }
     }
+  }
+
+  const file = writeLlmDebugFile({
+    label: options.debugLabel || `${provider}-parse-failed`,
+    raw: lastRaw,
+    repairedRaw: lastRepairedRaw,
+    messages,
+    error: lastRepairError,
+  })
+  const parseMessage = lastParseError instanceof Error ? lastParseError.message : String(lastParseError)
+  const repairMessage = lastRepairError instanceof Error ? lastRepairError.message : String(lastRepairError)
+  throw new Error(`${parseMessage}；JSON 修复失败后已自动重新调用 ${maxAttempts - 1} 次，仍失败：${repairMessage}；原始返回已保存：${file}`)
+}
+
+function mergeLlmCallMetrics(base: LlmCallMetrics | null, next: LlmCallMetrics): LlmCallMetrics {
+  if (!base) return { ...next }
+  return {
+    ...next,
+    durationMs: base.durationMs + next.durationMs,
+    ttftMs: base.ttftMs || next.ttftMs,
+    inputTokens: base.inputTokens + next.inputTokens,
+    outputTokens: base.outputTokens + next.outputTokens,
+    totalTokens: base.totalTokens + next.totalTokens,
+    estimatedOutputTokens: base.estimatedOutputTokens + next.estimatedOutputTokens,
   }
 }
 
@@ -2131,6 +2209,151 @@ async function requestOpenAICompatibleContent(
       outputTokens,
       totalTokens,
       estimatedOutputTokens,
+    },
+  }
+}
+
+async function requestOpenAICompatibleContentStream(
+  provider: ModelProvider,
+  baseUrl: string,
+  apiKey: string,
+  messages: ChatMessage[],
+  temperature: number,
+  model: string,
+  label: string,
+  maxTokens: number,
+  signal: AbortSignal | undefined,
+  onDelta: (delta: string, fullText: string) => void | Promise<void>,
+): Promise<{ raw: string; metrics: LlmCallMetrics }> {
+  const providerName = providerLabel(provider)
+  const controller = new AbortController()
+  let externallyAborted = false
+  const unlinkAbortSignal = linkAbortSignal(controller, signal, () => {
+    externallyAborted = true
+  })
+  const timer = setTimeout(() => controller.abort(), llmTimeoutMs)
+  const startedAt = Date.now()
+  let response: Response
+
+  try {
+    response = await fetchWithTransientRetry(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature,
+        max_tokens: maxTokens,
+        stream: true,
+      }),
+    })
+  } catch (error) {
+    unlinkAbortSignal()
+    clearTimeout(timer)
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (externallyAborted || signal?.aborted) {
+        throw Object.assign(new Error(`${label} 请求已取消。`), { name: 'AbortError' })
+      }
+      throw new Error(`${providerName} 请求超过 ${Math.round(llmTimeoutMs / 1000)} 秒未返回，已中断。`)
+    }
+    if (isTransientFetchError(error)) {
+      const file = writeLlmDebugFile({
+        label: `${label}-${provider}-stream-fetch-error`,
+        raw: '',
+        messages,
+        error: error instanceof Error ? error : new Error(String(error)),
+      })
+      throw new Error(`${providerName} 流式网络请求失败：${formatFetchError(error)}；已重试 ${providerFetchRetryCount} 次；诊断已保存：${file}`)
+    }
+    throw error
+  }
+
+  if (!response.ok) {
+    const text = await readResponseTextWithTimeout(response, controller, timer, unlinkAbortSignal)
+    if (response.status === 401) {
+      throw new Error(`${providerName} API Key 无效或已过期。请在页面右上角 API Key 里清除后重新粘贴完整 key。`)
+    }
+    throw new Error(`${providerName} ${response.status}: ${text.slice(0, 500)}`)
+  }
+  if (!response.body) {
+    unlinkAbortSignal()
+    clearTimeout(timer)
+    throw new Error(`${providerName} 未返回流式响应体。`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let raw = ''
+  let ttftMs = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const data = trimmed.slice(5).trim()
+        if (!data || data === '[DONE]') continue
+        let parsed: {
+          choices?: Array<{ delta?: { content?: string }; message?: { content?: string } }>
+          error?: { message?: string }
+        }
+        try {
+          parsed = JSON.parse(data)
+        } catch {
+          continue
+        }
+        if (parsed.error) throw new Error(parsed.error.message || JSON.stringify(parsed.error))
+        const delta = parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.message?.content || ''
+        if (!delta) continue
+        if (!ttftMs) ttftMs = Date.now() - startedAt
+        raw += delta
+        await onDelta(delta, raw)
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (externallyAborted || signal?.aborted) {
+        throw Object.assign(new Error(`${label} 请求已取消。`), { name: 'AbortError' })
+      }
+      throw new Error(`${providerName} 流式请求超过 ${Math.round(llmTimeoutMs / 1000)} 秒未完成，已中断。`)
+    }
+    throw error
+  } finally {
+    unlinkAbortSignal()
+    clearTimeout(timer)
+  }
+
+  const text = raw.trim()
+  if (!text) {
+    const file = writeLlmDebugFile({
+      label: `${label}-${provider}-stream-empty`,
+      raw,
+      messages,
+      error: new Error(`${providerName} returned an empty stream response`),
+    })
+    throw new Error(`${providerName} returned an empty stream response；原始返回已保存：${file}`)
+  }
+  const durationMs = Date.now() - startedAt
+  return {
+    raw: text,
+    metrics: {
+      label,
+      model,
+      durationMs,
+      ttftMs: ttftMs || durationMs,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      estimatedOutputTokens: estimateTokens(text),
     },
   }
 }
@@ -2391,9 +2614,8 @@ async function requestModelStreamProbe(
 
 function fallbackDirectorPlanForInterception(): Record<string, unknown> {
   return {
-    plotDrive: '外部压力；只检查模型是否能返回。',
-    mainPresentation: '动作推进',
-    supportingPresentation: [],
+    sceneTransition: '从拦截测试入口直接进入一次最短可见正文返回，不展开真实剧情过渡。',
+    sceneOutcome: '内容拦截测试完成一次可用的叙事正文返回。',
     narrativeStyle: '快速切入，短句推进，只做返回测试。',
     physicalConstraints: [],
   }
@@ -2472,32 +2694,35 @@ function buildPromptPreview(input: InterceptionPromptRequest): Record<string, un
     ? input.recentTurns.filter(turn => !isSyntheticPromptInput(turn.content))
     : []
   const generateInput = { ...input, playerInput, recentTurns, model: requestedModel } as GenerateRequest
-  const directorPayload = buildDirectorPromptPayload(generateInput, Math.min(temperature, 0.4))
+  const runtimeContext = buildRuntimeBlocks(generateInput)
   const directorPlan = compactPromptPreviewPlan(input)
   const finalText = String(input.finalText || '').trim()
-  const planFeedbackPayload = buildPlanFeedbackPromptPayload(generateInput, {
-    model: pipelineModels.postprocess,
-    temperature: 0.5,
-    playerInput,
-    finalText,
-    directorPlan,
-    context: directorPayload.context,
-  })
+  const directorPayload = buildDirectorPromptPayload(generateInput, Math.min(temperature, 0.4), runtimeContext)
+  const previewPlanFeedback = directorPlan
   const narratorPayload = buildNarratorPromptPayload(generateInput, {
     model: pipelineModels.narrator,
     temperature,
-    context: directorPayload.context,
-    planFeedback: { 叙事整改要求: 'Prompt preview only: actual Feedback is produced at runtime before Narrator.' },
+    context: runtimeContext,
+    planFeedback: previewPlanFeedback,
     playerInput,
     directorPlan,
   })
+  const optionPayload = buildOptionStrategistPromptPayload(generateInput, {
+    model: pipelineModels.optionStrategist,
+    temperature: Math.min(temperature, 0.6),
+    context: runtimeContext,
+    planFeedback: previewPlanFeedback,
+    playerInput,
+    finalText: finalText || '（Prompt preview only: actual final text is produced by Narrator at runtime.）',
+    directorPlan,
+  })
   const postprocessPayload = buildPostprocessPromptPayload(generateInput, {
-    model: pipelineModels.postprocess,
+    model: pipelineModels.summary,
     temperature: 0.5,
     playerInput,
     finalText,
     directorPlan,
-    context: directorPayload.context,
+    context: runtimeContext,
     turnIndex: directorPayload.turnIndex,
   })
   const initializerMessages = renderPromptMessagePair('initializer.md', {
@@ -2510,9 +2735,9 @@ function buildPromptPreview(input: InterceptionPromptRequest): Record<string, un
     prompts: [
       { task: 'Initializer', model: pipelineModels.initializer, system: initializerMessages.system, user: initializerMessages.user },
       { task: 'Director', model: pipelineModels.director, system: directorPayload.directorSystem, user: directorPayload.directorUser },
-      { task: 'Feedback', model: pipelineModels.postprocess, system: planFeedbackPayload.postprocessSystem, user: planFeedbackPayload.postprocessUser },
       { task: 'Narrator', model: pipelineModels.narrator, system: narratorPayload.narratorSystem, user: narratorPayload.narratorUser },
-      { task: 'Summary', model: pipelineModels.postprocess, system: postprocessPayload.postprocessSystem, user: postprocessPayload.postprocessUser },
+      { task: 'OptionStrategist', model: pipelineModels.optionStrategist, system: optionPayload.optionSystem, user: optionPayload.optionUser },
+      { task: 'Summary', model: pipelineModels.summary, system: postprocessPayload.postprocessSystem, user: postprocessPayload.postprocessUser },
     ].map(item => ({
       task: item.task,
       model: item.model,
@@ -2644,11 +2869,105 @@ async function callModelWithPublicTrace(
   }
 }
 
+async function callTextModelStreamWithPublicTrace(
+  stage: PipelineEvent['stage'],
+  label: string,
+  messages: ChatMessage[],
+  options: { temperature: number; apiKey?: string; model?: string; maxTokens?: number; timeoutMs?: number; reasoningEffort?: string },
+  emit: (event: PipelineEvent) => void,
+  traceMessages: string[],
+): Promise<LayerResult> {
+  let index = 0
+  const controller = options.timeoutMs ? new AbortController() : undefined
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  const timer = setInterval(() => {
+    const message = traceMessages[Math.min(index, traceMessages.length - 1)]
+    index += 1
+    emit({ type: 'stage_tick', stage, label, message })
+  }, 2500)
+  try {
+    const model = normalizeModel(options.model)
+    const provider = providerForModel(model)
+    const apiKey = providerApiKey(provider, options.apiKey)
+    const visibleTextEmitter = createVisibleTextEmitter(stage, label, emit)
+    const call = requestOpenAICompatibleContentStream(
+      provider,
+      providerBaseUrl(provider),
+      apiKey,
+      messages,
+      options.temperature,
+      model,
+      label,
+      options.maxTokens || defaultMaxTokens,
+      controller?.signal,
+      (textDelta, finalText) => visibleTextEmitter(textDelta, finalText),
+    )
+    const result = options.timeoutMs
+      ? await Promise.race([
+        call,
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => {
+            const error = new Error(`${label} 超过 ${Math.round(Number(options.timeoutMs) / 1000)} 秒未完成，已中断。`)
+            const file = writeLlmDebugFile({
+              label: `${label}-timeout`,
+              raw: '',
+              messages,
+              error,
+            })
+            controller?.abort()
+            reject(new Error(`${error.message}；请求上下文已保存：${file}`))
+          }, options.timeoutMs)
+        }),
+      ])
+      : await call
+    const outputTokens = result.metrics.outputTokens || result.metrics.estimatedOutputTokens
+    const outputTokenLabel = result.metrics.outputTokens ? '输出' : '估算输出'
+    emit({
+      type: 'stage_tick',
+      stage,
+      label,
+      message: `耗时 ${(result.metrics.durationMs / 1000).toFixed(2)}s · 首字 ${(Number(result.metrics.ttftMs || 0) / 1000).toFixed(2)}s · ${outputTokenLabel} ${outputTokens} tokens`,
+    })
+    const raw = stage === 'narrator' ? sanitizeNarratorVisibleText(result.raw) : result.raw
+    return { raw, json: { draftText: raw }, metrics: result.metrics }
+  } finally {
+    if (deadline) clearTimeout(deadline)
+    clearInterval(timer)
+  }
+}
+
+function createVisibleTextEmitter(
+  stage: PipelineEvent['stage'],
+  label: string,
+  emit: (event: PipelineEvent) => void,
+): (textDelta: string, finalText: string) => Promise<void> {
+  let emittedText = ''
+  return async (_textDelta: string, finalText: string): Promise<void> => {
+    const visibleText = stage === 'narrator' ? sanitizeNarratorVisibleText(finalText) : finalText
+    if (visibleText.length <= emittedText.length) return
+    const textDelta = visibleText.slice(emittedText.length)
+    emittedText = visibleText
+    emit({
+      type: 'visible_text_delta',
+      stage,
+      label,
+      message: '正文流式输出中。',
+      payload: { textDelta, finalText: visibleText, pipelineMode: generationPipeline.mode },
+    })
+  }
+}
+
+function sanitizeNarratorVisibleText(value: unknown): string {
+  return String(value || '')
+    .replace(/^\s*(?:#{1,6}\s*)?(?:正文|小说正文|本轮正文|可见正文|Narrator|叙事正文)\s*[:：]?\s*(?:\r?\n|$)+/i, '')
+    .replace(/^\s*#{1,6}\s+正文\s*(?:\r?\n|$)+/i, '')
+}
+
 function buildRuntimeBlocks(input: GenerateRequest): {
   storyContext: string
   longTermState: string
   recentTurns: string
-  directorRecentTurns: string
+  directorContinuityAnchor: string
   shortHistoricalSummary: string
   longHistoricalSummary: string
   turnSummaries: string
@@ -2656,7 +2975,6 @@ function buildRuntimeBlocks(input: GenerateRequest): {
   const characterStatus = renderRelevantStatus(input)
   const longTermState = renderLongTermState(input.longTermState, {
     characterStatus: JSON.parse(characterStatus).state,
-    keyItems: input.itemState,
     keyInfo: input.keyInfo,
     physicalConstraints: input.physicalConstraints,
   })
@@ -2668,11 +2986,25 @@ function buildRuntimeBlocks(input: GenerateRequest): {
     storyContext: String(input.storyContext || '').trim(),
     longTermState,
     recentTurns: renderConversation(input.recentTurns),
-    directorRecentTurns: renderRecentConversationByAssistantTurns(input.recentTurns, 1),
+    directorContinuityAnchor: renderDirectorContinuityAnchor(turnSummaries, currentTurnIndex),
     shortHistoricalSummary: selectHistoricalSummariesForPrompt(turnSummaries, currentTurnIndex, 5, 10),
     longHistoricalSummary: renderHistoricalSummariesWithL2(turnSummaries, turnSummaryL2, { currentTurnIndex, excludeRecentTurnCount: 5 }),
     turnSummaries,
   }
+}
+
+function renderDirectorContinuityAnchor(value: unknown, currentTurnIndex: number): string {
+  const latestCompletedTurn = Math.max(0, Number(currentTurnIndex) - 1)
+  if (latestCompletedTurn <= 0) return ''
+  const lines = String(value || '')
+    .split(/\r?\n/)
+    .map(line => line.trim().replace(/^-\s*/, ''))
+    .filter(Boolean)
+  const exact = lines.find(line => {
+    const match = line.match(/^第(\d+)轮[:：]/)
+    return match ? Number(match[1]) === latestCompletedTurn : false
+  })
+  return exact || ''
 }
 
 function selectHistoricalSummariesForPrompt(value: unknown, currentTurnIndex: number, excludeRecentTurnCount: number, limit = Number.POSITIVE_INFINITY): string {
@@ -2690,21 +3022,56 @@ function selectHistoricalSummariesForPrompt(value: unknown, currentTurnIndex: nu
   return kept.map(line => `- ${line}`).join('\n')
 }
 
-function normalizePlayerOptions(value: unknown): unknown[] {
+function normalizePlayerOptions(value: unknown): PlayerOption[] {
   if (!Array.isArray(value)) return []
   return value
-    .slice(0, 3)
+    .slice(0, 5)
     .map(option => {
       if (typeof option === 'string') {
         const text = option.trim()
-        return text ? { inputText: text } : null
+        return text ? { direction: text } : null
       }
       if (!option || typeof option !== 'object') return null
       const record = option as Record<string, unknown>
-      const inputText = String(record.inputText || record.label || record.description || '').trim()
-      return inputText ? { inputText } : null
+      const direction = String(record.direction || record.inputText || record.label || record.description || '').trim()
+      const type = String(record.type || '').trim()
+      return direction ? { ...(type ? { type } : {}), direction } : null
     })
-    .filter(Boolean)
+    .filter(Boolean) as PlayerOption[]
+}
+
+function normalizeStrategicPlayerOptions(value: unknown): PlayerOption[] {
+  const normalized = normalizePlayerOptions(value)
+  const optionCount = 5
+  const allowedTypes = ['推进', '转折', '跳过']
+  const bannedDirectionPatterns = [
+    /低价值余波/,
+    /新阶段/,
+    /目标线/,
+    /明确结果/,
+    /改变判断标准/,
+    /改变下一轮重心/,
+    /减少原地拉扯/,
+    /承诺或代价/,
+  ]
+  if (normalized.length !== optionCount) {
+    throw new Error(`OptionStrategist 必须输出 ${optionCount} 条候选方向，实际 ${normalized.length} 条。`)
+  }
+  const options = normalized.map((option, index) => {
+    const type = String(option.type || '').trim()
+    const direction = String(option.direction || option.inputText || '').trim()
+    if (!allowedTypes.includes(type)) throw new Error(`OptionStrategist 第 ${index + 1} 条 type 无效：${type || '空'}`)
+    if (!direction) throw new Error(`OptionStrategist 第 ${index + 1} 条 direction 为空。`)
+    const banned = bannedDirectionPatterns.find(pattern => pattern.test(direction))
+    if (banned) throw new Error(`OptionStrategist 第 ${index + 1} 条 direction 过于空泛：${direction}`)
+    return { type, direction }
+  })
+  for (const requiredType of allowedTypes) {
+    if (!options.some(option => option.type === requiredType)) {
+      throw new Error(`OptionStrategist 缺少 ${requiredType} 类型候选方向。`)
+    }
+  }
+  return options
 }
 
 function normalizeTurnIndex(value: unknown, recentTurns?: ConversationItem[]): number {
@@ -2774,11 +3141,13 @@ function compactDirectorPlan(value: unknown): Record<string, unknown> {
   const root = compactRecord(value)
   const source = directorPlanSource(root)
   const output = pruneEmpty({
+    sceneTransition: compactText(firstPresent(source, ['sceneTransition', '场景切换', '场景过渡', '过渡依据', '承接过渡', '转场依据']), 180),
     sceneOutcome: compactText(firstPresent(source, ['sceneOutcome', '落点局面', '新局面', '本轮落点', '本轮结束局面']), 160),
-    plotDrive: compactText(firstPresent(source, ['plotDrive', '剧情推动力', '剧情驱动力', '推动力']), 180),
-    mainPresentation: compactText(firstPresent(source, ['mainPresentation', '主要呈现方式', '呈现方式', 'primaryMode']), 24),
-    supportingPresentation: compactStringArray(firstPresent(source, ['supportingPresentation', '辅助呈现方式', '辅助方式', 'secondaryMode']), 2, 24),
     narrativeStyle: compactText(firstPresent(source, ['narrativeStyle', '叙事风格', '动态叙事风格', '写法种子', '风格']), 160),
+    文字细节重复: compactText(firstPresent(source, ['文字细节重复', 'narrativeRepetitionFeedback']), 160),
+    剧情设计重复: compactText(firstPresent(source, ['剧情设计重复', 'plotDesignRepetitionFeedback']), 180),
+    剧情速度拖沓: compactText(firstPresent(source, ['剧情速度拖沓', 'plotPacingDragFeedback']), 180),
+    叙事整改要求: compactText(firstPresent(source, ['叙事整改要求', 'revisionInstruction']), 180),
   }) as Record<string, unknown>
   return output
 }
@@ -2975,13 +3344,13 @@ function compactRecentDirectorPlans(value: unknown): Record<string, unknown>[] {
 }
 
 function normalizeTurnSummary(value: unknown, finalText = ''): string {
-  const summary = compactTextWithoutEllipsis(value, 80)
+  const summary = String(value || '').replace(/\s+/g, ' ').trim()
   if (summary) return summary
   return compactTextWithoutEllipsis(
     String(finalText || '')
       .replace(/\s+/g, ' ')
       .replace(/[。！？!?].*$/s, match => match.slice(0, 1)),
-    60,
+    220,
   )
 }
 
@@ -3009,7 +3378,7 @@ async function summarizeOpeningText(input: OpeningSummaryRequest): Promise<Recor
   }
   const openingText = String(input.openingText || config?.openingText || '').trim()
   if (!openingText) return { summary: '' }
-  const model = buildPipelineModels(input.model, input.pipelineModels).postprocess
+  const model = buildPipelineModels(input.model, input.pipelineModels).summary
   const messages = renderPromptMessagePair('opening-summary.md', {
     storyContext: String(input.storyContext || config?.worldview || '').trim(),
     openingText,
@@ -3103,7 +3472,7 @@ async function ensureTurnSummaryL2(
   options.emit({ type: 'stage_tick', stage: 'postprocessSummary', label: 'Summary', message: `L2 历史总结已写入：第${startTurn}-${endTurn}轮。` })
 }
 
-function buildDirectorPromptPayload(input: GenerateRequest, temperature: number): {
+function buildDirectorPromptPayload(input: GenerateRequest, temperature: number, context = buildRuntimeBlocks(input)): {
   model: string
   temperature: number
   context: ReturnType<typeof buildRuntimeBlocks>
@@ -3113,7 +3482,6 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
   directorSystem: string
   directorUser: string
 } {
-  const context = buildRuntimeBlocks(input)
   const feedbackMemory = String(input.feedbackText || '').trim()
   const playerFeedback = String(input.playerFeedback || '').trim() || '（无）'
   const directorStyle = String(input.directorStyle || '').trim() || '（无）'
@@ -3123,10 +3491,11 @@ function buildDirectorPromptPayload(input: GenerateRequest, temperature: number)
   const directorMessages = renderPromptMessagePair('director.md', {
     storyContext: context.storyContext,
     longTermState: context.longTermState,
-    directorRecentTurns: context.directorRecentTurns || '（无）',
+    directorContinuityAnchor: context.directorContinuityAnchor || '（无）',
     longHistoricalSummary: context.longHistoricalSummary || '（无）',
     recallEvidence: String(input.recallEvidence || '').trim() || '（无）',
     feedbackMemory,
+    recentTurns: context.recentTurns,
     playerFeedback,
     directorStyle,
     playerInput,
@@ -3247,7 +3616,10 @@ function triggerRecallWorker(
       appendRecallWorkerEvent(workerInput, {
         createdAtTurn: options.currentTurnIndex,
         basis: options.basis,
-        output: result.output,
+        output: {
+          loadedTurnIndexes: result.output.loadedTurnIndexes || [],
+          resultCount: result.results.length,
+        },
       })
       if (!result.snippets.length) return
       writeRecallCache(workerInput, {
@@ -3263,8 +3635,7 @@ function triggerRecallWorker(
         createdAtTurn: options.currentTurnIndex,
         basis: options.basis,
         output: {
-          turnRequests: [],
-          snippets: [],
+          loadedTurnIndexes: [],
           error: error instanceof Error ? error.message : String(error),
         },
       })
@@ -3320,6 +3691,41 @@ function buildNarratorPromptPayload(input: GenerateRequest, options: {
   }
 }
 
+function buildOptionStrategistPromptPayload(input: GenerateRequest, options: {
+  model: string
+  temperature: number
+  context: ReturnType<typeof buildRuntimeBlocks>
+  planFeedback?: unknown
+  playerInput: string
+  finalText: string
+  directorPlan: Record<string, unknown>
+}): {
+  model: string
+  temperature: number
+  optionSystem: string
+  optionUser: string
+} {
+  const optionMessages = renderPromptMessagePair('option-strategist.md', {
+    storyContext: options.context.storyContext || '（无）',
+    playerFeedback: String(input.playerFeedback || '').trim() || '（无）',
+    directorStyle: String(input.directorStyle || '').trim() || '（无）',
+    narratorStyle: String(input.narratorStyle || '').trim() || '（无）',
+    longHistoricalSummary: options.context.longHistoricalSummary || '（无）',
+    recentTurns: options.context.recentTurns,
+    playerInput: options.playerInput,
+    directorPlan: JSON.stringify(options.directorPlan),
+    planFeedback: renderPlanFeedbackForNarrator(options.planFeedback),
+    finalText: options.finalText,
+    longTermState: options.context.longTermState,
+  })
+  return {
+    model: options.model,
+    temperature: options.temperature,
+    optionSystem: optionMessages.system,
+    optionUser: optionMessages.user,
+  }
+}
+
 function renderPlanFeedbackForNarrator(value: unknown): string {
   const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
   const rows = [
@@ -3348,7 +3754,7 @@ function extractNarratorFinalText(entry: LayerResult): string {
         : typeof json.finalText === 'string'
           ? json.finalText
           : String(raw)
-  return text.trim()
+  return sanitizeNarratorVisibleText(text).trim()
 }
 
 function buildPostprocessPromptPayload(input: GenerateRequest, options: {
@@ -3375,7 +3781,6 @@ function buildPostprocessPromptPayload(input: GenerateRequest, options: {
     statusSchema: JSON.stringify(statusModel.statusSchema),
     statusRoster: JSON.stringify(statusModel.statusRoster),
     statusState: JSON.stringify(statusModel.statusState),
-    itemState: renderItemState(input.itemState),
     controlledCharacterName: normalizeControlledCharacterName(input.controlledCharacterName) || '（未指定）',
     playerInput: options.playerInput,
     finalText: options.finalText,
@@ -3393,45 +3798,11 @@ function buildPostprocessPromptPayload(input: GenerateRequest, options: {
   }
 }
 
-function buildPlanFeedbackPromptPayload(input: GenerateRequest, options: {
-  model: string
-  temperature?: number
-  playerInput: string
-  finalText?: string
-  directorPlan: Record<string, unknown>
-  context: ReturnType<typeof buildRuntimeBlocks>
-}): {
-  model: string
-  temperature: number
-  playerInput: string
-  finalText: string
-  postprocessSystem: string
-  postprocessUser: string
-} {
-  const temperature = Number.isFinite(options.temperature) ? Number(options.temperature) : 0.5
-  const feedbackMessages = renderPromptMessagePair('feedback.md', {
-    storyContext: String(input.storyContext || '').trim() || '（无）',
-    playerFeedback: String(input.playerFeedback || '').trim() || '（无）',
-    directorStyle: String(input.directorStyle || '').trim() || '（无）',
-    narratorStyle: String(input.narratorStyle || '').trim() || '（无）',
-    recentTurns: options.context.recentTurns,
-    directorPlan: JSON.stringify(options.directorPlan),
-    playerInput: options.playerInput,
-  })
-  return {
-    model: options.model,
-    temperature,
-    playerInput: options.playerInput,
-    finalText: String(options.finalText || ''),
-    postprocessSystem: feedbackMessages.system,
-    postprocessUser: feedbackMessages.user,
-  }
-}
-
 async function generate(
-  input: GenerateRequest,
+  rawInput: GenerateRequest,
   emit: (event: PipelineEvent) => void = () => {},
 ): Promise<Record<string, unknown>> {
+  const input = applyLiveProgramConfig(rawInput)
   const playerInput = String(input.playerInput || '').trim()
   if (!playerInput) throw new Error('playerInput is required')
 
@@ -3445,10 +3816,11 @@ async function generate(
     ...input,
     recallEvidence: cachedRecall.evidence,
   }
-  const directorPayload = buildDirectorPromptPayload(generationInput, directorTemperature)
-  const directorModel = directorPayload.model
+  const runtimeContext = buildRuntimeBlocks(generationInput)
   const narratorModel = pipelineModels.narrator
-
+  const optionStrategistModel = pipelineModels.optionStrategist
+  const directorPayload = buildDirectorPromptPayload(generationInput, directorTemperature, runtimeContext)
+  const directorModel = directorPayload.model
   let director: LayerResult | null = null
   let directorPlan: Record<string, unknown>
   if (input.director && typeof input.director === 'object' && Object.keys(input.director).length) {
@@ -3456,10 +3828,10 @@ async function generate(
     if (!hasUsableDirectorPlan(directorPlan)) throw new Error('复用的 Director 计划缺少可用字段。')
     emit({ type: 'stage_skip', stage: 'director', label: 'Director', message: '导演层已复用：继续未完成时沿用上一轮计划。', json: directorPlan })
   } else {
-    emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：根据用户输入、当前状态、历史总结和 Plot，生成本轮计划。' })
+    emit({ type: 'stage_start', stage: 'director', label: 'Director', message: '导演层：审查场景惯性，并把用户选择的剧情方向落成本轮执行计划。' })
     const directorMessages = promptMessages(directorPayload.directorSystem, directorPayload.directorUser)
     director = await callModelWithPublicTrace('director', 'Director', directorMessages, { temperature: directorTemperature, apiKey: pipelineApiKeyForModel(input, directorModel), model: directorModel, maxTokens: directorMaxTokens, timeoutMs: directorTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
-      '公开日志：正在拆解用户输入和当前场景。',
+      '公开日志：正在审查最近正文的拖沓、重复和场景价值。',
       '公开日志：正在安排本轮剧情步伐和描写方式。',
       '公开日志：正在生成 Narrator 可执行的本轮计划。',
       '公开日志：导演层仍在等待模型返回结构化计划。',
@@ -3476,46 +3848,43 @@ async function generate(
     }
     emit({ type: 'stage_result', stage: 'director', label: 'Director', message: '导演层完成：本轮计划已生成。', json: directorPlan })
   }
-  let planFeedback: Record<string, unknown>
-  if (input.planFeedback && typeof input.planFeedback === 'object' && !Array.isArray(input.planFeedback) && Object.keys(input.planFeedback).length) {
-    planFeedback = input.planFeedback as Record<string, unknown>
-    emit({ type: 'stage_skip', stage: 'planFeedback', label: 'Feedback', message: '反馈已复用：继续未完成时沿用上一轮整改要求。', json: planFeedback })
-  } else {
-    const feedbackPayload = buildPlanFeedbackPromptPayload(input, {
-      model: pipelineModels.postprocess,
-      temperature: 0.5,
-      playerInput,
-      directorPlan,
-      context: directorPayload.context,
-    })
-    emit({ type: 'stage_start', stage: 'planFeedback', label: 'Feedback', message: '反馈：审查最近正文和本轮计划，提前发现拖沓和重复。' })
-    const feedbackResult = await callModelWithPublicTrace('planFeedback', 'Feedback', promptMessages(feedbackPayload.postprocessSystem, feedbackPayload.postprocessUser), { temperature: 0.5, apiKey: pipelineApiKeyForModel(input, pipelineModels.postprocess), model: pipelineModels.postprocess, maxTokens: postprocessMaxTokens, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
-      '公开日志：正在对照最近正文和本轮计划。',
-      '公开日志：正在检查本轮计划是否拖沓或重复。',
-      '公开日志：正在生成给 Narrator 的本轮整改要求。',
-      '公开日志：Feedback 仍在等待模型返回结构化反馈。',
-    ])
-    planFeedback = feedbackResult.json
-    emit({ type: 'stage_result', stage: 'planFeedback', label: 'Feedback', message: '反馈完成：整改要求已注入叙事层。', json: planFeedback })
-  }
+  const planFeedback = directorPlan
   const feedback = normalizeFeedbackBreakdown(planFeedback)
 
   const narratorPayload = buildNarratorPromptPayload(generationInput, {
     model: narratorModel,
     temperature,
-    context: directorPayload.context,
+    context: runtimeContext,
     planFeedback,
     playerInput,
     directorPlan,
   })
   emit({ type: 'stage_start', stage: 'narrator', label: 'Narrator', message: '叙事层：按导演计划和反馈写用户可见正文。' })
-  const narrator = await callModelWithPublicTrace('narrator', 'Narrator', promptMessages(narratorPayload.narratorSystem, narratorPayload.narratorUser), { temperature, apiKey: pipelineApiKeyForModel(input, narratorModel), model: narratorModel, maxTokens: narratorMaxTokens, timeoutMs: narratorTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
+  const narrator = await callTextModelStreamWithPublicTrace('narrator', 'Narrator', promptMessages(narratorPayload.narratorSystem, narratorPayload.narratorUser), { temperature, apiKey: pipelineApiKeyForModel(input, narratorModel), model: narratorModel, maxTokens: narratorMaxTokens, timeoutMs: narratorTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
     '公开日志：正在根据导演计划和反馈要求组织正文。',
     '公开日志：正在保持人物限知视角和物理约束。',
-    '公开日志：正在生成候选项。',
+    '公开日志：正在生成用户可见正文。',
     '公开日志：叙事层仍在等待模型返回正文。',
   ])
   const finalText = extractNarratorFinalText(narrator)
+  emit({ type: 'stage_result', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文已生成。', json: narrator.json })
+  emit({ type: 'visible_text', stage: 'narrator', label: 'Narrator', message: '正文已显示，候选项继续生成。', payload: { finalText, pipelineMode: generationPipeline.mode } })
+  const optionPayload = buildOptionStrategistPromptPayload(generationInput, {
+    model: optionStrategistModel,
+    temperature: Math.min(temperature, 0.6),
+    context: runtimeContext,
+    planFeedback,
+    playerInput,
+    finalText,
+    directorPlan,
+  })
+  emit({ type: 'stage_start', stage: 'optionStrategist', label: 'OptionStrategist', message: '选项策略层：从剧情意义高度生成下一轮入口。' })
+  const optionStrategist = await callModelWithPublicTrace('optionStrategist', 'OptionStrategist', promptMessages(optionPayload.optionSystem, optionPayload.optionUser), { temperature: Math.min(temperature, 0.6), apiKey: pipelineApiKeyForModel(input, optionStrategistModel), model: optionStrategistModel, maxTokens: optionStrategistMaxTokens, timeoutMs: narratorTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
+    '公开日志：正在分析本轮正文后的剧情转折空间。',
+    '公开日志：正在生成关系、信息和节奏三个战略入口。',
+    '公开日志：OptionStrategist 仍在等待模型返回候选项。',
+  ])
+  const playerOptions = normalizeStrategicPlayerOptions(optionStrategist.json.playerOptions)
   appendRawTurnLog(storyRawTurnLogFile(input.storyId, input.storyName), {
     storyId: input.storyId,
     storyName: input.storyName,
@@ -3524,15 +3893,14 @@ async function generate(
     finalText,
     createdAt: new Date().toISOString(),
   })
-  emit({ type: 'visible_text', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文和候选项已显示，Summary 进入后台队列。', payload: { finalText, pipelineMode: generationPipeline.mode } })
-  emit({ type: 'stage_result', stage: 'narrator', label: 'Narrator', message: '叙事层完成：正文已生成。', json: narrator.json })
+  emit({ type: 'stage_result', stage: 'optionStrategist', label: 'OptionStrategist', message: '选项策略层完成：战略候选项已生成。', json: optionStrategist.json })
+  emit({ type: 'visible_text', stage: 'optionStrategist', label: 'OptionStrategist', message: '候选项已显示，Summary 进入后台队列。', payload: { finalText, playerOptions, pipelineMode: generationPipeline.mode } })
 
   const physicalConstraints = normalizeLongTermState(input.longTermState, {
     physicalConstraints: input.physicalConstraints,
   }).physicalConstraints
   const longTermState = mergeLongTermState(input.longTermState, {
     characterStatus: input.statusState,
-    keyItems: input.itemState,
     keyInfo: input.keyInfo,
     physicalConstraints,
   })
@@ -3543,7 +3911,7 @@ async function generate(
     physicalConstraints,
   }, {
     basis: 'after-output',
-    model: pipelineModels.postprocess,
+    model: pipelineModels.summary,
     playerInput,
     finalText,
     currentTurnIndex: directorPayload.turnIndex,
@@ -3562,11 +3930,10 @@ async function generate(
       source: cachedRecall.cache ? 'cache' : 'none',
       createdAtTurn: cachedRecall.cache?.createdAtTurn ?? null,
       basis: cachedRecall.cache?.basis || '',
-      turnRequests: cachedRecall.cache?.questions || [],
-      snippets: cachedRecall.cache?.snippets || [],
+      loadedTurnIndexes: cachedRecall.cache?.snippets?.map(snippet => snippet.turnIndex) || [],
       resultCount: cachedRecall.cache?.resultCount || 0,
     },
-    playerOptions: normalizePlayerOptions(narrator.json.playerOptions),
+    playerOptions,
     文字细节重复: feedback.文字细节重复,
     剧情设计重复: feedback.剧情设计重复,
     剧情速度拖沓: feedback.剧情速度拖沓,
@@ -3584,11 +3951,11 @@ async function generate(
       statusSchema: input.statusSchema,
       statusRoster: input.statusRoster,
       statusState: input.statusState,
-      itemState: input.itemState,
+      itemState: {},
       longTermState,
       keyInfo: normalizeLongTermState(longTermState).keyInfo,
       controlledCharacterName: input.controlledCharacterName,
-      playerOptions: normalizePlayerOptions(narrator.json.playerOptions),
+      playerOptions,
       physicalConstraints,
       feedbackText: directorPayload.feedbackMemory,
       directorStyle: input.directorStyle,
@@ -3606,9 +3973,10 @@ async function generate(
 }
 
 async function runPostprocess(
-  input: PostprocessRequest,
+  rawInput: PostprocessRequest,
   emit: (event: PipelineEvent) => void = () => {},
 ): Promise<Record<string, unknown>> {
+  const input = applyLiveProgramConfig(rawInput)
   const playerInput = String(input.playerInput || '').trim()
   const finalText = String(input.finalText || '').trim()
   if (!playerInput) throw new Error('playerInput is required')
@@ -3616,7 +3984,7 @@ async function runPostprocess(
 
   const requestedModel = normalizeModel(input.model)
   const pipelineModels = buildPipelineModels(requestedModel, input.pipelineModels)
-  const postprocessModel = pipelineModels.postprocess
+  const postprocessModel = pipelineModels.summary
   const temperature = Number.isFinite(input.temperature) ? Number(input.temperature) : 0.5
   const turnIndex = normalizeTurnIndex(input.turnIndex, input.recentTurns)
   const director = input.director && typeof input.director === 'object' ? input.director : {}
@@ -3626,7 +3994,7 @@ async function runPostprocess(
     recentTurns: input.recentTurns,
     characters: input.characters,
     statusState: input.statusState,
-    itemState: input.itemState,
+    itemState: {},
     keyInfo: input.keyInfo,
     physicalConstraints: input.physicalConstraints,
     longTermState: input.longTermState,
@@ -3645,30 +4013,9 @@ async function runPostprocess(
   let summary = await callModelWithPublicTrace('postprocessSummary', 'Summary', summaryMessages, { temperature, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel, maxTokens: postprocessMaxTokens, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
     '公开日志：正在补跑总结。',
     '公开日志：正在补写本轮事实总结。',
-    '公开日志：正在按最终正文更新人物状态、关键道具、关键信息和物理约束。',
+    '公开日志：正在按最终正文更新人物状态、关键信息和物理约束。',
     '公开日志：Summary 仍在等待模型返回结构化状态。',
   ])
-  try {
-    requireControlledCharacterStatusPatch(summary.json, input.controlledCharacterName)
-  } catch (error) {
-    emit({ type: 'stage_start', stage: 'postprocessSummary', label: 'Summary', message: '总结缺少当前操控人物状态，正在要求模型修正。' })
-    const repairUser = [
-      summaryPayload.postprocessUser,
-      '',
-      '# 上次输出无效，必须修正',
-      error instanceof Error ? error.message : String(error),
-      '',
-      '上次 JSON：',
-      JSON.stringify(summary.json),
-      '',
-      '只重新输出完整 JSON object。必须包含当前操控人物的人物名 patch，至少更新 `姿势` 或 `情绪`。',
-    ].join('\n')
-    summary = await callModelWithPublicTrace('postprocessSummary', 'Summary', promptMessages(summaryPayload.postprocessSystem, repairUser), { temperature: 0.2, apiKey: pipelineApiKeyForModel(input, postprocessModel), model: postprocessModel, maxTokens: postprocessMaxTokens, timeoutMs: postprocessTimeoutMs, reasoningEffort: normalizeReasoningEffort(input.reasoningEffort) }, emit, [
-      '公开日志：正在修正当前操控人物状态更新。',
-      '公开日志：Summary 修正仍在等待模型返回结构化状态。',
-    ])
-    requireControlledCharacterStatusPatch(summary.json, input.controlledCharacterName)
-  }
   emit({ type: 'stage_result', stage: 'postprocessSummary', label: 'Summary', message: '总结完成：状态和事实总结已更新。', json: summary.json })
 
   const normalizedStatusStatePatch = normalizeStatusStatePatchSubjects(summary.json.statusStatePatch, input.controlledCharacterName)
@@ -3679,7 +4026,7 @@ async function runPostprocess(
   const nextStatusSchema = mergeStatusSchema(input.statusSchema, summary.json.statusSchemaPatch)
   const nextStatusRoster = mergeStatusRoster(input.statusRoster, summary.json.statusRosterPatch, input.characters || [], normalizedStatusStatePatch)
   const nextStatusState = mergeStatusState(input.statusState, normalizedStatusStatePatch, nextStatusRoster, input.characters || [], nextStatusSchema)
-  const nextItemState = mergeItemState(input.itemState, summary.json.itemStatePatch, turnIndex)
+  const nextItemState = {}
   const nextPhysicalConstraints = summary.json.physicalConstraints === undefined
     ? normalizeLongTermState(input.longTermState, { physicalConstraints: input.physicalConstraints }).physicalConstraints
     : normalizePhysicalConstraintList(summary.json.physicalConstraints)
@@ -3688,7 +4035,6 @@ async function runPostprocess(
     : normalizeKeyInfo(summary.json.keyInfo)
   const nextLongTermState = mergeLongTermState(input.longTermState, {
     characterStatus: nextStatusState,
-    keyItems: nextItemState,
     keyInfo: nextKeyInfo,
     physicalConstraints: nextPhysicalConstraints,
   })
@@ -3763,6 +4109,7 @@ const server = http.createServer(async (req, res) => {
           generation: generationPipeline,
           postprocess: postprocessPipeline,
         },
+        promptVersion: promptVersion(),
         models: modelCatalog,
         providers: {
           deepseek: {
@@ -3777,6 +4124,13 @@ const server = http.createServer(async (req, res) => {
         baseUrl: providerBaseUrl('deepseek'),
         hasApiKey: providerHasApiKey('deepseek'),
       })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/prompt-runtime-cache/clear') {
+      const body = await readBody(req)
+      const input = body ? JSON.parse(body) as Record<string, unknown> : {}
+      sendJson(res, 200, clearPromptRuntimeCache(input))
       return
     }
 
@@ -3822,7 +4176,7 @@ const server = http.createServer(async (req, res) => {
       const pipelineModels = buildPipelineModels(input.model, input.pipelineModels)
       triggerRecallWorker(input, {
         basis: String(input.basis || 'frontend-retry'),
-        model: pipelineModels.postprocess,
+        model: pipelineModels.summary,
         playerInput,
         finalText,
         currentTurnIndex: normalizeTurnIndex(input.turnIndex, input.recentTurns),

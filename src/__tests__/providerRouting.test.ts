@@ -153,6 +153,16 @@ describe('provider routing', () => {
     expect(deepSeekBody).not.toContain('json_object')
   })
 
+  it('retries structured JSON calls after parse repair fails', () => {
+    const source = readServerSource()
+
+    expect(source).toContain('const structuredJsonRetryCount = Number(process.env.STRUCTURED_JSON_RETRY_COUNT || 1)')
+    expect(source).toContain('for (let attempt = 1; attempt <= maxAttempts; attempt += 1)')
+    expect(source).toContain("label: `${label}-json-retry-${attempt}`")
+    expect(source).toContain('JSON 修复失败后已自动重新调用')
+    expect(source).toContain('function mergeLlmCallMetrics')
+  })
+
   it('keeps request types compact through a shared pipeline context', () => {
     const source = readServerSource()
 
@@ -184,8 +194,8 @@ describe('provider routing', () => {
     expect(source).not.toContain('strongLayerModel')
     expect(source).not.toContain('simpleLayerModel')
     expect(source).toContain('const selectedModel = normalizeModel(requestedModel)')
-    expect(source).toContain("type PipelineStage = 'initializer' | 'director' | 'narrator' | 'postprocess'")
-    expect(source).toContain('pipelineStages.map(stage => [stage, record[stage] ? normalizeModel(record[stage]) : selectedModel])')
+    expect(source).toContain("type PipelineStage = 'initializer' | 'director' | 'narrator' | 'optionStrategist' | 'summary'")
+    expect(source).toContain("const value = record[stage] || (stage === 'summary' ? record.postprocess : '')")
     expect(source).not.toContain('initializer: officialDeepSeekV4ProModel')
     expect(source).toContain('function pipelineApiKeyForModel')
     expect(source).toContain('const keyed = input.apiKeys?.[provider]')
@@ -194,9 +204,11 @@ describe('provider routing', () => {
     expect(source).toContain("url.pathname === '/api/provider-api-key'")
     expect(source).toContain('const pipelineModels = buildPipelineModels(requestedModel, input.pipelineModels)')
     expect(source).toContain('const narratorModel = pipelineModels.narrator')
-    expect(source).toContain('const postprocessModel = pipelineModels.postprocess')
+    expect(source).toContain('const optionStrategistModel = pipelineModels.optionStrategist')
+    expect(source).toContain('const postprocessModel = pipelineModels.summary')
     expect(source).toContain('model: directorModel')
     expect(source).toContain('model: narratorModel')
+    expect(source).toContain('model: optionStrategistModel')
     expect(source).toContain('model: postprocessModel')
     expect(source).toContain('pipelineModels: buildPipelineModels()')
   })

@@ -1,15 +1,11 @@
-import { mergeItemState, normalizeItemState } from './itemState'
-
 export interface LongTermStateInput {
   characterStatus?: unknown
-  keyItems?: unknown
   keyInfo?: unknown
   physicalConstraints?: unknown
 }
 
 export interface LongTermState {
   characterStatus: Record<string, Record<string, string>>
-  keyItems: Record<string, Record<string, string>>
   keyInfo: string[]
   physicalConstraints: string[]
 }
@@ -37,7 +33,6 @@ export function normalizeLongTermState(value: unknown, fallback: LongTermStateIn
   const characterStatus = objectRecord(firstPresent(source, ['characterStatus', '人物状态']) ?? fallback.characterStatus)
   return {
     characterStatus,
-    keyItems: normalizeItemState(firstPresent(source, ['keyItems', 'itemState', '关键道具']) ?? fallback.keyItems),
     keyInfo: normalizeKeyInfo(firstPresent(source, ['keyInfo', '关键信息']) ?? fallback.keyInfo),
     physicalConstraints: normalizePhysicalConstraintList(firstPresent(source, ['physicalConstraints', '物理约束']) ?? fallback.physicalConstraints),
   }
@@ -47,7 +42,6 @@ export function mergeLongTermState(current: unknown, patch: LongTermStateInput =
   const base = normalizeLongTermState(current)
   return {
     characterStatus: objectRecord(patch.characterStatus ?? base.characterStatus),
-    keyItems: mergeItemState(base.keyItems, patch.keyItems ?? {}),
     keyInfo: patch.keyInfo === undefined ? base.keyInfo : normalizeKeyInfo(patch.keyInfo),
     physicalConstraints: patch.physicalConstraints === undefined ? base.physicalConstraints : normalizePhysicalConstraintList(patch.physicalConstraints),
   }
@@ -57,7 +51,6 @@ export function renderLongTermState(value: unknown, fallback: LongTermStateInput
   const state = normalizeLongTermState(value, fallback)
   return JSON.stringify({
     人物状态: state.characterStatus,
-    关键道具: state.keyItems,
     关键信息: state.keyInfo,
     物理约束: state.physicalConstraints,
   })

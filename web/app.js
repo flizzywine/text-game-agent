@@ -22,24 +22,25 @@ const modelCatalog = [
   { id: infronGemini31FlashLiteModel, provider: 'infron', label: 'Gemini 3.1 Flash Lite | Infron' },
 ]
 const modelOptions = new Set(modelCatalog.map(item => item.id))
-const pipelineStages = ['initializer', 'director', 'narrator', 'postprocess']
+const pipelineStages = ['initializer', 'director', 'narrator', 'optionStrategist', 'summary']
 const pipelineStageLabels = {
   initializer: '初始化',
   director: '导演',
   narrator: '叙事者',
-  postprocess: '反馈/总结',
+  optionStrategist: '选项策略',
+  summary: 'Summary',
 }
 const fallbackGenerationPipeline = {
-  mode: 'director+feedback+narrator+summary-queued+recall-worker',
-  note: 'Director 生成计划；Feedback 审查导演计划；Narrator 输出正文和候选项；Summary 后台更新总结和状态；RecallWorker 旁路选择旧轮次并预取最多两轮正文。',
+  mode: 'director-audit+narrator+option-strategist+summary-queued+recall-worker',
+  note: 'Director 输出计划和审查；Narrator 输出正文；OptionStrategist 生成战略候选项；Summary 后台更新总结和状态；RecallWorker 旁路选择旧轮次并预取最多两轮正文。',
   stages: [
     { stage: 'director', label: 'Director' },
-    { stage: 'planFeedback', label: 'Feedback' },
     { stage: 'narrator', label: 'Narrator' },
+    { stage: 'optionStrategist', label: 'OptionStrategist' },
     { stage: 'postprocessSummary', label: 'Summary' },
   ],
 }
-const narrativePerspectiveOptions = new Set(['first_person', 'third_person'])
+const narrativePerspectiveOptions = new Set(['third_person'])
 const requiredStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势']
 const fallbackStatusSchema = ['性别', '身份', '外貌', '性格', '情绪', '姿势', '位置']
 
@@ -61,6 +62,8 @@ let pipelineDebugTimer = null
 let recallWorkerPollTimer = null
 let recallWorkerPollDeadlineMs = 0
 let lastRecallWorkerEventId = ''
+let conversationAutoScrollSuppressed = false
+let programmaticConversationScrollUntil = 0
 const openingSummaryBackfillInFlight = new Set()
 let config = {
   model: defaultModel,
@@ -84,7 +87,8 @@ const els = {
     initializer: document.querySelector('#pipelineInitializerModel'),
     director: document.querySelector('#pipelineDirectorModel'),
     narrator: document.querySelector('#pipelineNarratorModel'),
-    postprocess: document.querySelector('#pipelineSummaryModel'),
+    optionStrategist: document.querySelector('#pipelineOptionStrategistModel'),
+    summary: document.querySelector('#pipelineSummaryModel'),
   },
   applyModelSelectionButton: document.querySelector('#applyModelSelectionButton'),
   apiKeyProviderSelect: document.querySelector('#apiKeyProviderSelect'),
@@ -159,6 +163,7 @@ async function init() {
   bindEvents()
   await loadConfig()
   await loadServerState()
+  await syncPromptVersionState()
   applyLegacyMigrations()
   render()
   processSummaryQueue()
@@ -211,35 +216,33 @@ function buildStoryContextForRequest() {
   const perspective = normalizeNarrativePerspective(appState.narrativePerspective)
   const perspectiveText = renderNarrativePerspectiveInstruction(perspective, controlledCharacterName)
   const controlledBlock = controlledCharacterName
-    ? `## 当前操控人物\n${controlledCharacterName}\n用户输入代表该人物接下来的行动、话语、观察或意图。\n\n## 叙事人称\n${perspectiveText}`
+    ? `## 当前焦点人物\n${controlledCharacterName}\n玩家不是在控制单一角色，而是在选择整个世界的剧情方向。所有用户输入都只代表未来剧情方向，不是正文素材，不是角色台词、动作或心理；以【剧情方向选择】开头时，去掉前缀后仍按剧情方向处理。当前焦点人物可以随剧情切换。\n\n## 叙事人称\n${perspectiveText}`
     : ''
   return [worldview ? `## 世界观\n${worldview}` : '', controlledBlock].filter(Boolean).join('\n\n')
 }
 
 function normalizeNarrativePerspective(value) {
   const perspective = String(value || '').trim()
-  return narrativePerspectiveOptions.has(perspective) ? perspective : 'first_person'
+  return narrativePerspectiveOptions.has(perspective) ? perspective : 'third_person'
 }
 
 function narrativePerspectiveLabel(value) {
-  return normalizeNarrativePerspective(value) === 'third_person' ? '第三人称限知' : '第一人称限知'
+  return '全知第三人称'
 }
 
 function renderNarrativePerspectiveInstruction(value, controlledCharacterName = '') {
-  const name = controlledCharacterName || '当前操控人物'
-  if (normalizeNarrativePerspective(value) === 'third_person') {
-    return `第三人称限知。正文叙述当前操控人物时固定使用“${name}”、简称或“她/他”，不要在叙述中切换成“我”。`
-  }
-  return `第一人称限知。正文叙述当前操控人物时固定使用“我”，不要在叙述中切换成“${name}”“她/他”。其他人物称呼当前操控人物、对白或客观身份说明时，才可以使用人物名。`
+  const name = controlledCharacterName || '当前焦点人物'
+  return `全知第三人称。正文使用人物名、称谓或“她/他”叙述，不使用“我”。叙述者可以展示每个角色的行动、心理、隐瞒、误判和未说出口的欲望；角色自身仍受知识边界限制，不能因为叙述者全知而知道不该知道的信息。当前焦点可以从“${name}”切换到其他关键人物，但每次切换必须有清楚场景或段落边界。`
 }
 
 function defaultAppState() {
   const story = defaultStory()
   return {
     defaultModelVersion,
+    promptVersion: '',
     preferredModel: story.model,
     pipelineModels: defaultPipelineModelOverrides(),
-    narrativePerspective: 'first_person',
+    narrativePerspective: 'third_person',
     currentStoryId: story.id,
     stories: [story],
     multiSpatialMigration: true,
@@ -284,6 +287,7 @@ function normalizeAppState(raw) {
   const rawCurrentStory = stories.find(story => story.id === currentStoryId) || stories[0]
   return {
     defaultModelVersion,
+    promptVersion: String(raw?.promptVersion || ''),
     preferredModel: normalizePersistedModel(raw?.preferredModel, modelVersion) || readStoredPreferredModel() || normalizePersistedModel(rawCurrentStory?.model, modelVersion) || base.preferredModel || defaultModel,
     pipelineModels: normalizePipelineModelOverrides(raw?.pipelineModels),
     narrativePerspective: normalizeNarrativePerspective(raw?.narrativePerspective),
@@ -347,7 +351,7 @@ function normalizeStory(raw, fallbackName = '故事', modelVersion = defaultMode
     statusSchema: normalizeStatusSchema(raw?.statusSchema),
     statusRoster: normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []),
     statusState: normalizeStatusState(raw?.statusState, normalizeStatusRoster(raw?.statusRoster, Array.isArray(raw?.characters) ? raw.characters : []), Array.isArray(raw?.characters) ? raw.characters : [], normalizeStatusSchema(raw?.statusSchema)),
-    itemState: normalizeItemState(raw?.itemState),
+    itemState: {},
     globalContext,
     playerOptions: Array.isArray(raw?.playerOptions) ? raw.playerOptions : [],
     postprocessQueue: Array.isArray(raw?.postprocessQueue) ? raw.postprocessQueue.map(normalizeSummaryJob).filter(Boolean) : [],
@@ -525,7 +529,6 @@ function normalizeLongTermState(value, fallback = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   return {
     characterStatus: normalizeStatusState(source.characterStatus || source.人物状态 || fallback.statusState, normalizeStatusRoster(fallback.statusRoster, Array.isArray(fallback.characters) ? fallback.characters : []), Array.isArray(fallback.characters) ? fallback.characters : [], normalizeStatusSchema(fallback.statusSchema)),
-    keyItems: normalizeItemState(source.keyItems || source.itemState || source.关键道具 || fallback.itemState),
     keyInfo: normalizeKeyInfo(source.keyInfo || source.关键信息 || fallback.keyInfo),
     physicalConstraints: normalizePhysicalConstraints(source.physicalConstraints || source.物理约束 || fallback.physicalConstraints),
   }
@@ -536,7 +539,6 @@ function buildLongTermStateFromState() {
     statusSchema: state.statusSchema,
     statusRoster: state.statusRoster,
     statusState: state.statusState,
-    itemState: state.itemState,
     keyInfo: state.keyInfo,
     physicalConstraints: state.physicalConstraints,
     characters: state.characters,
@@ -548,7 +550,6 @@ function buildLongTermStateFromStory(story) {
     statusSchema: story?.statusSchema,
     statusRoster: story?.statusRoster,
     statusState: story?.statusState,
-    itemState: story?.itemState,
     keyInfo: story?.keyInfo,
     physicalConstraints: story?.physicalConstraints,
     characters: story?.characters,
@@ -719,7 +720,7 @@ function applyLegacyMigrations() {
     story.statusSchema = normalizeStatusSchema(story.statusSchema)
     story.statusRoster = normalizeStatusRoster(story.statusRoster, story.characters)
     story.statusState = normalizeStatusState(story.statusState, story.statusRoster, story.characters, story.statusSchema)
-    story.itemState = normalizeItemState(story.itemState)
+    story.itemState = {}
     story.keyInfo = normalizeKeyInfo(story.keyInfo)
     story.longTermState = buildLongTermStateFromStory(story)
   }
@@ -815,7 +816,10 @@ function defaultPipelineModelOverrides() {
 function normalizePipelineModelOverrides(value) {
   const record = value && typeof value === 'object' ? value : {}
   return Object.fromEntries(
-    pipelineStages.map(stage => [stage, record[stage] ? normalizeModel(record[stage]) : '']),
+    pipelineStages.map(stage => {
+      const value = record[stage] || (stage === 'summary' ? record.postprocess : '')
+      return [stage, value ? normalizeModel(value) : '']
+    }),
   )
 }
 
@@ -905,11 +909,35 @@ function formatPipelineModelSummary(models = getPipelineModelsForRequest(), over
 async function loadConfig() {
   try {
     config = await fetchRuntimeConfig()
+    await syncPromptVersionState()
     state.model = getActiveModel()
     els.modelSelect.value = state.model
     renderConnection()
   } catch (error) {
     els.connectionStatus.textContent = `配置读取失败：${error.message}`
+  }
+}
+
+async function syncPromptVersionState() {
+  const nextVersion = String(config.promptVersion || '').trim()
+  if (!nextVersion || appState.promptVersion === nextVersion) return
+  const previousVersion = appState.promptVersion
+  appState.promptVersion = nextVersion
+  if (previousVersion) {
+    await clearPromptRuntimeCache()
+    saveState()
+  }
+}
+
+async function clearPromptRuntimeCache() {
+  try {
+    await fetch('/api/prompt-runtime-cache/clear', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ storyId: state?.id || '', storyName: state?.name || '' }),
+    })
+  } catch {
+    // Prompt files are still read fresh from disk; cache clearing is best-effort.
   }
 }
 
@@ -922,6 +950,7 @@ async function fetchRuntimeConfig() {
 function normalizeRuntimeConfig(raw) {
   return {
     model: normalizeModel(raw?.model || defaultModel),
+    promptVersion: String(raw?.promptVersion || ''),
     pipelineModels: raw?.pipelineModels || getPipelineModelsForRequest(raw?.model || defaultModel),
     pipelines: normalizeRuntimePipelines(raw?.pipelines),
     baseUrl: String(raw?.baseUrl || raw?.providers?.deepseek?.baseUrl || 'https://api.deepseek.com'),
@@ -985,11 +1014,32 @@ function bindEvents() {
   })
 
   els.jumpTurnStartButton.addEventListener('click', () => {
+    conversationAutoScrollSuppressed = true
     scrollToLatestAssistantStart()
   })
 
   els.jumpLatestButton.addEventListener('click', () => {
+    conversationAutoScrollSuppressed = false
     scrollToConversationBottom()
+  })
+
+  els.conversation.addEventListener('wheel', event => {
+    if (event.deltaY < 0) suppressConversationAutoScrollForReading()
+  }, { passive: true })
+
+  els.conversation.addEventListener('touchstart', () => {
+    suppressConversationAutoScrollForReading()
+  }, { passive: true })
+
+  els.conversation.addEventListener('scroll', () => {
+    if (Date.now() < programmaticConversationScrollUntil) return
+    if (isConversationNearBottom()) {
+      conversationAutoScrollSuppressed = false
+      return
+    }
+    if (state.debug?.visibleTextShown && state.debug?.status === '生成中') {
+      conversationAutoScrollSuppressed = true
+    }
   })
 
   els.playerFeedbackInput.addEventListener('input', event => {
@@ -1251,8 +1301,8 @@ function renderDebug() {
   const payload = {
     initializer: debug.initializer,
     director: debug.director,
-    planFeedback: debug.planFeedback,
     narrator: debug.narrator,
+    optionStrategist: debug.optionStrategist,
     postprocessSummary: debug.postprocessSummary,
     recallWorker: normalizeRecallWorkerEventsForDisplay(debug.recallWorkerEvents),
   }
@@ -1265,21 +1315,29 @@ function renderDebug() {
 function normalizeRecallWorkerEventsForDisplay(events) {
   if (!Array.isArray(events)) return events
   return events.map(event => ({
-    ...event,
+    id: String(event?.id || ''),
+    createdAt: String(event?.createdAt || ''),
+    createdAtTurn: Math.floor(Number(event?.createdAtTurn) || 0),
+    basis: String(event?.basis || ''),
     output: normalizeRecallWorkerOutputForDisplay(event?.output),
   }))
 }
 
 function normalizeRecallWorkerOutputForDisplay(output) {
-  if (!output || typeof output !== 'object' || Array.isArray(output)) return output
-  const { questions, qa, ...rest } = output
-  const normalized = { ...rest }
-  if (Array.isArray(output.turnRequests)) {
-    normalized.turnRequests = output.turnRequests
-  } else if (Array.isArray(questions)) {
-    normalized.turnRequests = questions
-  }
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return { loadedTurnIndexes: [] }
+  const normalized = { loadedTurnIndexes: recallWorkerLoadedTurnIndexes(output) }
+  if (output.error) normalized.error = String(output.error)
   return normalized
+}
+
+function recallWorkerLoadedTurnIndexes(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return []
+  const direct = Array.isArray(output.loadedTurnIndexes) ? output.loadedTurnIndexes : []
+  const fromSnippets = Array.isArray(output.snippets) ? output.snippets.map(item => item?.turnIndex) : []
+  return [...new Set([...direct, ...fromSnippets]
+    .map(item => Math.floor(Number(item)))
+    .filter(Number.isFinite))]
+    .sort((a, b) => a - b)
 }
 
 function hasRunningPipelineStage() {
@@ -1906,7 +1964,7 @@ async function startNewGameFromAsset(asset, requestedName, requestedControlledNa
       mood: String(record.情绪 || ''),
       location: String(record.位置 || ''),
       health: String(record.外显状态 || ''),
-      trust: String(record.对当前操控人物看法 || record.对玩家看法 || record.对玩家态度 || ''),
+      trust: String(record.trust || ''),
       appearance: String(record.外貌 || ''),
       personality: String(record.性格 || ''),
     })
@@ -1932,7 +1990,7 @@ async function startNewGameFromAsset(asset, requestedName, requestedControlledNa
   story.statusRoster = normalizeStatusRoster(init.statusRoster, story.characters)
   if (controlledCharacterName && !story.statusRoster.includes(controlledCharacterName)) story.statusRoster.unshift(controlledCharacterName)
   story.statusState = normalizeStatusState(init.statusState, story.statusRoster, story.characters, story.statusSchema)
-  story.itemState = normalizeItemState(init.itemState)
+  story.itemState = {}
   story.longTermState = buildLongTermStateFromStory(story)
   story.globalContext = story.chapterSummary
   story.messages = []
@@ -2115,7 +2173,8 @@ function assertInitializedProgramConfig(config) {
   if (!Array.isArray(config?.statusRoster) || config.statusRoster.length === 0) missing.push('statusRoster')
   if (!config?.statusState || typeof config.statusState !== 'object') missing.push('statusState')
   if (playableCharactersFromConfig(config).length === 0) missing.push('playableCharacters')
-  if (!Array.isArray(config?.initialPlayerOptions) || config.initialPlayerOptions.length !== 3) missing.push('initialPlayerOptions')
+  const initialOptions = normalizeInitialPlayerOptions(config?.initialPlayerOptions || config?.playerOptions)
+  if (initialOptions.length < 5) missing.push('initialPlayerOptions')
   if (missing.length) {
     throw new Error(`故事尚未完成初始化，缺少：${missing.join('、')}。不能开始游戏。`)
   }
@@ -2150,7 +2209,7 @@ function characterSeedsFromStatus(config, fallbackCharacters = []) {
       mood: String(record.情绪 || ''),
       location: String(record.位置 || ''),
       health: String(record.外显状态 || ''),
-      trust: String(record.对当前操控人物看法 || record.对玩家看法 || record.对玩家态度 || ''),
+      trust: String(record.trust || ''),
       appearance: String(record.外貌 || ''),
       personality: String(record.性格 || ''),
     }
@@ -2159,16 +2218,30 @@ function characterSeedsFromStatus(config, fallbackCharacters = []) {
 }
 
 function normalizeInitialPlayerOptions(options) {
-  if (!Array.isArray(options)) return []
-  return options.slice(0, 3).map(option => {
+  const defaults = [
+    { type: '推进', direction: '从当前局面进入一次明确的关系或目标推进' },
+    { type: '转折', direction: '引入一个改变判断的新信息、误判或外部压力' },
+    { type: '跳过', direction: '略过低价值余波，切到下一个场景或剧情节点' },
+    { type: '推进', direction: '把当前拉扯推向承诺、代价或可见结果' },
+    { type: '转折', direction: '让已有关系或信息压力改变下一轮重心' },
+  ]
+  const source = Array.isArray(options) ? options : []
+  const seen = new Set()
+  return [...source, ...defaults].slice(0, 10).map(option => {
     if (typeof option === 'string') {
-      return { inputText: option }
+      return { direction: option }
     }
-    const inputText = String(option?.inputText || option?.label || option?.description || '').trim()
+    const direction = String(option?.direction || option?.inputText || option?.label || option?.description || '').trim()
+    const type = String(option?.type || '').trim()
     return {
-      inputText,
+      ...(type ? { type } : {}),
+      direction,
     }
-  }).filter(option => option.inputText)
+  }).filter(option => {
+    if (!option.direction || seen.has(option.direction)) return false
+    seen.add(option.direction)
+    return true
+  }).slice(0, 5)
 }
 
 function extractOpeningText(entries) {
@@ -2579,10 +2652,10 @@ function renderModelManagementPage() {
 function renderStatusPanel() {
   const controlledCharacterName = normalizeControlledCharacterName(state.controlledCharacterName)
   const controlledHtml = controlledCharacterName
-    ? `<p class="meta no-indent">当前操控：${escapeHtml(controlledCharacterName)} · ${escapeHtml(narrativePerspectiveLabel(appState.narrativePerspective))}</p>`
-    : '<p class="meta no-indent">当前操控：未选择</p>'
+    ? `<p class="meta no-indent">当前焦点：${escapeHtml(controlledCharacterName)} · ${escapeHtml(narrativePerspectiveLabel(appState.narrativePerspective))}</p>`
+    : '<p class="meta no-indent">当前焦点：未选择</p>'
   const longTermState = buildLongTermStateFromState()
-  if (!Object.keys(longTermState.characterStatus || {}).length && !Object.keys(longTermState.keyItems || {}).length && !longTermState.keyInfo.length && !longTermState.physicalConstraints.length) {
+  if (!Object.keys(longTermState.characterStatus || {}).length && !longTermState.keyInfo.length && !longTermState.physicalConstraints.length) {
     els.statusPanelView.innerHTML = `${controlledHtml}<p class="meta no-indent">长期变量为空</p>`
     return
   }
@@ -2812,6 +2885,14 @@ function applyConversationScroll(scrollTarget, previousScrollTop, wasNearBottom)
     scrollToLatestAssistantStart()
     return
   }
+  if (scrollTarget === 'stream-follow') {
+    if (!conversationAutoScrollSuppressed && wasNearBottom) {
+      scrollToConversationBottom()
+      return
+    }
+    els.conversation.scrollTop = Math.min(previousScrollTop, Math.max(0, els.conversation.scrollHeight - els.conversation.clientHeight))
+    return
+  }
   if (scrollTarget === 'bottom' || (scrollTarget === 'preserve-if-reading' && wasNearBottom)) {
     scrollToConversationBottom()
     return
@@ -2833,11 +2914,23 @@ function scrollToLatestAssistantStart() {
   const conversationRect = els.conversation.getBoundingClientRect()
   const assistantRect = latestAssistant.getBoundingClientRect()
   const targetTop = els.conversation.scrollTop + assistantRect.top - conversationRect.top - 10
+  markProgrammaticConversationScroll()
   els.conversation.scrollTop = Math.max(0, targetTop)
 }
 
 function scrollToConversationBottom() {
+  markProgrammaticConversationScroll()
   els.conversation.scrollTop = els.conversation.scrollHeight
+}
+
+function markProgrammaticConversationScroll() {
+  programmaticConversationScrollUntil = Date.now() + 120
+}
+
+function suppressConversationAutoScrollForReading() {
+  if (state.debug?.visibleTextShown && state.debug?.status === '生成中') {
+    conversationAutoScrollSuppressed = true
+  }
 }
 
 function renderEmptyConversation() {
@@ -2882,14 +2975,15 @@ function renderOptions() {
     return
   }
   els.optionTray.innerHTML = options.map(option => `
-    <button class="option-button" type="button" data-option-input="${escapeAttr(option.inputText || '')}">
-      <span>${escapeHtml(option.inputText || '')}</span>
+    <button class="option-button" type="button" data-option-type="${escapeAttr(option.type || '')}" data-option-direction="${escapeAttr(option.direction || '')}">
+      <span>${escapeHtml(option.direction || '')}</span>
     </button>
   `).join('')
 
-  els.optionTray.querySelectorAll('[data-option-input]').forEach(button => {
+  els.optionTray.querySelectorAll('[data-option-direction]').forEach(button => {
     button.addEventListener('click', event => {
-      els.playerInput.value = event.currentTarget.dataset.optionInput
+      const direction = event.currentTarget.dataset.optionDirection || ''
+      els.playerInput.value = direction
       els.playerInput.focus()
     })
   })
@@ -3095,6 +3189,7 @@ function buildPendingSummaryFromState() {
     narratorStyle: state.narratorStyle,
     turnIndex: completedAssistantTurnCount(),
     model: getActiveModel(),
+    promptVersion: config.promptVersion,
     temperature: defaultTemperature,
     createdAt: new Date().toISOString(),
   }
@@ -3231,7 +3326,10 @@ async function processSummaryQueue() {
 }
 
 async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requestPayload = null } = {}) {
+  await refreshRuntimeConfig()
+  await syncPromptVersionState()
   const streamController = beginActiveStream()
+  conversationAutoScrollSuppressed = false
   setBusy(true)
   const startedAt = Date.now()
   const generationPipeline = runtimeGenerationPipeline()
@@ -3307,8 +3405,7 @@ async function generateTurn(playerInput, { snapshot, modeLabel = 'running', requ
     setPreferredModel(payload.model || requestModel)
     enqueueSummaryJob(payload.pendingSummary)
     saveState()
-    render()
-    scrollToLatestAssistantStart()
+    renderGenerationCompletionSideEffects()
     processSummaryQueue()
     startRecallWorkerPolling(completedAssistantTurnCount())
   } catch (error) {
@@ -3356,6 +3453,7 @@ function buildGenerateRequestPayload(playerInput) {
     longTermState: buildLongTermStateFromState(),
     controlledCharacterName: state.controlledCharacterName,
     model: getActiveModel(),
+    promptVersion: config.promptVersion,
     pipelineModels: getPipelineModelsForRequest(),
     apiKey: getPipelineApiKey(),
     apiKeys: getPipelineApiKeys(),
@@ -3596,6 +3694,13 @@ function applyRecallWorkerEvents(events) {
   const fresh = events
     .filter(event => event && typeof event === 'object')
     .filter(event => event.id && !known.has(String(event.id)))
+    .map(event => ({
+      id: String(event.id || ''),
+      createdAt: String(event.createdAt || ''),
+      createdAtTurn: Math.floor(Number(event.createdAtTurn) || 0),
+      basis: String(event.basis || ''),
+      output: normalizeRecallWorkerOutputForDisplay(event.output),
+    }))
   if (!fresh.length) return
 
   state.debug.recallWorkerEvents = [
@@ -3615,10 +3720,11 @@ function applyRecallWorkerEvents(events) {
   row.logs = Array.isArray(row.logs) ? row.logs : []
   for (const event of fresh) {
     const basis = event.basis || 'recall'
-    row.logs.push(`${basis}｜${JSON.stringify(normalizeRecallWorkerOutputForDisplay(event.output) || {})}`)
+    const turns = Array.isArray(event.output?.loadedTurnIndexes) ? event.output.loadedTurnIndexes : []
+    row.logs.push(`${basis}｜召回轮次：${turns.length ? turns.join('、') : '无'}`)
   }
   row.logs = row.logs.slice(-8)
-  row.message = '旁路召回已完成，旧正文轮次结果已写入下方 stages。'
+  row.message = '旁路召回已完成，只显示召回轮次。'
   row.updatedAt = fresh[fresh.length - 1].createdAt || new Date().toISOString()
   row.updatedAtMs = Date.parse(row.updatedAt) || Date.now()
   row.endedAtMs = row.updatedAtMs
@@ -3628,6 +3734,10 @@ function applyRecallWorkerEvents(events) {
 }
 
 function handlePipelineEvent(event) {
+  if (event.type === 'visible_text_delta') {
+    applyVisibleTextDeltaEvent(event)
+    return
+  }
   if (event.type === 'visible_text') {
     applyVisibleTextEvent(event)
     return
@@ -3677,6 +3787,37 @@ function handlePipelineEvent(event) {
   refreshPipelineDebugTimer()
 }
 
+function applyVisibleTextDeltaEvent(event) {
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
+  const textDelta = String(payload.textDelta || '')
+  if (!textDelta) return
+  const shouldRenderConversation = !state.debug.visibleTextShown
+
+  if (state.debug.visibleTextShown) {
+    const last = state.messages[state.messages.length - 1]
+    if (last?.role === 'assistant') last.content = `${last.content || ''}${textDelta}`
+  } else {
+    state.messages.push({ role: 'assistant', content: textDelta })
+  }
+
+  state.debug.visibleTextShown = true
+  state.debug.postprocessPending = false
+  state.debug.pendingSummary = null
+  state.debug.status = '生成中'
+  state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
+  state.debug.note = '正文流式输出中；候选项稍后生成。'
+
+  renderConversation({ scrollTarget: 'stream-follow' })
+  saveState()
+  renderReadingJumpControls()
+  renderDebug()
+  renderRetryStageButton()
+  renderRollbackTurnButton()
+  renderRegenerateButton()
+  els.sendButton.textContent = '发送'
+  els.regenerateButton.textContent = '重新生成本次对话'
+}
+
 function markRunningPipelineStageError(message) {
   const progress = Array.isArray(state.debug?.progress) ? state.debug.progress : []
   const row = [...progress].reverse().find(item => item.status === 'running')
@@ -3697,6 +3838,7 @@ function applyVisibleTextEvent(event) {
   const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
   const finalText = String(payload.finalText || event.finalText || '').trim()
   if (!finalText) return
+  const shouldRenderConversation = !state.debug.visibleTextShown
 
   if (state.debug.visibleTextShown) {
     const last = state.messages[state.messages.length - 1]
@@ -3711,9 +3853,11 @@ function applyVisibleTextEvent(event) {
   state.debug.pendingSummary = null
   state.debug.status = '生成中'
   state.debug.pipelineMode = payload.pipelineMode || state.debug.pipelineMode
-  state.debug.note = '正文和候选项已显示；Summary 稍后后台更新。'
+  state.debug.note = Array.isArray(payload.playerOptions)
+    ? '候选项已更新；Summary 稍后后台更新。'
+    : '正文已显示；候选项生成中。'
 
-  renderConversation({ scrollTarget: 'latest-assistant-start' })
+  if (shouldRenderConversation) renderConversation({ scrollTarget: 'latest-assistant-start' })
   renderOptions()
   saveState()
   renderReadingJumpControls()
@@ -3723,6 +3867,18 @@ function applyVisibleTextEvent(event) {
   renderRegenerateButton()
   els.sendButton.textContent = '发送'
   els.regenerateButton.textContent = '重新生成本次对话'
+}
+
+function renderGenerationCompletionSideEffects() {
+  renderStatusPanel()
+  renderStoryTracking()
+  renderOptions()
+  renderReadingJumpControls()
+  renderDebug()
+  renderRetryStageButton()
+  renderRollbackTurnButton()
+  renderRegenerateButton()
+  renderTurnStatus()
 }
 
 function applySummary(payload) {
@@ -3748,9 +3904,7 @@ function applySummary(payload) {
   if (payload.statusState && typeof payload.statusState === 'object') {
     state.statusState = payload.statusState
   }
-  if (payload.itemState && typeof payload.itemState === 'object') {
-    state.itemState = normalizeItemState(payload.itemState)
-  }
+  state.itemState = {}
   if (Array.isArray(payload.keyInfo)) {
     state.keyInfo = normalizeKeyInfo(payload.keyInfo)
   }
